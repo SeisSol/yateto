@@ -106,10 +106,10 @@ def _(node):
 
   spps = [child.eqspp() for child in node]
   indices = ','.join([child.indices.tostring() for child in node])
-  node.setEqspp( einsum('{}->{}'.format(indices, node.indices.tostring()), *spps) )
+  node.setEqspp( einsum('{}->{}'.format(indices, node.indices.tostring()), *spps, optimize=True) )
   
   for child in node:
-    child.setEqspp( einsum('{}->{}'.format(indices, child.indices.tostring()), *spps) )
+    child.setEqspp( einsum('{}->{}'.format(indices, child.indices.tostring()), *spps, optimize=True) )
   
   # TODO: Backtracking of equivalent sparsity pattern to children?
     

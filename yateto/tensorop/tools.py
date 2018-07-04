@@ -43,77 +43,12 @@ def _(node, indent=''):
   print(indent + 'sum_{}: {}'.format(node._sumIndex, node._cost))
   pprint(node._term, indent + '  ')
 
-def opMin(terms, index_dimension):
-  hasAction = False
+def opMin(terms, index_dimension, target_indices, split = 0):
   n = len(terms)
   
   indexList = [index for term in terms for index in term._indices]
   uniqueIndices = set(indexList)
-  summationIndices = set([index for index in uniqueIndices if indexList.count(index) == 1]) - set('skp')
-  if len(summationIndices) == 0 and n == 1:
-    return terms[0]
-  else:
-    possibilites = list()
-    for i in range(n):
-      for j in range(i+1,n):
-        mulTerm = MulTerm(terms[i], terms[j], index_dimension)
-        selection = set(range(n)) - set([i,j])
-        tree = opMin([terms[i] for i in selection] + [mulTerm], index_dimension)
-        possibilites.append(tree)
-    for i in range(n):
-      intersection = summationIndices & terms[i]._indices
-      for index in intersection:
-        newTerms = list(terms)
-        newTerms[i] = AddTerm(newTerms[i], index, index_dimension)
-        tree = opMin(newTerms, index_dimension)
-        possibilites.append(tree)
-  best = None
-  minCost = sys.maxsize
-  for p in possibilites:
-    if p._cost < minCost:
-      best = p
-      minCost = p._cost
-  return best
-
-def opMin2(terms, index_dimension, split = 0):
-  hasAction = False
-  n = len(terms)
-  
-  indexList = [index for term in terms for index in term._indices]
-  uniqueIndices = set(indexList)
-  summationIndices = set([index for index in uniqueIndices if indexList.count(index) == 1]) - set('skp')
-  if len(summationIndices) == 0 and n == 1:
-    return terms[0]
-  else:
-    possibilites = list()
-    for i in range(n):
-      for j in range(max(i+1,split),n):
-        mulTerm = MulTerm(terms[i], terms[j], index_dimension)
-        selection = set(range(n)) - set([i,j])
-        tree = opMin2([terms[i] for i in selection] + [mulTerm], index_dimension, j-1)
-        possibilites.append(tree)
-    for i in range(split,n):
-      intersection = summationIndices & terms[i]._indices
-      for index in intersection:
-        addTerm = AddTerm(terms[i], index, index_dimension)
-        selection = set(range(n)) - set([i])
-        tree = opMin2([terms[i] for i in selection] + [addTerm], index_dimension, i)
-        possibilites.append(tree)
-  best = None
-  minCost = sys.maxsize
-  for p in possibilites:
-    if p._cost < minCost:
-      best = p
-      minCost = p._cost
-  return best
-
-def opMin3(terms, index_dimension, split = 0):
-  hasAction = False
-  n = len(terms)
-  
-  indexList = [index for term in terms for index in term._indices]
-  uniqueIndices = set(indexList)
-  summationIndices = set([index for index in uniqueIndices if indexList.count(index) == 1]) - set('skp')
+  summationIndices = set([index for index in uniqueIndices if indexList.count(index) == 1]) - target_indices
   
   while len(summationIndices) != 0:
     for i in range(split,n):
@@ -134,7 +69,7 @@ def opMin3(terms, index_dimension, split = 0):
       for j in range(max(i+1,split),n):
         mulTerm = MulTerm(terms[i], terms[j], index_dimension)
         selection = set(range(n)) - set([i,j])
-        tree = opMin3([terms[i] for i in selection] + [mulTerm], index_dimension, j-1)
+        tree = opMin([terms[i] for i in selection] + [mulTerm], index_dimension, target_indices, j-1)
         possibilites.append(tree)
   best = None
   minCost = sys.maxsize
@@ -143,26 +78,11 @@ def opMin3(terms, index_dimension, split = 0):
       best = p
       minCost = p._cost
   return best
-    
 
 def optimalBinaryTree(contract):
   terms = [Term(str(child), child.indices) for child in contract]
   index_dimension = dict()
   for child in contract:
-    index_dimension.update(child.indices.size())  
-  pprint( opMin(terms, index_dimension) )
-
-
-def optimalBinaryTree2(contract):
-  terms = [Term(str(child), child.indices) for child in contract]
-  index_dimension = dict()
-  for child in contract:
-    index_dimension.update(child.indices.size())  
-  pprint( opMin2(terms, index_dimension) )
-
-def optimalBinaryTree3(contract):
-  terms = [Term(str(child), child.indices) for child in contract]
-  index_dimension = dict()
-  for child in contract:
-    index_dimension.update(child.indices.size())  
-  pprint( opMin3(terms, index_dimension) )
+    index_dimension.update(child.indices.size())
+  target_indices = set(contract.indices)
+  pprint( opMin(terms, index_dimension, target_indices) )

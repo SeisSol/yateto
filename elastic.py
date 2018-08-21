@@ -3,8 +3,8 @@
 from yateto import Generator, Tensor
 from yateto.generator import simpleParameterSpace
 from yateto.input import parseXMLMatrixFile
-from yateto.ast.tools import pprint
-from yateto.ast.transform import evaluate, equivalentSparsityPattern, simplify, strengthReduction, findContractions, findPermutations
+from yateto.ast.visitor import PrettyPrinter, PrintEquivalentSparsityPatterns
+from yateto.ast.transformer import DeduceIndices, EquivalentSparsityPattern, StrengthReduction, FindContractions#, FindPermutations
 from yateto.ast.node import Add
 import itertools
 
@@ -63,17 +63,13 @@ def nextDerivative(i):
 
 g.addFamily('derivative', simpleParameterSpace(maxDegree), nextDerivative)
 
-#~ simplify(derivative[3])
-#~ evaluate(derivative[3])
-#~ pprint(derivative[3])
-
-#~ simplify(volume)
-#~ evaluate(volume)
-#~ equivalentSparsityPattern(volume)
-#~ pprint(volume)
-
 g.generate('test')
 
+
+PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
+#~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
+
+exit()
 
 #~ nDof = 6
 #~ nVar = 40
@@ -85,24 +81,25 @@ g.generate('test')
 #~ test = A['nxyz'] <= B['nijk'] * C1['ix'] * C2['jy'] * C3['kz']
 
 #~ test = neighbourFlux(0,0,0)
-test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
+#~ test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
 #~ test = Tensor('D', (24,24))['ij'] <= Tensor('A', (24,24))['ik'] * (Tensor('B', (24,24))['kj'] + Tensor('C', (24,24))['kj'])
-#~ test = volume
-pprint(test)
-simplify(test)
-pprint(test)
-evaluate(test)
-pprint(test)
+test = volume
+PrettyPrinter().visit(test)
+test = DeduceIndices().visit(test)
+PrettyPrinter().visit(test)
 
-#~ equivalentSparsityPattern(test)
-#~ pprint(test)
+test = EquivalentSparsityPattern().visit(test)
+PrettyPrinter().visit(test)
 
-test = strengthReduction(test)
-pprint(test)
-test = findContractions(test)
-pprint(test)
-findPermutations(test)
-pprint(test)
+#~ test = StrengthReduction().visit(test)
+#~ PrettyPrinter().visit(test)
+#~ test = FindContractions().visit(test)
+#~ PrettyPrinter().visit(test)
+exit()
+#~ test = FindPermutations().visit(test)
+#~ PrettyPrinter().visit(test)
+
+
 #~ exit()
 #~ equivalentSparsityPattern(test)
 #~ pprint(test)

@@ -1,6 +1,7 @@
 import itertools
 from .ast.node import Node
-from .ast.transform import simplify, evaluate, equivalentSparsityPattern
+#~ from .ast.visitor import PrettyPrinter
+from .ast.transformer import DeduceIndices, EquivalentSparsityPattern
 
 class Kernel(object):
   def __init__(self, name, ast):
@@ -8,9 +9,9 @@ class Kernel(object):
     self._ast = ast
   
   def prepare(self):
-    simplify(self._ast)
-    evaluate(self._ast)
-    #~ equivalentSparsityPattern(self._ast)
+    self._ast = DeduceIndices().visit(self._ast)
+    self._ast = EquivalentSparsityPattern().visit(self._ast)
+    #~ PrettyPrinter().visit(self._ast)
     
 class KernelFamily(object):
   def __init__(self, name, parameterSpace, astGenerator):

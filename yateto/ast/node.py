@@ -1,24 +1,23 @@
 from .indices import Indices
 
 class Node(object):
-  def __mul__(self, other):
-    return Einsum(self, other)
-  
-  def __add__(self, other):
-    return Add(self, other)
-    
-  def __le__(self, other):
-    return Assign(self, other)
-
-class AbstractTensor(Node):
   def __init__(self):
     self.indices = None
+    self._children = []
     self._eqspp = None
-    self._cost = 0
   
   def size(self):
     return self.indices.size()
-    
+
+  def __iter__(self):
+    return iter(self._children)
+  
+  def __getitem__(self, key):
+    return self._children[key]
+  
+  def setChildren(self, children):
+    self._children = children
+
   def eqspp(self):
     return self._eqspp
   
@@ -28,7 +27,28 @@ class AbstractTensor(Node):
   def setIndexPermutation(self, indices):
     self.indices.permute(indices)
 
-class IndexedTensor(AbstractTensor):
+  def _binOp(self, other, opType):
+    if isinstance(self, opType):
+      if isinstance(other, opType):
+        self._children.extend(other._children)
+      else:
+        self._children.append(other)
+      return self
+    elif isinstance(other, opType):
+      other._children.insert(0, self)
+      return other
+    return opType(self, other)
+
+  def __mul__(self, other):
+    return self._binOp(other, Einsum)
+  
+  def __add__(self, other):
+    return self._binOp(other, Add)
+    
+  def __le__(self, other):
+    return Assign(self, other)
+
+class IndexedTensor(Node):
   def __init__(self, tensor, indexNames):
     super().__init__()
     self.tensor = tensor
@@ -40,19 +60,10 @@ class IndexedTensor(AbstractTensor):
   def __str__(self):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
 
-class Op(AbstractTensor):
+class Op(Node):
   def __init__(self, *args):
     super().__init__()
     self._children = list(args)
-
-  def __iter__(self):
-    return iter(self._children)
-  
-  def __getitem__(self, key):
-    return self._children[key]
-  
-  def setChildren(self, children):
-    self._children = children
   
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')
@@ -87,7 +98,7 @@ class Product(Op):
     for size in self.indices.shape():
       self._cost *= size
     for child in self._children:
-      self._cost += child._cost
+      self._cost += getattr(child, '_cost', 0)
   
   def leftTerm(self):
     return self._children[0]
@@ -107,7 +118,7 @@ class IndexSum(Op):
     self._cost = term.indices.size()[sumIndex]
     for size in self.indices.shape():
       self._cost *= size
-    self._cost += term._cost
+    self._cost += getattr(term, '_cost', 0)
   
   def sumIndex(self):
     return self._sumIndex

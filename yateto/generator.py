@@ -1,6 +1,6 @@
 import itertools
 from .ast.node import Node
-from .ast.tools import simplify, evaluate, equivalentSparsityPattern, pprint
+from .ast.transform import simplify, evaluate, equivalentSparsityPattern
 
 class Kernel(object):
   def __init__(self, name, ast):

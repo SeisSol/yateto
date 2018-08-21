@@ -3,9 +3,9 @@
 from yateto import Generator, Tensor
 from yateto.generator import simpleParameterSpace
 from yateto.input import parseXMLMatrixFile
+from yateto.ast.tools import pprint
+from yateto.ast.transform import evaluate, equivalentSparsityPattern, simplify, strengthReduction, findContractions, findPermutations
 from yateto.ast.node import Add
-from yateto.ast.tools import evaluate, equivalentSparsityPattern, pprint, simplify
-from yateto.tensorop.tools import optimalBinaryTree
 import itertools
 
 maxDegree = 5
@@ -17,7 +17,7 @@ multipleSims = True
 #~ multipleSims = False
 
 if multipleSims:
-  qShape = (2, numberOf3DBasisFunctions, numberOfQuantities)
+  qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
   qi = lambda x: 's' + x
 else:
   qShape = (numberOf3DBasisFunctions, numberOfQuantities)
@@ -74,13 +74,36 @@ g.addFamily('derivative', simpleParameterSpace(maxDegree), nextDerivative)
 
 g.generate('test')
 
-test = neighbourFlux(0,0,0)
-#~ test = nextDerivative(0)
-#~ pprint(test)
+
+#~ nDof = 6
+#~ nVar = 40
+#~ A = Tensor('A', (nVar, nDof, nDof, nDof))
+#~ B = Tensor('B', (nVar, nDof, nDof, nDof))
+#~ C1 = Tensor('C1', (nDof, nDof))
+#~ C2 = Tensor('C2', (nDof, nDof))
+#~ C3 = Tensor('C3', (nDof, nDof))
+#~ test = A['nxyz'] <= B['nijk'] * C1['ix'] * C2['jy'] * C3['kz']
+
+#~ test = neighbourFlux(0,0,0)
+test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
+#~ test = Tensor('D', (24,24))['ij'] <= Tensor('A', (24,24))['ik'] * (Tensor('B', (24,24))['kj'] + Tensor('C', (24,24))['kj'])
+#~ test = volume
+pprint(test)
 simplify(test)
-#~ pprint(test)
+pprint(test)
 evaluate(test)
+pprint(test)
+
+#~ equivalentSparsityPattern(test)
 #~ pprint(test)
+
+test = strengthReduction(test)
+pprint(test)
+test = findContractions(test)
+pprint(test)
+findPermutations(test)
+pprint(test)
+#~ exit()
 #~ equivalentSparsityPattern(test)
 #~ pprint(test)
 #~ exit()
@@ -91,17 +114,18 @@ evaluate(test)
 #~ optimalBinaryTree(c)
 #~ exit()
 
-node = test[1][1]
-optimalBinaryTree(node)
-pprint(test)
+#~ node = test[1][1]
+#~ node = test[1]
+#~ optimalBinaryTree(node)
+#~ pprint(test)
 
-A = Tensor('A', (20,10))
-B = Tensor('B', (20,10))
-C = Tensor('C', ())
-test = C[''] <= A['ab'] * B['ab']
-simplify(test)
-evaluate(test)
-optimalBinaryTree(test[1])
+#~ A = Tensor('A', (20,10))
+#~ B = Tensor('B', (20,10))
+#~ C = Tensor('C', ())
+#~ test = C[''] <= A['ab'] * B['ab']
+#~ simplify(test)
+#~ evaluate(test)
+#~ optimalBinaryTree(test[1])
 
 def allSubstrings(s):
   L = len(s)
@@ -126,6 +150,7 @@ def indexString(s, M):
   return ''.join([m if m in s else ':' for m in M])
 
 def LoG(A, B, C):
+  print(A,B,C)
   candidates = list()
   if set(C) != (set(A) | set(B)) - (set(A) & set(B)):
     return -1  
@@ -174,7 +199,7 @@ def LoG(A, B, C):
           Bstr = '(B_{})\''.format(indexString(k+n, B))
           if B.find(n[0]) != 0:
             continue
-        print(len(m)*len(n)*len(k), '{} = {} {}'.format(Cstr, Astr, Bstr))
+        print(len(m) + len(n) + len(k), '{} = {} {}'.format(Cstr, Astr, Bstr))
   
   
     
@@ -193,10 +218,33 @@ def LoG(A, B, C):
   return candidates
   
 #~ LoG('slq','ln','snq')
-LoG('slq','qp','slp')
+#~ LoG('slq','qp','slp')
 #~ print(LoG('l','slq','sq'))
 #~ print(LoG('sab','sab','sab'))
 #~ print(LoG('ijmc','mkab','abcijk'))
 #~ LoG('qlosr','osrk','qlk')
 
+#~ LoG('ijmc', 'ijl', 'mcl')
+#~ LoG('ijmc', 'ijl', 'mlc')
+#~ LoG('ijmc', 'ijl', 'clm')
+#~ LoG('ijmc', 'ijl', 'cml')
+#~ LoG('ijmc', 'ijl', 'lmc')
+#~ LoG('ijmc', 'ijl', 'lcm')
+#~ print('============================')
+#~ LoG('mkab', 'mcl', 'abckl')
+#~ LoG('mkab', 'mlc', 'abckl')
+#~ LoG('mkab', 'clm', 'abckl')
+#~ LoG('mkab', 'cml', 'abckl')
+#~ LoG('mkab', 'lmc', 'abckl')
+#~ LoG('mkab', 'lcm', 'abckl')
 
+#~ print('1')
+#~ LoG('nijk', 'ix', 'nxkj')
+#~ print('2')
+#~ LoG('nxkj', 'jy', 'nxyk')
+#~ print('3')
+#~ LoG('nxyk', 'kz', 'nxyz')
+print('1')
+LoG('ijmc', 'ijl', 'mlc')
+print('2')
+LoG('mkab', 'mlc', 'abckl')

@@ -1,6 +1,8 @@
+from .indices import Indices
+
 class Node(object):
   def __mul__(self, other):
-    return Contract(self, other)
+    return Einsum(self, other)
   
   def __add__(self, other):
     return Add(self, other)
@@ -12,6 +14,7 @@ class AbstractTensor(Node):
   def __init__(self):
     self.indices = None
     self._eqspp = None
+    self._cost = 0
   
   def size(self):
     return self.indices.size()
@@ -21,6 +24,21 @@ class AbstractTensor(Node):
   
   def setEqspp(self, spp):
     self._eqspp = spp
+    
+  def setIndexPermutation(self, indices):
+    self.indices.permute(indices)
+
+class IndexedTensor(AbstractTensor):
+  def __init__(self, tensor, indexNames):
+    super().__init__()
+    self.tensor = tensor
+    self.indices = Indices(indexNames, self.tensor.shape())
+  
+  def spp(self):
+    return self.tensor.spp()
+
+  def __str__(self):
+    return '{}[{}]'.format(self.tensor.name(), str(self.indices))
 
 class Op(AbstractTensor):
   def __init__(self, *args):
@@ -39,12 +57,6 @@ class Op(AbstractTensor):
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')
 
-class Contract(Op):
-  pass
-    
-class Add(Op):
-  pass
-
 class Assign(Op):
   def setChildren(self, children):
     if len(children) != 2:
@@ -54,77 +66,71 @@ class Assign(Op):
     
     super().setChildren(children)
 
-class IndexedTensor(AbstractTensor):
-  def __init__(self, tensor, indexNames):
-    self.tensor = tensor
-    self.indices = Indices(indexNames, self.tensor.shape())
-    self._eqspp = None
-  
-  def spp(self):
-    return self.tensor.spp()
-
-  def __str__(self):
-    return '{}[{}]'.format(self.tensor.name(), str(self.indices))
-
-class Indices(object):
-  def __init__(self, indexNames = '', shape = ()):
-    self._indices = tuple(indexNames)
-    self._size = dict()
+class Einsum(Op):
+  pass
     
-    assert len(self._indices) == len(shape), 'Indices {} do not match tensor shape {}.'.format(str(self), shape)
+class Add(Op):
+  pass
 
-    for i, size in enumerate(shape):
-      index = self._indices[i]
-      if index in self._size and self._size[index] != size:
-        raise ValueError('Repeated indices may only be used on same sized dimensions. {} {}'.format(indexNames, shape)) 
-      self._size[ self._indices[i] ] = size
-  
-  def tostring(self):
-    return ''.join(self._indices)
+class Product(Op):
+  def __init__(self, lTerm, rTerm, target_indices):
+    super().__init__(lTerm, rTerm)
+    if target_indices.firstIndex() <= rTerm.indices:
+      lTerm, rTerm = rTerm, lTerm
 
-  def shape(self):
-    return self.subShape(self._indices)
-  
-  def subShape(self, indexNames):
-    return tuple([self._size[index] for index in indexNames])
-  
-  def __eq__(self, other):
-    return other != None and self._indices == other._indices and self._size == other._size
-    
-  def __ne__(self, other):
-    return other == None or self._indices != other._indices or self._size != other._size
-  
-  def __iter__(self):
-    return iter(self._indices)
-  
-  def __and__(self, other):
-    return set(self) & set(other)
-  
-  def __rand__(self, other):
-    return self & other
-    
-  def __le__(self, other):
-    indexNamesContained = set(self._indices) <= set(other._indices)
-    return indexNamesContained and all([self._size[index] == other._size[index] for index in self._indices])
-  
-  def __sub__(self, other):
-    indexNames = [index for index in self._indices if index not in other]
-    return Indices(indexNames, self.subShape(indexNames))
+    K = lTerm.indices & rTerm.indices
+    assert lTerm.indices.subShape(K) == rTerm.indices.subShape(K)
 
-  def merged(self, other):
-    indexNames = self._indices + other._indices
-    shape = self.subShape(self._indices) + other.subShape(other._indices)
-    return Indices(indexNames, shape)
-    
-  def sorted(self):
-    indexNames = sorted(self._indices)
-    return Indices(indexNames, self.subShape(indexNames))
+    self.indices = lTerm.indices.merged(rTerm.indices - K)
+
+    self._cost = 1
+    for size in self.indices.shape():
+      self._cost *= size
+    for child in self._children:
+      self._cost += child._cost
+  
+  def leftTerm(self):
+    return self._children[0]
+  
+  def rightTerm(self):
+    return self._children[1]
   
   def __str__(self):
-    return self.tostring()
-    
-  def __repr__(self):
-    return '({})'.format(','.join(['{}={}'.format(index, self._size[index]) for index in self._indices]))
+    return '{} [{}] ({})'.format(type(self).__name__, self.indices, self._cost)
+
   
-  def size(self):
-    return self._size
+class IndexSum(Op):
+  def __init__(self, term, sumIndex):
+    super().__init__(term)
+    self.indices = term.indices - set([sumIndex])
+    self._sumIndex = sumIndex
+    self._cost = term.indices.size()[sumIndex]
+    for size in self.indices.shape():
+      self._cost *= size
+    self._cost += term._cost
+  
+  def sumIndex(self):
+    return self._sumIndex
+  
+  def term(self):
+    return self._children[0]
+
+  def __str__(self):
+    return '{}_{} [{}] ({})'.format(type(self).__name__, self._sumIndex, self.indices, self._cost)
+
+class Contraction(Op):
+  def __init__(self, indices, lTerm, rTerm, sumIndices):
+    super().__init__(lTerm, rTerm)
+    li = lTerm.indices - sumIndices
+    lr = rTerm.indices - sumIndices
+    self.indices = li.merged(lr)
+    self.setIndexPermutation(indices)
+  
+  def leftTerm(self):
+    return self._children[0]
+  
+  def rightTerm(self):
+    return self._children[1]
+  
+  def __str__(self):
+    return '{} [{}]'.format(type(self).__name__, self.indices)

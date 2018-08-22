@@ -9,7 +9,8 @@ def strengthReduction(terms, target_indices, split = 0):
   summationIndices = set([index for index in uniqueIndices if indexList.count(index) == 1]) - set(target_indices)
   
   while len(summationIndices) != 0:
-    for i in range(split,n):
+    i = split
+    while i < n:
       intersection = summationIndices & terms[i].indices
       if len(intersection) > 0:
         index = next(iter(intersection))
@@ -18,6 +19,8 @@ def strengthReduction(terms, target_indices, split = 0):
         terms = [terms[i] for i in selection] + [addTerm]
         split = i
         summationIndices -= set([index])
+      else:
+        i = i + 1
 
   possibilites = list()
   if n == 1:

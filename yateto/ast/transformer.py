@@ -14,7 +14,19 @@ class Transformer(Visitor):
     node.setChildren(newChildren)
     return node
 
-class DeduceIndices(Transformer):    
+class DeduceIndices(Transformer):
+  def __init__(self, targetIndices=None):
+    self._targetIndices = targetIndices
+  
+  def visit(self, node):
+    if self._targetIndices:
+      if isinstance(node, Einsum) or isinstance(node, Add):
+        node.indices = self._targetIndices
+      else:
+        raise ValueError('Setting target indices in DeduceIndices is only allowed if the root node is of type Add or Einsum.')
+      self._targetIndices = None
+    return super().visit(node)
+
   def visit_Einsum(self, node):
     self.generic_visit(node)
 
@@ -66,47 +78,6 @@ class DeduceIndices(Transformer):
       raise ValueError('Assign: Index dimensions do not match: {} != {}'.format(node.indices.__repr__(), rhs.indices.__repr__()))
     self.visit(rhs)
     return node
-
-### Equivalent sparsity patterns
-
-@singledispatch
-def equivalentSparsityPattern(node):
-  pass
-
-@equivalentSparsityPattern.register(IndexedTensor)  
-def _(node):
-  node.setEqspp(node.spp().copy())
-
-@equivalentSparsityPattern.register(Einsum)
-def _(node):
-  for child in node:
-    equivalentSparsityPattern(child)
-
-  spps = [child.eqspp() for child in node]
-  indices = ','.join([child.indices.tostring() for child in node])
-  node.setEqspp( einsum('{}->{}'.format(indices, node.indices.tostring()), *spps, optimize=True) )
-  
-  for child in node:
-    child.setEqspp( einsum('{}->{}'.format(indices, child.indices.tostring()), *spps, optimize=True) )
-  
-  # TODO: Backtracking of equivalent sparsity pattern to children?
-    
-
-@equivalentSparsityPattern.register(Add)
-def _(node):
-  for child in node:
-    equivalentSparsityPattern(child)
-  
-  spp = zeros(node.indices.shape(), dtype=bool)
-  for child in node:
-    spp += child.eqspp()
-  node.setEqspp(spp)
-
-@equivalentSparsityPattern.register(Assign)
-def _(node):
-  for child in node:
-    equivalentSparsityPattern(child)
-  node.setEqspp(child[1].eqspp())
 
 ### Optimal binary tree
 

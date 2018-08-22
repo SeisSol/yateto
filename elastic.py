@@ -32,7 +32,6 @@ db = parseXMLMatrixFile('matrices_{}.xml'.format(numberOf3DBasisFunctions), clon
 Q = Tensor('Q', qShape)
 I = Tensor('I', qShape)
 D = [Q]
-D.extend([Tensor('dQ[{0}]'.format(i), qShape) for i in range(1, order)])
 
 # Flux solver
 AplusT = [Tensor('AplusT[{}]'.format(dim), (numberOfQuantities, numberOfQuantities)) for dim in range(4)]
@@ -55,19 +54,27 @@ g.add('localFlux', localFlux)
 neighbourFlux = lambda i,j,h: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i]['km'] * db.fP[h]['mn'] * db.rT[j]['nl'] * I[qi('lq')] * AminusT[i]['qp']
 g.addFamily('neighboringFlux', simpleParameterSpace(4,4,3), neighbourFlux)
 
-def nextDerivative(i):
+for i in range(maxDegree):
   derivativeSum = Add()
   for j in range(3):
     derivativeSum += db.kDivMT[j]['kl'] * D[i][qi('lq')] * db.star[j]['qp']
-  return D[i+1][qi('kp')] <= derivativeSum
+  derivativeSum = DeduceIndices( Q[qi('kp')].indices ).visit(derivativeSum)
+  derivativeSum = EquivalentSparsityPattern().visit(derivativeSum)
+  D.append( Tensor('dQ[{0}]'.format(i+1), qShape, spp=derivativeSum.eqspp()) )
+  derivative = D[i+1][qi('kp')] <= derivativeSum
 
-g.addFamily('derivative', simpleParameterSpace(maxDegree), nextDerivative)
+  g.add('derivative[{}]'.format(i), derivative)
+  
+  #~ derivative = DeduceIndices().visit(derivative)
+  #~ derivative = EquivalentSparsityPattern().visit(derivative)
+  #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
 
 g.generate('test')
 
 
-PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
+#~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
+
 
 exit()
 
@@ -82,8 +89,9 @@ exit()
 
 #~ test = neighbourFlux(0,0,0)
 #~ test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
+test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
 #~ test = Tensor('D', (24,24))['ij'] <= Tensor('A', (24,24))['ik'] * (Tensor('B', (24,24))['kj'] + Tensor('C', (24,24))['kj'])
-test = volume
+#~ test = volume
 PrettyPrinter().visit(test)
 test = DeduceIndices().visit(test)
 PrettyPrinter().visit(test)

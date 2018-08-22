@@ -5,7 +5,7 @@ class Collection(object):
   pass
 
 class Tensor(object):
-  def __init__(self, name, shape, matrix=None):
+  def __init__(self, name, shape, spp=None):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -15,15 +15,15 @@ class Tensor(object):
     self._name = name
     self._shape = shape
     
-    if matrix != None:
-      if isinstance(matrix, dict):
+    if spp is not None:
+      if isinstance(spp, dict):
         self._spp = zeros(shape, dtype=bool)
-        for multiIndex, value in matrix.items():
+        for multiIndex, value in spp.items():
           self._spp[multiIndex] = value
-      elif isinstance(matrix, ndarray):
-        if matrix.shape != self._shape:
+      elif isinstance(spp, ndarray):
+        if spp.shape != self._shape:
           raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
-        self._spp = matrix.astype(bool)
+        self._spp = spp.astype(bool)
       else:
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')
     else:

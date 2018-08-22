@@ -1,4 +1,4 @@
-from numpy import einsum, ndindex
+from numpy import arange, einsum, ndindex
 from .node import Op
 import re
 import os.path
@@ -6,9 +6,12 @@ import os.path
 # Optional modules
 import importlib.util
 pltSpec = importlib.util.find_spec('matplotlib.pylab')
+colorsSpec = importlib.util.find_spec('matplotlib.colors')
 scipyspSpec = importlib.util.find_spec('scipy.sparse')
 if pltSpec:
   plt = pltSpec.loader.load_module()
+if colorsSpec:
+  colors = colorsSpec.loader.load_module()
 if scipyspSpec:
   scipysp = scipyspSpec.loader.load_module()
 
@@ -60,10 +63,12 @@ class ComputeSparsityPattern(Visitor):
 
 class PrintEquivalentSparsityPatterns(Visitor):
   def __init__(self, directory):
-    if not (pltSpec and scipyspSpec):
+    if not (pltSpec and colorsSpec and scipyspSpec):
       raise NotImplementedError('Missing modules matplotlib and scipy')
     self._directory = directory
     self._prefix = ''
+    self._cmap = colors.ListedColormap(['white', 'black'])
+    self._norm = colors.BoundaryNorm([0.0, 0.5, 1.0], 2, clip=True)
   
   def generic_visit(self, node):
     oldPrefix = self._prefix
@@ -82,14 +87,17 @@ class PrintEquivalentSparsityPatterns(Visitor):
       nSubplots *= eqspp.shape[dim]
     fig, axs = plt.subplots(nSubplots)
     if nSubplots == 1:
-      plt.spy(eqspp)
+      axs.imshow(eqspp.astype(bool), cmap=self._cmap, norm=self._norm)
     else:
       nSubplot = 0
       for index in ndindex(*list(eqspp.shape)[2:]):
         sl = eqspp[(slice(None, None), slice(None, None)) + index]
-        axs[nSubplot].spy(sl)
-        axs[nSubplot].set_title('(:,:,{})'.format(','.join([str(i) for i in index])))
+        axs[nSubplot].imshow(sl.astype(bool), cmap=self._cmap, norm=self._norm)
+        axs[nSubplot].set_title('(:,:,{})'.format(','.join([str(i) for i in index])), y=1.2)
         nSubplot = nSubplot + 1
-    plt.savefig(fileName, bbox_inches='tight')
+    #plt.setp(axs, xticks=arange(eqspp.shape[1]), yticks=arange(eqspp.shape[0]))
+    fig.set_size_inches(nSubplots*eqspp.shape[0] / 3.0, eqspp.shape[1] / 3.0)
+    fig.tight_layout()
+    fig.savefig(fileName, bbox_inches='tight')
     plt.close()
     self._prefix = oldPrefix

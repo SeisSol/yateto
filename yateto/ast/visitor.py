@@ -1,7 +1,7 @@
 from numpy import arange, einsum, ndindex
-from .node import Op
 import re
 import os.path
+from .node import Op
 
 # Optional modules
 import importlib.util

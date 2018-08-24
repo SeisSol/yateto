@@ -1,20 +1,6 @@
 import sys
-import functools
-
-@functools.total_ordering
-class Cost(object):    
-  def __init__(self, transpose = sys.maxsize, fusedIndices = 0):
-    self._transpose = transpose
-    self._fusedIndices = fusedIndices
-  
-  def __lt__(self, other):
-    return self._transpose < other._transpose or (self._transpose == other._transpose and self._fusedIndices > other._fusedIndices)
-
-  def __eq__(self, other):
-    return self._transpose == other._transpose and self._fusedIndices == other._fusedIndices
-  
-  def __add__(self, other):
-    return Cost(self._transpose + self._transpose, self._fusedIndices + self._fusedIndices)
+from .node import LoopOverGEMM
+from .indices import LoGCost
 
 def allSubstrings(s):
   L = len(s)
@@ -65,27 +51,79 @@ def LoG(A, B, C, ATFree = False, BTFree = False):
   NC = CN & BN
   KC = AK & BK
   
-  minCost = Cost()
+  minCost = LoGCost()
   for m in MC:
     for n in NC:
       for k in KC:
+        Cstr = 'C_{}'.format(indexString(m+n, C))
         transpose = 0
         if A.find(m[0]) < A.find(k[0]):
+          Astr = 'A_{}'.format(indexString(m+k, A))
           if A.find(m[0]) != 0:
             continue
         else:
+          Astr = '(A_{})\''.format(indexString(m+k, A))
           if not ATFree:
             transpose = transpose + 1
           if A.find(k[0]) != 0:
             continue
         if B.find(k[0]) < B.find(n[0]):
+          Bstr = 'B_{}'.format(indexString(k+n, B))
           if B.find(k[0]) != 0:
             continue
         else:
+          Bstr = '(B_{})\''.format(indexString(k+n, B))
           if not BTFree:
             transpose = transpose + 1
           if B.find(n[0]) != 0:
             continue
-        cost = Cost(transpose, len(m) + len(n) + len(k))
+        cost = LoGCost(transpose, len(m) + len(n) + len(k))
+        #~ print(m, n, k, len(m) + len(n) + len(k), '{} = {} {}'.format(Cstr, Astr, Bstr))
         minCost = min(minCost, cost)
   return minCost
+
+def LoGbla(contraction):
+  L = contraction.leftTerm()
+  R = contraction.rightTerm()
+
+  A = L.indices.tostring()
+  B = R.indices.tostring()
+  C = contraction.indices.tostring()
+
+  candidates = list()
+  if set(C) != (set(A) | set(B)) - (set(A) & set(B)):
+    return sys.maxsize
+  requiredIndices = set([A[0], B[0], C[0]])
+  if C[0] in set(B):
+    B, A = A, B
+    R, L = L, R
+  Im = set(A) & set(C)
+  In = set(B) & set(C)
+  Ik = set(A) & set(B)
+  
+  PA = {idx: pos for pos, idx in enumerate(A)}
+  PB = {idx: pos for pos, idx in enumerate(B)}
+  PC = {idx: pos for pos, idx in enumerate(C)}
+
+  CM = fusedVariants(Im, PC, C, True)
+  CN = fusedVariants(In, PC, C)
+  AM = fusedVariants(Im, PA, A)
+  AK = fusedVariants(Ik, PA, A)
+  BK = fusedVariants(Ik, PB, B)
+  BN = fusedVariants(In, PB, B)
+  
+  MC = CM & AM
+  NC = CN & BN
+  KC = AK & BK
+  
+  minCost = LoGCost()
+  minLog = None
+  for m in MC:
+    for n in NC:
+      for k in KC:
+        log = LoopOverGEMM(contraction.indices, L, R, m, n, k)
+        cost = log.cost()
+        if cost < minCost:
+          minCost = cost
+          minLog = log
+  return minLog

@@ -4,7 +4,7 @@ from yateto import Generator, Tensor
 from yateto.generator import simpleParameterSpace
 from yateto.input import parseXMLMatrixFile
 from yateto.ast.visitor import PrettyPrinter, PrintEquivalentSparsityPatterns
-from yateto.ast.transformer import DeduceIndices, EquivalentSparsityPattern, StrengthReduction, FindContractions#, FindPermutations
+from yateto.ast.transformer import DeduceIndices, EquivalentSparsityPattern, StrengthReduction, FindContractions, ImplementContractions, FindIndexPermutations, SelectIndexPermutations
 from yateto.ast.node import Add
 import itertools
 
@@ -71,12 +71,8 @@ for i in range(maxDegree):
 
 g.generate('test')
 
-
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
-
-
-exit()
 
 #~ nDof = 6
 #~ nVar = 40
@@ -89,24 +85,34 @@ exit()
 
 #~ test = neighbourFlux(0,0,0)
 #~ test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
-test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
-#~ test = Tensor('D', (24,24))['ij'] <= Tensor('A', (24,24))['ik'] * (Tensor('B', (24,24))['kj'] + Tensor('C', (24,24))['kj'])
+#~ test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
+#~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,4,4))['ijmc'] * Tensor('B', (4,4,4,4))['mkab']
+
+# TODO: Check strength reduction for this example
+test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = volume
 PrettyPrinter().visit(test)
+
 test = DeduceIndices().visit(test)
 PrettyPrinter().visit(test)
 
 test = EquivalentSparsityPattern().visit(test)
 PrettyPrinter().visit(test)
 
-#~ test = StrengthReduction().visit(test)
-#~ PrettyPrinter().visit(test)
-#~ test = FindContractions().visit(test)
-#~ PrettyPrinter().visit(test)
-exit()
-#~ test = FindPermutations().visit(test)
-#~ PrettyPrinter().visit(test)
+test = StrengthReduction().visit(test)
+PrettyPrinter().visit(test)
 
+test = FindContractions().visit(test)
+PrettyPrinter().visit(test)
+
+test = FindIndexPermutations().visit(test)
+test = SelectIndexPermutations().visit(test)
+PrettyPrinter().visit(test)
+
+test = ImplementContractions().visit(test)
+PrettyPrinter().visit(test)
+
+exit()
 
 #~ exit()
 #~ equivalentSparsityPattern(test)
@@ -253,3 +259,6 @@ print('1')
 LoG('ijmc', 'ijl', 'mlc')
 print('2')
 LoG('mkab', 'mlc', 'abckl')
+
+import yateto.ast.log as log
+log.LoG('ijmc', 'ijl', 'mlc')

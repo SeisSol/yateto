@@ -1,4 +1,4 @@
-from .indices import Indices
+from .indices import Indices, LoGCost
 
 class Node(object):
   def __init__(self):
@@ -83,7 +83,17 @@ class Einsum(Op):
 class Add(Op):
   pass
 
-class Product(Op):
+class BinOp(Op):
+  def __init__(self, lTerm, rTerm):
+    super().__init__(lTerm, rTerm)
+  
+  def leftTerm(self):
+    return self._children[0]
+  
+  def rightTerm(self):
+    return self._children[1]
+
+class Product(BinOp):
   def __init__(self, lTerm, rTerm, target_indices):
     super().__init__(lTerm, rTerm)
     if target_indices.firstIndex() <= rTerm.indices:
@@ -99,12 +109,6 @@ class Product(Op):
       self._cost *= size
     for child in self._children:
       self._cost += getattr(child, '_cost', 0)
-  
-  def leftTerm(self):
-    return self._children[0]
-  
-  def rightTerm(self):
-    return self._children[1]
   
   def __str__(self):
     return '{} [{}] ({})'.format(type(self).__name__, self.indices, self._cost)
@@ -129,19 +133,44 @@ class IndexSum(Op):
   def __str__(self):
     return '{}_{} [{}] ({})'.format(type(self).__name__, self._sumIndex, self.indices, self._cost)
 
-class Contraction(Op):
+class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):
     super().__init__(lTerm, rTerm)
     li = lTerm.indices - sumIndices
     lr = rTerm.indices - sumIndices
+    self.sumIndices = sumIndices
     self.indices = li.merged(lr)
     self.setIndexPermutation(indices)
   
-  def leftTerm(self):
-    return self._children[0]
-  
-  def rightTerm(self):
-    return self._children[1]
-  
   def __str__(self):
     return '{} [{}]'.format(type(self).__name__, self.indices)
+
+class LoopOverGEMM(BinOp):
+  def __init__(self, indices, aTerm, bTerm, m, n, k):
+    super().__init__(aTerm, bTerm)
+    self.indices = indices
+    self._m = m
+    self._n = n
+    self._k = k
+    self._Atrans = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
+    self._Btrans = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
+  
+  def cost(self):
+    A = self.leftTerm().indices
+    B = self.rightTerm().indices
+    AstrideOne = (A.find(self._m[0]) == 0) if not self._Atrans else (A.find(self._k[0]) == 0)
+    BstrideOne = (B.find(self._k[0]) == 0) if not self._Btrans else (B.find(self._n[0]) == 0)
+    cost = LoGCost(int(not AstrideOne) + int(not BstrideOne), int(self._Atrans) + int(self._Btrans), len(self._m) + len(self._n) + len(self._k))
+    return cost
+
+  @staticmethod
+  def indexString(name, subset, indices, transpose=False):
+    indexStr = ''.join([i if i in subset else ':' for i in indices])
+    matrixStr = '{}_{}'.format(name, indexStr)
+    return '({})\''.format(matrixStr) if transpose else matrixStr
+  
+  def __str__(self):
+    Astr = self.indexString('A', self._m + self._k, self.leftTerm().indices, self._Atrans)
+    Bstr = self.indexString('B', self._k + self._n, self.rightTerm().indices, self._Btrans)
+    Cstr = self.indexString('C', self._m + self._n, self.indices)
+    return '{} [{}]: {} = {} {}'.format(type(self).__name__, self.indices, Cstr, Astr, Bstr)

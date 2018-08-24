@@ -1,10 +1,9 @@
 import itertools
-from functools import singledispatch
 from numpy import ndarray, zeros, einsum
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern
 from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction
-from .indices import Indices
-from .log import LoG, Cost
+from .indices import Indices, LoGCost
+from .log import LoG, LoGbla
 from . import opt
 
 # Similar as ast.NodeTransformer
@@ -100,54 +99,57 @@ class FindContractions(Transformer):
       return newNode
     return node
 
-@singledispatch
-def findPermutations(node, top=True):
-  node._cost = {str(node.indices): (Cost(0, 0), None, None)}
-
-@findPermutations.register(Op)
-def _(node, top=True):
-  for child in node:
-    findPermutations(child)
-  node._cost = {str(node.indices): (Cost(0, 0), None, None)}
-
-@findPermutations.register(Contraction)
-def _(node, top=True):
-  findPermutations(node.leftTerm(), False)
-  findPermutations(node.rightTerm(), False)
-  leftVariants = node.leftTerm()._cost
-  rightVariants = node.rightTerm()._cost
-  
-  ATFree = isinstance(node.leftTerm(), IndexedTensor)
-  BTFree = isinstance(node.rightTerm(), IndexedTensor)
+class FindIndexPermutations(Transformer):
+  class Variant(object):
+    def __init__(self, cost, choices):
+      self._cost = cost
+      self._choices = choices
     
-  node._cost = dict()
-  iterator = [list(node.indices)] if top else itertools.permutations(node.indices)
-  for Cs in iterator:
-    C = ''.join(Cs)
-    minCost = Cost()
-    minA = None
-    minB = None
-    for A, Acost in leftVariants.items():
-      for B, Bcost in rightVariants.items():
-        cost = LoG(A, B, C, ATFree, BTFree) + Acost[0] + Bcost[0]
-        if cost < minCost:
-          minCost = cost
-          minA = A
-          minB = B
-    node._cost[C] = (minCost, minA, minB)
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    choices = list()
+    for child in node:
+      choices.append( str(child.indices) )
+    variants = {str(node.indices): self.Variant(LoGCost(0, 0, 0), choices)}
+    setattr(node, '_findIndexPermutationsVariants', variants)
+    return node
 
-  if top:
-    selectPermutation(node, ''.join(iterator[0]))
+  def visit_Contraction(self, node):
+    node.setChildren([self.visit(node.leftTerm()), self.visit(node.rightTerm())])
+    
+    variants = dict()
+    iterator = itertools.permutations(node.indices)
+    for Cs in iterator:
+      C = ''.join(Cs)
+      minCost = LoGCost()
+      minAind = None
+      minBind = None
+      for Aind, A in node.leftTerm()._findIndexPermutationsVariants.items():
+        for Bind, B in node.rightTerm()._findIndexPermutationsVariants.items():
+          logCost = LoG(Aind, Bind, C)
+          cost = logCost + A._cost + B._cost
+          if cost < minCost:
+            minCost = cost
+            minAind = Aind
+            minBind = Bind
+      variants[C] = self.Variant(minCost, [minAind, minBind])
+    setattr(node, '_findIndexPermutationsVariants', variants)
+    return node
 
-@singledispatch
-def selectPermutation(node, perm):
-  pass
+class SelectIndexPermutations(Transformer):
+  def generic_visit(self, node):
+    variant = node._findIndexPermutationsVariants[str(node.indices)]
+    choice = iter(variant._choices)
+    for child in node:
+      child.setIndexPermutation(next(choice))
+    super().generic_visit(node)
+    return node
 
-@selectPermutation.register(Contraction)
-def _(node, perm):
-  node.setIndexPermutation(perm)
-  selectPermutation(node.leftTerm(),  node._cost[perm][1])
-  selectPermutation(node.rightTerm(), node._cost[perm][2])
+class ImplementContractions(Transformer):
+  def visit_Contraction(self, node):
+    self.generic_visit(node)
+    newNode = LoGbla(node)
+    return newNode
 
 class EquivalentSparsityPattern(Transformer):
   def visit_IndexedTensor(self, node):
@@ -174,6 +176,11 @@ class EquivalentSparsityPattern(Transformer):
     minTree = opt.strengthReduction(terms, targetIndices)
     minTree.setIndexPermutation(targetIndices)
     minTree = FindContractions().visit(minTree)
+    #~ print('#########################')
+    #~ PrettyPrinter().visit(minTree)
+    #~ print('............................')
+    #~ findPermutations(minTree)
+    #~ PrettyPrinter().visit(minTree)
     return ComputeSparsityPattern().visit(minTree)
   
   def visit_Einsum(self, node):

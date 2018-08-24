@@ -1,3 +1,6 @@
+import sys
+import functools
+
 class Indices(object):
   def __init__(self, indexNames = '', shape = ()):
     self._indices = tuple(indexNames)
@@ -23,6 +26,10 @@ class Indices(object):
   def permute(self, indexNames):
     assert set(indexNames) == set(self)
     self._indices = tuple(indexNames)
+    
+  def find(self, index):
+    assert len(index) == 1
+    return self._indices.index(index)
   
   def __eq__(self, other):
     return other != None and self._indices == other._indices and self._size == other._size
@@ -64,3 +71,29 @@ class Indices(object):
   
   def size(self):
     return self._size
+
+@functools.total_ordering
+class LoGCost(object):    
+  def __init__(self, stride = sys.maxsize, transpose = sys.maxsize, fusedIndices = 0):
+    """
+    stride (w.r.t. first dimension): 0 = unit stride, 1 non-unit stride (lower is better)
+    transpose: Number of required transposes                            (lower is better)
+    fusedIndices: Number of tensor indices to be fused in a super-index (higher is better)
+    """
+    self._stride = stride
+    self._transpose = transpose
+    self._fusedIndices = fusedIndices
+  
+  def __lt__(self, other):
+    return self._stride < other._stride or \
+           (self._stride == other._stride and self._transpose < other._transpose) or \
+           (self._stride == other._stride and self._transpose == other._transpose and self._fusedIndices > other._fusedIndices)
+
+  def __eq__(self, other):
+    return self._stride == other._stride and self._transpose == other._transpose and self._fusedIndices == other._fusedIndices
+  
+  def __add__(self, other):
+    return LoGCost(self._stride + other._stride, self._transpose + other._transpose, self._fusedIndices + other._fusedIndices)
+  
+  def __repr__(self):
+    return '{{stride: {}, transpose: {}, fused indices: {}}}'.format(self._stride, self._transpose, self._fusedIndices)

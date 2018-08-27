@@ -74,26 +74,36 @@ class Indices(object):
 
 @functools.total_ordering
 class LoGCost(object):    
-  def __init__(self, stride = sys.maxsize, transpose = sys.maxsize, fusedIndices = 0):
+  def __init__(self, stride = sys.maxsize, leftTranspose = sys.maxsize, rightTranspose = sys.maxsize, fusedIndices = 0):
     """
     stride (w.r.t. first dimension): 0 = unit stride, 1 non-unit stride (lower is better)
     transpose: Number of required transposes                            (lower is better)
     fusedIndices: Number of tensor indices to be fused in a super-index (higher is better)
     """
     self._stride = stride
-    self._transpose = transpose
+    self._leftTranspose = leftTranspose
+    self._rightTranspose = rightTranspose
     self._fusedIndices = fusedIndices
   
+  @staticmethod
+  def addIdentity():
+    return LoGCost(0, 0, 0, 0)
+    
+  def _totuple(self):
+    return (self._stride, self._leftTranspose + self._rightTranspose, self._fusedIndices)
+  
   def __lt__(self, other):
-    return self._stride < other._stride or \
-           (self._stride == other._stride and self._transpose < other._transpose) or \
-           (self._stride == other._stride and self._transpose == other._transpose and self._fusedIndices > other._fusedIndices)
+    s = self._totuple()
+    o = other._totuple()
+    if s == o:
+      return self._leftTranspose < other._leftTranspose
+    return self._totuple() < other._totuple()
 
   def __eq__(self, other):
-    return self._stride == other._stride and self._transpose == other._transpose and self._fusedIndices == other._fusedIndices
+    return self._totuple() == other._totuple() and self._leftTranspose == other._leftTranspose
   
   def __add__(self, other):
-    return LoGCost(self._stride + other._stride, self._transpose + other._transpose, self._fusedIndices + other._fusedIndices)
+    return LoGCost(self._stride + other._stride, self._leftTranspose + other._leftTranspose, self._rightTranspose + other._rightTranspose, self._fusedIndices + other._fusedIndices)
   
   def __repr__(self):
-    return '{{stride: {}, transpose: {}, fused indices: {}}}'.format(self._stride, self._transpose, self._fusedIndices)
+    return '{{stride: {}, left transpose: {}, right transpose: {}, fused indices: {}}}'.format(self._stride, self._leftTranspose, self._rightTranspose, self._fusedIndices)

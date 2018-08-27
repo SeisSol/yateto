@@ -1,7 +1,6 @@
 import sys
 from .node import IndexSum, Product
 
-# TODO: Check implementation
 def strengthReduction(terms, target_indices, split = 0):
   n = len(terms)
   
@@ -18,7 +17,6 @@ def strengthReduction(terms, target_indices, split = 0):
         addTerm = IndexSum(terms[i], index)
         selection = set(range(n)) - set([i])
         terms = [terms[i] for i in selection] + [addTerm]
-        split = i
         summationIndices -= set([index])
       else:
         i = i + 1
@@ -28,8 +26,7 @@ def strengthReduction(terms, target_indices, split = 0):
     return terms[0]
   else:
     for i in range(n):
-      #~ for j in range(max(i+1,split),n):
-      for j in range(i+1,n):
+      for j in range(max(i+1,split),n):
         mulTerm = Product(terms[i], terms[j], target_indices)
         selection = set(range(n)) - set([i,j])
         tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, j-1)

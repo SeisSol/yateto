@@ -160,7 +160,7 @@ class LoopOverGEMM(BinOp):
     B = self.rightTerm().indices
     AstrideOne = (A.find(self._m[0]) == 0) if not self._Atrans else (A.find(self._k[0]) == 0)
     BstrideOne = (B.find(self._k[0]) == 0) if not self._Btrans else (B.find(self._n[0]) == 0)
-    cost = LoGCost(int(not AstrideOne) + int(not BstrideOne), int(self._Atrans) + int(self._Btrans), len(self._m) + len(self._n) + len(self._k))
+    cost = LoGCost(int(not AstrideOne) + int(not BstrideOne), int(self._Atrans), int(self._Btrans), len(self._m) + len(self._n) + len(self._k))
     return cost
 
   @staticmethod

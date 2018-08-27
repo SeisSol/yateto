@@ -3,7 +3,7 @@ from numpy import ndarray, zeros, einsum
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern
 from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction
 from .indices import Indices, LoGCost
-from .log import LoG, LoGbla
+from .log import LoG
 from . import opt
 
 # Similar as ast.NodeTransformer
@@ -110,9 +110,25 @@ class FindIndexPermutations(Transformer):
     choices = list()
     for child in node:
       choices.append( str(child.indices) )
-    variants = {str(node.indices): self.Variant(LoGCost(0, 0, 0), choices)}
-    setattr(node, '_findIndexPermutationsVariants', variants)
+    variants = {str(node.indices): self.Variant(LoGCost.addIdentity(), choices)}
+    setattr(node, '_findIndexPermutationsVariants', variants) 
     return node
+  
+  def allPermutations(self, node):
+    super().generic_visit(node)
+    choices = list()
+    for child in node:
+      choices.append( str(child.indices) )
+    iterator = itertools.permutations(node.indices)
+    variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), choices) for Cs in iterator}
+    setattr(node, '_findIndexPermutationsVariants', variants) 
+    return node
+  
+  def visit_Product(self, node):
+    return self.allPermutations(node)
+    
+  def visit_IndexSum(self, node):
+    return self.allPermutations(node)
 
   def visit_Contraction(self, node):
     node.setChildren([self.visit(node.leftTerm()), self.visit(node.rightTerm())])
@@ -124,15 +140,19 @@ class FindIndexPermutations(Transformer):
       minCost = LoGCost()
       minAind = None
       minBind = None
-      for Aind, A in node.leftTerm()._findIndexPermutationsVariants.items():
-        for Bind, B in node.rightTerm()._findIndexPermutationsVariants.items():
-          logCost = LoG(Aind, Bind, C)
-          cost = logCost + A._cost + B._cost
+      lV = node.leftTerm()._findIndexPermutationsVariants
+      rV = node.rightTerm()._findIndexPermutationsVariants
+      for Aind in sorted(lV):
+        for Bind in sorted(rV):
+          log = LoG(node, Aind, Bind, C)
+          cost = log.cost() + lV[Aind]._cost + rV[Bind]._cost
           if cost < minCost:
             minCost = cost
             minAind = Aind
             minBind = Bind
-      variants[C] = self.Variant(minCost, [minAind, minBind])
+      if minAind is not None and minBind is not None:
+        variants[C] = self.Variant(minCost, [minAind, minBind])
+    assert variants, 'Could not find implementation for Contraction. (Note: Matrix-Vector multiplication currently not supported.)'
     setattr(node, '_findIndexPermutationsVariants', variants)
     return node
 
@@ -148,7 +168,7 @@ class SelectIndexPermutations(Transformer):
 class ImplementContractions(Transformer):
   def visit_Contraction(self, node):
     self.generic_visit(node)
-    newNode = LoGbla(node)
+    newNode = LoG(node)
     return newNode
 
 class EquivalentSparsityPattern(Transformer):

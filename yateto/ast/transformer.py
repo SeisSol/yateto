@@ -89,7 +89,7 @@ class StrengthReduction(Transformer):
 
 class FindContractions(Transformer):
   def visit_IndexSum(self, node):
-    sumIndices = set([node.sumIndex()])
+    sumIndices = set(node.sumIndex())
     child = node.term()
     while isinstance(child, IndexSum):
       sumIndices = sumIndices.union(child.sumIndex())

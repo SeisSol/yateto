@@ -14,14 +14,20 @@ class Indices(object):
   def tostring(self):
     return ''.join(self._indices)
   
+  def extract(self, indexNames):
+    return Indices(str(indexNames), self.subShape(indexNames))
+  
   def firstIndex(self):
-    return Indices(self._indices[0], self.subShape(self._indices[0]))
+    return self.extract(self._indices[0])
 
   def shape(self):
     return self.subShape(self._indices)
   
   def subShape(self, indexNames):
     return tuple([self._size[index] for index in indexNames])
+
+  def indexSize(self, index):
+    return self._size[index]
   
   def permute(self, indexNames):
     assert set(indexNames) == set(self)
@@ -39,6 +45,9 @@ class Indices(object):
   
   def __iter__(self):
     return iter(self._indices)
+    
+  def __len__(self):
+    return len(self._indices)
   
   def __and__(self, other):
     return set(self) & set(other)

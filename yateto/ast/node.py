@@ -57,6 +57,9 @@ class IndexedTensor(Node):
   
   def spp(self):
     return self.tensor.spp()
+  
+  def name(self):
+    return self.tensor.name()
 
   def __str__(self):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
@@ -145,7 +148,7 @@ class IndexSum(Op):
   def __init__(self, term, sumIndex):
     super().__init__(term)
     self.indices = term.indices - set([sumIndex])
-    self._sumIndex = sumIndex
+    self._sumIndex = term.indices.extract(sumIndex)
     self._cost = term.indices.size()[sumIndex]
     for size in self.indices.shape():
       self._cost *= size
@@ -202,6 +205,9 @@ class LoopOverGEMM(BinOp):
     BstrideOne = (B.find(self._k[0]) == 0) if not self._Btrans else (B.find(self._n[0]) == 0)
     cost = LoGCost(int(not AstrideOne) + int(not BstrideOne), int(self._Atrans), int(self._Btrans), len(self._m) + len(self._n) + len(self._k))
     return cost
+  
+  def loopIndices(self):
+    return self.indices - (self._m + self._n)
 
   @staticmethod
   def indexString(name, subset, indices, transpose=False):

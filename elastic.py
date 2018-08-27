@@ -6,6 +6,8 @@ from yateto.input import parseXMLMatrixFile
 from yateto.ast.visitor import *
 from yateto.ast.transformer import *
 from yateto.ast.node import Add
+from yateto.codegen.code import Cpp
+from yateto.codegen.visitor import *
 import itertools
 
 maxDegree = 5
@@ -114,3 +116,6 @@ test = ImplementContractions().visit(test)
 
 test = ComputeAndSetSparsityPattern().visit(test)
 PrettyPrinter().visit(test)
+
+with Cpp() as cpp:
+  KernelGenerator(cpp).generate(test)

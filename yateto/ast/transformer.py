@@ -196,11 +196,6 @@ class EquivalentSparsityPattern(Transformer):
     minTree = opt.strengthReduction(terms, targetIndices)
     minTree.setIndexPermutation(targetIndices)
     minTree = FindContractions().visit(minTree)
-    #~ print('#########################')
-    #~ PrettyPrinter().visit(minTree)
-    #~ print('............................')
-    #~ findPermutations(minTree)
-    #~ PrettyPrinter().visit(minTree)
     return ComputeSparsityPattern().visit(minTree)
   
   def visit_Einsum(self, node):
@@ -213,4 +208,13 @@ class EquivalentSparsityPattern(Transformer):
       
     # TODO: Backtracking of equivalent sparsity pattern to children?
 
+    return node
+
+class ComputeAndSetSparsityPattern(Transformer):
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+  
+  def visit_IndexedTensor(self, node):
     return node

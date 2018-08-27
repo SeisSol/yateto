@@ -3,8 +3,8 @@
 from yateto import Generator, Tensor
 from yateto.generator import simpleParameterSpace
 from yateto.input import parseXMLMatrixFile
-from yateto.ast.visitor import PrettyPrinter, PrintEquivalentSparsityPatterns
-from yateto.ast.transformer import DeduceIndices, EquivalentSparsityPattern, StrengthReduction, FindContractions, ImplementContractions, FindIndexPermutations, SelectIndexPermutations
+from yateto.ast.visitor import *
+from yateto.ast.transformer import *
 from yateto.ast.node import Add
 import itertools
 
@@ -94,20 +94,23 @@ test = Tensor('D', (4,4,4,4))['hmyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A
 PrettyPrinter().visit(test)
 
 test = DeduceIndices().visit(test)
-PrettyPrinter().visit(test)
+#~ PrettyPrinter().visit(test)
 
 test = EquivalentSparsityPattern().visit(test)
-PrettyPrinter().visit(test)
+#~ PrettyPrinter().visit(test)
 
 test = StrengthReduction().visit(test)
-PrettyPrinter().visit(test)
+#~ PrettyPrinter().visit(test)
 
 test = FindContractions().visit(test)
-PrettyPrinter().visit(test)
+#~ PrettyPrinter().visit(test)
 
 test = FindIndexPermutations().visit(test)
 test = SelectIndexPermutations().visit(test)
-PrettyPrinter().visit(test)
+#~ PrettyPrinter().visit(test)
 
 test = ImplementContractions().visit(test)
+#~ PrettyPrinter().visit(test)
+
+test = ComputeAndSetSparsityPattern().visit(test)
 PrettyPrinter().visit(test)

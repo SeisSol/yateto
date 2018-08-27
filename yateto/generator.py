@@ -1,7 +1,7 @@
 import itertools
 from .ast.node import Node
 #~ from .ast.visitor import PrettyPrinter
-from .ast.transformer import DeduceIndices, EquivalentSparsityPattern, StrengthReduction, FindContractions, FindIndexPermutations, SelectIndexPermutations, ImplementContractions
+from .ast.transformer import *
 
 class Kernel(object):
   def __init__(self, name, ast):
@@ -16,6 +16,7 @@ class Kernel(object):
     self._ast = FindIndexPermutations().visit(self._ast)
     self._ast = SelectIndexPermutations().visit(self._ast)
     self._ast = ImplementContractions().visit(self._ast)
+    self._ast = ComputeAndSetSparsityPattern().visit(self._ast)
     #~ PrettyPrinter().visit(self._ast)
     
 class KernelFamily(object):

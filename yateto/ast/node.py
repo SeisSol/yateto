@@ -1,3 +1,4 @@
+import numpy as np
 from .indices import Indices, LoGCost
 
 class Node(object):
@@ -67,21 +68,21 @@ class Op(Node):
   
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')
-
-class Assign(Op):
-  def setChildren(self, children):
-    if len(children) != 2:
-      raise ValueError('Assign node must have exactly 2 children')
-    if not isinstance(children[0], IndexedTensor):
-      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0]))
-    
-    super().setChildren(children)
+  
+  def computeSparsityPattern(self, *spps):
+    raise NotImplementedError
 
 class Einsum(Op):
   pass
     
 class Add(Op):
-  pass
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [node.eqspp() for node in self]
+    spp = spps[0]
+    for i in range(1, len(spps)):
+      spp = np.add(spp, spps[i])
+    return spp
 
 class BinOp(Op):
   def __init__(self, lTerm, rTerm):
@@ -92,6 +93,30 @@ class BinOp(Op):
   
   def rightTerm(self):
     return self._children[1]
+  
+  def setChildren(self, children):
+    if len(children) != 2:
+      raise ValueError('BinOp node must have exactly 2 children.')
+    super().setChildren(children)
+
+class Assign(BinOp):
+  def setChildren(self, children):
+    if not isinstance(children[0], IndexedTensor):
+      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0]))
+    super().setChildren(children)
+  
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      return self.rightTerm().eqspp()
+    assert len(spps) == 2
+    return spps[1]
+
+def _productContractionLoGSparsityPattern(node, *spps):
+  if len(spps) == 0:
+    spps = [node.leftTerm().eqspp(), node.rightTerm().eqspp()]
+  assert len(spps) == 2
+  einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
+  return np.einsum(einsumDescription, spps[0], spps[1])
 
 class Product(BinOp):
   def __init__(self, lTerm, rTerm, target_indices):
@@ -110,10 +135,12 @@ class Product(BinOp):
     for child in self._children:
       self._cost += getattr(child, '_cost', 0)
   
+  def computeSparsityPattern(self, *spps):
+    return _productContractionLoGSparsityPattern(self, *spps)
+  
   def __str__(self):
     return '{} [{}] ({})'.format(type(self).__name__, self.indices, self._cost)
 
-  
 class IndexSum(Op):
   def __init__(self, term, sumIndex):
     super().__init__(term)
@@ -129,6 +156,13 @@ class IndexSum(Op):
   
   def term(self):
     return self._children[0]
+  
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [self.term().eqspp()]
+    assert len(spps) == 1
+    einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
+    return np.einsum(einsumDescription, spps[0])
 
   def __str__(self):
     return '{}_{} [{}] ({})'.format(type(self).__name__, self._sumIndex, self.indices, self._cost)
@@ -142,6 +176,9 @@ class Contraction(BinOp):
     self.indices = li.merged(lr)
     self.setIndexPermutation(indices)
   
+  def computeSparsityPattern(self, *spps):
+    return _productContractionLoGSparsityPattern(self, *spps)
+  
   def __str__(self):
     return '{} [{}]'.format(type(self).__name__, self.indices)
 
@@ -154,6 +191,9 @@ class LoopOverGEMM(BinOp):
     self._k = k
     self._Atrans = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
     self._Btrans = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
+  
+  def computeSparsityPattern(self, *spps):
+    return _productContractionLoGSparsityPattern(self, *spps)
   
   def cost(self):
     A = self.leftTerm().indices

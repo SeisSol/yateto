@@ -41,25 +41,11 @@ class PrettyPrinter(Visitor):
 
 class ComputeSparsityPattern(Visitor):
   def generic_visit(self, node):
-    super().generic_visit(node)
+    spps = [self.visit(child) for child in node]
+    return node.computeSparsityPattern(*spps)
+  
+  def visit_IndexedTensor(self, node):
     return node.eqspp()
-
-  def visit_IndexSum(self, node):
-    eqspp = self.visit(node.term())
-    einsumDescription = '{}->{}'.format(node.term().indices.tostring(), node.indices.tostring())
-    return einsum(einsumDescription, eqspp)
-  
-  def visit_Product(self, node):
-    leftEqspp = self.visit(node.leftTerm())
-    rightEqspp = self.visit(node.rightTerm())
-    einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
-    return einsum(einsumDescription, leftEqspp, rightEqspp)
-  
-  def visit_Contraction(self, node):
-    leftEqspp = self.visit(node.leftTerm())
-    rightEqspp = self.visit(node.rightTerm())
-    einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
-    return einsum(einsumDescription, leftEqspp, rightEqspp)
 
 class PrintEquivalentSparsityPatterns(Visitor):
   def __init__(self, directory):

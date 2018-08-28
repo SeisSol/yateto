@@ -1,4 +1,5 @@
 import numpy as np
+from ..memory import DenseMemoryLayout
 from .indices import Indices, LoGCost
 
 class Node(object):
@@ -24,6 +25,9 @@ class Node(object):
   
   def setEqspp(self, spp):
     self._eqspp = spp
+  
+  def memoryLayout(self):
+    raise NotImplementedError
     
   def setIndexPermutation(self, indices):
     self.indices.permute(indices)
@@ -60,6 +64,9 @@ class IndexedTensor(Node):
   
   def name(self):
     return self.tensor.name()
+  
+  def memoryLayout(self):
+    return self.tensor.memoryLayout()
 
   def __str__(self):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
@@ -68,6 +75,9 @@ class Op(Node):
   def __init__(self, *args):
     super().__init__()
     self._children = list(args)
+  
+  def memoryLayout(self):
+    return DenseMemoryLayout(self.indices.shape())
   
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')
@@ -192,8 +202,8 @@ class LoopOverGEMM(BinOp):
     self._m = m
     self._n = n
     self._k = k
-    self._Atrans = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
-    self._Btrans = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
+    self._transA = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
+    self._transB = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
   
   def computeSparsityPattern(self, *spps):
     return _productContractionLoGSparsityPattern(self, *spps)
@@ -201,13 +211,19 @@ class LoopOverGEMM(BinOp):
   def cost(self):
     A = self.leftTerm().indices
     B = self.rightTerm().indices
-    AstrideOne = (A.find(self._m[0]) == 0) if not self._Atrans else (A.find(self._k[0]) == 0)
-    BstrideOne = (B.find(self._k[0]) == 0) if not self._Btrans else (B.find(self._n[0]) == 0)
-    cost = LoGCost(int(not AstrideOne) + int(not BstrideOne), int(self._Atrans), int(self._Btrans), len(self._m) + len(self._n) + len(self._k))
+    AstrideOne = (A.find(self._m[0]) == 0) if not self._transA else (A.find(self._k[0]) == 0)
+    BstrideOne = (B.find(self._k[0]) == 0) if not self._transB else (B.find(self._n[0]) == 0)
+    cost = LoGCost(int(not AstrideOne) + int(not BstrideOne), int(self._transA), int(self._transB), len(self._m) + len(self._n) + len(self._k))
     return cost
   
   def loopIndices(self):
     return self.indices - (self._m + self._n)
+  
+  def transA(self):
+    return self._transA
+
+  def transB(self):
+    return self._transB
 
   @staticmethod
   def indexString(name, subset, indices, transpose=False):
@@ -216,7 +232,7 @@ class LoopOverGEMM(BinOp):
     return '({})\''.format(matrixStr) if transpose else matrixStr
   
   def __str__(self):
-    Astr = self.indexString('A', self._m + self._k, self.leftTerm().indices, self._Atrans)
-    Bstr = self.indexString('B', self._k + self._n, self.rightTerm().indices, self._Btrans)
+    Astr = self.indexString('A', self._m + self._k, self.leftTerm().indices, self._transA)
+    Bstr = self.indexString('B', self._k + self._n, self.rightTerm().indices, self._transB)
     Cstr = self.indexString('C', self._m + self._n, self.indices)
     return '{} [{}]: {} = {} {}'.format(type(self).__name__, self.indices, Cstr, Astr, Bstr)

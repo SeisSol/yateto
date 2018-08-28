@@ -8,6 +8,7 @@ from yateto.ast.transformer import *
 from yateto.ast.node import Add
 from yateto.codegen.code import Cpp
 from yateto.codegen.visitor import *
+from yateto.codegen.arch import getArchitectureByIdentifier
 import itertools
 
 maxDegree = 5
@@ -15,8 +16,8 @@ order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
-multipleSims = True
-#~ multipleSims = False
+#~ multipleSims = True
+multipleSims = False
 
 if multipleSims:
   qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
@@ -88,17 +89,18 @@ g.generate('test')
 #~ test = neighbourFlux(0,0,0)
 #~ test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
 #~ test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
-#~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,4,4))['ijmc'] * Tensor('B', (4,4,4,4))['mkab']
+#~ test = Tensor('D', (24,24,24,24,24,24))['abcijk'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab']
 
 #~ test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
-test = Tensor('D', (4,4,4,4))['hmyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4))['ms']
-#~ test = volume
+#~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
+test = volume
 PrettyPrinter().visit(test)
 
+'''
 test = DeduceIndices().visit(test)
 #~ PrettyPrinter().visit(test)
 
-test = EquivalentSparsityPattern().visit(test)
+#~ test = EquivalentSparsityPattern().visit(test)
 #~ PrettyPrinter().visit(test)
 
 test = StrengthReduction().visit(test)
@@ -114,8 +116,9 @@ test = SelectIndexPermutations().visit(test)
 test = ImplementContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
-test = ComputeAndSetSparsityPattern().visit(test)
+#~ test = ComputeAndSetSparsityPattern().visit(test)
 PrettyPrinter().visit(test)
+'''
 
 with Cpp() as cpp:
-  KernelGenerator(cpp).generate(test)
+  KernelGenerator(cpp, getArchitectureByIdentifier('dsnb')).generate(test)

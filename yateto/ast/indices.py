@@ -45,6 +45,9 @@ class Indices(object):
   
   def __iter__(self):
     return iter(self._indices)
+  
+  def __getitem__(self, key):
+    return self._indices[key]
     
   def __len__(self):
     return len(self._indices)
@@ -99,7 +102,8 @@ class LoGCost(object):
     return LoGCost(0, 0, 0, 0)
     
   def _totuple(self):
-    return (self._stride, self._leftTranspose + self._rightTranspose, self._fusedIndices)
+    # minus sign before _fusedIndices as higher is better
+    return (self._stride, self._leftTranspose + self._rightTranspose, -self._fusedIndices)
   
   def __lt__(self, other):
     s = self._totuple()

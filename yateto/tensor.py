@@ -1,11 +1,12 @@
 from .ast.node import IndexedTensor, Indices
 from numpy import ndarray, zeros, ones
+from .memory import DenseMemoryLayout
 
 class Collection(object):
   pass
 
 class Tensor(object):
-  def __init__(self, name, shape, spp=None):
+  def __init__(self, name, shape, spp=None, memoryLayout=None):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -29,12 +30,17 @@ class Tensor(object):
     else:
       self._spp = ones(shape, dtype=bool)
     
+    self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout(self._shape)
+    
 
   def __getitem__(self, indexNames):
     return IndexedTensor(self, indexNames)
   
   def shape(self):
     return self._shape
+  
+  def memoryLayout(self):
+    return self._memoryLayout
   
   def name(self):
     return self._name

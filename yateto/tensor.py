@@ -1,17 +1,26 @@
+import re
 from .ast.node import IndexedTensor, Indices
 from numpy import ndarray, zeros, ones
 from .memory import DenseMemoryLayout
 
 class Collection(object):
-  pass
+  def update(self, collection):
+    self.__dict__.update(collection.__dict__)
 
 class Tensor(object):
+  BASE_NAME = r'[a-zA-Z]\w*'
+  GROUP_INDEX = r'\[(0|[1-9]\d*)\]'
+  VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDEX)
+
   def __init__(self, name, shape, spp=None, memoryLayout=None):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
     if any(x < 1 for x in shape):
       raise ValueError('shape must not contain entries smaller than 1')
+    
+    if not re.match(self.VALID_NAME, name):
+      raise ValueError('Tensor name invalid (must match regexp {}): {}'.format(self.VALID_NAME, name))
 
     self._name = name
     self._shape = shape
@@ -45,5 +54,17 @@ class Tensor(object):
   def name(self):
     return self._name
   
+  def baseName(self):
+    return re.match(self.BASE_NAME, self._name).group(0)
+
+  def group(self):
+    m = re.search(self.GROUP_INDEX, self._name)
+    if m:
+      return int(m.group(1))
+    return None
+  
   def spp(self):
     return self._spp
+  
+  def __str__(self):
+    return '{}: {}'.format(self._name, self._shape)

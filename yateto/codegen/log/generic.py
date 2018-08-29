@@ -8,7 +8,10 @@ class Generic(object):
     self._descr = descr
   
   def _pointer(self, cpp, name, term, loopIndices):
-    cpp('{}* {} = {} + {};'.format(self._arch.typename, name, term.name, term.memoryLayout.addressString(term.indices, term.indices & loopIndices)))
+    addressStr = term.memoryLayout.addressString(term.indices, term.indices & loopIndices)
+    if len(addressStr) > 0:
+      addressStr = ' + ' + addressStr
+    cpp('{}* {} = {}{};'.format(self._arch.typename, name, term.name, addressStr))
 
   def generate(self, cpp):
     d = self._descr

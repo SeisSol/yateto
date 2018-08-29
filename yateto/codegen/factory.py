@@ -1,5 +1,6 @@
+from ..ast.node import IndexedTensor
 from .common import TensorDescription, IndexedTensorDescription
-from . import addition, indexsum, log, product
+from . import copyscaleadd, indexsum, log, product
 
 class Factory(object):
   def create(self, node, *args):
@@ -8,8 +9,7 @@ class Factory(object):
     return factory(node, *args)
   
   def generic_create(self, node, *args):
-    #~ raise NotImplementedError
-    pass
+    raise NotImplementedError
 
 class KernelFactory(Factory):
   def __init__(self, cpp, arch):
@@ -50,3 +50,17 @@ class KernelFactory(Factory):
     )
     generator = product.generator(self._arch, description)
     generator.generate(self._cpp)
+  
+  def create_Add(self, node, resultName, argNames, add):
+    beta = 1.0 if add else 0.0
+    for i,child in enumerate(node):
+      if isinstance(child, IndexedTensor):
+        description = copyscaleadd.Description(
+          alpha = 1.0,
+          beta = beta,
+          result = TensorDescription(resultName, node.memoryLayout()),
+          term = TensorDescription(argNames[i], child.memoryLayout()),
+        )
+        generator = copyscaleadd.generator(self._arch, description)
+        generator.generate(self._cpp)
+      beta = 1.0

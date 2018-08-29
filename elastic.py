@@ -16,20 +16,23 @@ order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
-#~ multipleSims = True
-multipleSims = False
+multipleSims = True
+#~ multipleSims = False
 
 if multipleSims:
   qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
   qi = lambda x: 's' + x
+  t = lambda x: x[::-1]
 else:
   qShape = (numberOf3DBasisFunctions, numberOfQuantities)
   qi = lambda x: x
+  t = lambda x: x
 
 clones = {
   'star': ['star[0]', 'star[1]', 'star[2]'],
 }
-db = parseXMLMatrixFile('matrices_{}.xml'.format(numberOf3DBasisFunctions), clones)
+db = parseXMLMatrixFile('matrices_{}.xml'.format(numberOf3DBasisFunctions), transpose=multipleSims)
+db.update( parseXMLMatrixFile('star.xml'.format(numberOf3DBasisFunctions), clones) )
 
 # Quantities
 Q = Tensor('Q', qShape)
@@ -44,34 +47,35 @@ g = Generator()
 
 volumeSum = Q[qi('kp')]
 for i in range(3):
-  volumeSum += db.kDivM[i]['kl'] * I[qi('lq')] * db.star[i]['qp']
+  volumeSum += db.kDivM[i][t('kl')] * I[qi('lq')] * db.star[i]['qp']
 volume = (Q[qi('kp')] <= volumeSum)
 g.add('volume', volume)
 
 localFluxSum = Q[qi('kp')]
 for i in range(4):
-  localFluxSum += db.rDivM[i]['km'] * db.fMrT[i]['ml'] * I[qi('lq')] * AplusT[i]['qp']
+  localFluxSum += db.rDivM[i][t('km')] * db.fMrT[i][t('ml')] * I[qi('lq')] * AplusT[i]['qp']
 localFlux = (Q[qi('kp')] <= localFluxSum)
 g.add('localFlux', localFlux)
 
-neighbourFlux = lambda i,j,h: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i]['km'] * db.fP[h]['mn'] * db.rT[j]['nl'] * I[qi('lq')] * AminusT[i]['qp']
+neighbourFlux = lambda i,j,h: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i][t('km')] * db.fP[h][t('mn')] * db.rT[j][t('nl')] * I[qi('lq')] * AminusT[i]['qp']
 g.addFamily('neighboringFlux', simpleParameterSpace(4,4,3), neighbourFlux)
 
+derivatives = list()
 for i in range(maxDegree):
   derivativeSum = Add()
   for j in range(3):
-    derivativeSum += db.kDivMT[j]['kl'] * D[i][qi('lq')] * db.star[j]['qp']
+    derivativeSum += db.kDivMT[j][t('kl')] * D[i][qi('lq')] * db.star[j]['qp']
   derivativeSum = DeduceIndices( Q[qi('kp')].indices ).visit(derivativeSum)
   derivativeSum = EquivalentSparsityPattern().visit(derivativeSum)
   D.append( Tensor('dQ[{0}]'.format(i+1), qShape, spp=derivativeSum.eqspp()) )
   derivative = D[i+1][qi('kp')] <= derivativeSum
 
+  derivatives.append(derivative)
   g.add('derivative[{}]'.format(i), derivative)
   
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
   #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
-
 g.generate('test')
 
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
@@ -93,7 +97,8 @@ g.generate('test')
 
 #~ test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
-test = volume
+#~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
+test = derivatives[4]
 PrettyPrinter().visit(test)
 
 '''

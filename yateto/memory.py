@@ -26,8 +26,16 @@ class DenseMemoryLayout(MemoryLayout):
   def shape(self, dim):
     return self._shape[dim]
   
+  def size(self):
+    size = self._shape[-1]
+    for s in self._stride:
+      size *= s
+    return size
+  
   def addressString(self, indices, I = None):
-    positions = self._positions(indices, I) if I else self._positions(indices, set(indices))
+    if I is None:
+      I = set(indices)
+    positions = self._positions(indices, I)
     a = list()
     for p in positions:
       a.append('{}*{}'.format(self._stride[p], indices[p]))

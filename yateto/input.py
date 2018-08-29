@@ -5,10 +5,12 @@ from .tensor import Collection, Tensor
 def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
-def __parseMatrix(node, clones):
+def __parseMatrix(node, clones, transpose):
   name = node.get('name')
   rows = int( node.get('rows') )
   columns = int( node.get('columns') )
+  if transpose:
+    rows, columns = columns, rows
 
   matrix = dict()
   for child in node:
@@ -16,7 +18,10 @@ def __parseMatrix(node, clones):
       row = int(child.get('row'))-1
       col = int(child.get('column'))-1
       entry = child.get('value', True)
-      matrix[(row, col)] = entry
+      if transpose:
+        matrix[(col, row)] = entry
+      else:
+        matrix[(row, col)] = entry
     else:
       self.__complain(child)
 
@@ -29,7 +34,7 @@ def __parseMatrix(node, clones):
   
   return matrices
 
-def parseXMLMatrixFile(xmlFile, clones):
+def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False):
   tree = etree.parse(xmlFile)
   root = tree.getroot()
   
@@ -37,7 +42,7 @@ def parseXMLMatrixFile(xmlFile, clones):
   
   for child in root:
     if child.tag == 'matrix':
-      matrices.update( __parseMatrix(child, clones) )
+      matrices.update( __parseMatrix(child, clones, transpose) )
     else:
       __complain(child)
   

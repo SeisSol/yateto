@@ -1,12 +1,13 @@
 import numpy as np
 from ..memory import DenseMemoryLayout
-from .indices import Indices, LoGCost
+from .indices import BoundingBox, Indices, LoGCost
 
 class Node(object):
   def __init__(self):
     self.indices = None
     self._children = []
     self._eqspp = None
+    self._boundingBox = None
   
   def size(self):
     return self.indices.size()
@@ -25,6 +26,13 @@ class Node(object):
   
   def setEqspp(self, spp):
     self._eqspp = spp
+    self._boundingBox = BoundingBox.fromSpp(spp)
+
+  def boundingBox(self):
+    return self._boundingBox
+  
+  def setBoundingBox(self, bb):
+    self._boundingBox = bb
   
   def memoryLayout(self):
     raise NotImplementedError
@@ -142,14 +150,45 @@ class Product(BinOp):
 
     self.indices = lTerm.indices.merged(rTerm.indices - K)
 
-    self._cost = 1
-    for size in self.indices.shape():
-      self._cost *= size
+    # Cost based on indices
+    # self._cost = 1
+    # for size in self.indices.shape():
+      # self._cost *= size
+
+    # Cost based on sparsity pattern
+    # self.setEqspp( self.computeSparsityPattern() )
+    # self._cost = np.count_nonzero( self.eqspp() )
+
+    # Cost based on bounding box
+    self.setBoundingBox( self.computeBoundingBox() )
+    self._cost = self.boundingBox().size()
+    
     for child in self._children:
       self._cost += getattr(child, '_cost', 0)
   
   def computeSparsityPattern(self, *spps):
     return _productContractionLoGSparsityPattern(self, *spps)
+  
+  def computeBoundingBox(self):
+    lt = self.leftTerm()
+    rt = self.rightTerm()
+    lbb = lt.boundingBox()
+    rbb = rt.boundingBox()
+    lind = set(lt.indices)
+    rind = set(rt.indices)
+    ranges = list()
+    for index in self.indices:
+      if index in lind and index in rind:
+        lpos = lt.indices.find(index)
+        rpos = rt.indices.find(index)
+        ranges.append(lbb[lpos] & rbb[rpos])
+      elif index in lind:
+        ranges.append(lbb[lt.indices.find(index)])
+      elif index in rind:
+        ranges.append(rbb[rt.indices.find(index)])
+      else:
+        raise RuntimeError('Not supposed to happen.')
+    return BoundingBox(ranges)
   
   def __str__(self):
     return '{} [{}] ({})'.format(type(self).__name__, self.indices, self._cost)
@@ -159,9 +198,20 @@ class IndexSum(Op):
     super().__init__(term)
     self.indices = term.indices - set([sumIndex])
     self._sumIndex = term.indices.extract(sumIndex)
-    self._cost = term.indices.size()[sumIndex]
-    for size in self.indices.shape():
-      self._cost *= size
+    
+    # Cost based on indices
+    # self._cost = term.indices.size()[sumIndex] - 1
+    # for size in self.indices.shape():
+      # self._cost *= size
+
+    # Cost based on sparsity pattern
+    # self.setEqspp( self.computeSparsityPattern() )
+    # self._cost = np.count_nonzero( term.eqspp() ) - np.count_nonzero( self.eqspp() )
+
+    # Cost based on bounding box
+    self.setBoundingBox( self.computeBoundingBox() )
+    self._cost = term.boundingBox().size() - self.boundingBox().size()
+    
     self._cost += getattr(term, '_cost', 0)
   
   def sumIndex(self):
@@ -176,6 +226,11 @@ class IndexSum(Op):
     assert len(spps) == 1
     einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
     return np.einsum(einsumDescription, spps[0])
+
+  def computeBoundingBox(self):
+    bb = self.term().boundingBox()
+    pos = self.term().indices.find(str(self.sumIndex()))
+    return BoundingBox([r for i,r in enumerate(bb) if i != pos])
 
   def __str__(self):
     return '{}_{} [{}] ({})'.format(type(self).__name__, self._sumIndex, self.indices, self._cost)

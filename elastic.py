@@ -16,22 +16,24 @@ order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
-multipleSims = True
-#~ multipleSims = False
+#~ multipleSims = True
+#~ transpose = True
+multipleSims = False
+transpose = False
 
 if multipleSims:
   qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
   qi = lambda x: 's' + x
-  t = lambda x: x[::-1]
 else:
   qShape = (numberOf3DBasisFunctions, numberOfQuantities)
   qi = lambda x: x
-  t = lambda x: x
+
+t = (lambda x: x[::-1]) if transpose else (lambda x: x)
 
 clones = {
   'star': ['star[0]', 'star[1]', 'star[2]'],
 }
-db = parseXMLMatrixFile('matrices_{}.xml'.format(numberOf3DBasisFunctions), transpose=multipleSims)
+db = parseXMLMatrixFile('matrices_{}.xml'.format(numberOf3DBasisFunctions), transpose=transpose)
 db.update( parseXMLMatrixFile('star.xml'.format(numberOf3DBasisFunctions), clones) )
 
 # Quantities
@@ -93,19 +95,18 @@ g.generate('test')
 #~ test = neighbourFlux(0,0,0)
 #~ test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
 #~ test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
-#~ test = Tensor('D', (24,24,24,24,24,24))['abcijk'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab']
+#~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,6,4))['ijmc'] * Tensor('B', (6,4,4,4))['mkab']
 
 #~ test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
-#~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
-test = derivatives[4]
+test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
+#~ test = derivatives[4]
 PrettyPrinter().visit(test)
 
-'''
 test = DeduceIndices().visit(test)
 #~ PrettyPrinter().visit(test)
 
-#~ test = EquivalentSparsityPattern().visit(test)
+test = EquivalentSparsityPattern().visit(test)
 #~ PrettyPrinter().visit(test)
 
 test = StrengthReduction().visit(test)
@@ -121,9 +122,11 @@ test = SelectIndexPermutations().visit(test)
 test = ImplementContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
-#~ test = ComputeAndSetSparsityPattern().visit(test)
-PrettyPrinter().visit(test)
-'''
+test = ComputeAndSetSparsityPattern().visit(test)
+#~ PrettyPrinter().visit(test)
 
+test = volume
+#~ test = localFlux
+PrettyPrinter().visit(test)
 with Cpp() as cpp:
   KernelGenerator(cpp, getArchitectureByIdentifier('dsnb')).generate(test)

@@ -19,11 +19,17 @@ class DenseMemoryLayout(MemoryLayout):
       assert e < self._shape[i]
       a += e*self._stride[i]
     return a
+
+  def stride(self):
+    return self._stride
   
-  def stride(self, dim):
+  def stridei(self, dim):
     return self._stride[dim]
+    
+  def shape(self):
+    return self._shape
   
-  def shape(self, dim):
+  def shapei(self, dim):
     return self._shape[dim]
   
   def size(self):
@@ -32,11 +38,22 @@ class DenseMemoryLayout(MemoryLayout):
       size *= s
     return size
   
-  def addressString(self, indices, I = None):
+  def offset(self, offset):
+    assert len(offset) == len(self._stride)
+    o = 0
+    for i,s in enumerate(self._stride):
+      o += offset[i] * s
+    return o
+  
+  def addressString(self, indices, I = None, offset = None):
     if I is None:
       I = set(indices)
-    positions = self._positions(indices, I)
+    positions = indices.positions(I)
     a = list()
+    if offset:
+      o = self.offset(offset)
+      if o > 0:
+        a.append(o)
     for p in positions:
       a.append('{}*{}'.format(self._stride[p], indices[p]))
     return ' + '.join(a)
@@ -49,12 +66,12 @@ class DenseMemoryLayout(MemoryLayout):
     return all( [y-x == 1 for x,y in zip(positions[:-1], positions[1:])] )
 
   def _firstStride(self, indices, I):
-    positions = sorted([indices.find(i) for i in I])
+    positions = indices.positions(I)
     assert self._continuousIndices(positions)
     return self._stride[ self._positions(indices, I)[0] ]
   
   def _subSize(self, indices, I):
-    positions = self._positions(indices, I)
+    positions = indices.positions(I)
     assert self._continuousIndices(positions)
     size = 1
     for i in positions:
@@ -64,7 +81,7 @@ class DenseMemoryLayout(MemoryLayout):
   def slice(self, indices, I, J):
     shape = (self._subSize(indices, I), self._subSize(indices, J))
     stride = (self._firstStride(indices, I), self._firstStride(indices, J))
-    if self._positions(indices, I)[0] > self._positions(indices, J)[0]:
+    if indices.positions(I)[0] > indices.positions(J)[0]:
       stride = (stride[1], stride[0])
       shape = (shape[1], shape[0])
     return DenseMemoryLayout(shape, stride)

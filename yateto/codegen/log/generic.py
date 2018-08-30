@@ -1,5 +1,5 @@
 from ...ast.indices import Indices
-from ..common import forLoops, TensorDescription
+from ..common import forLoops, reduceSpp, TensorDescription
 from .. import gemm
 
 class Generic(object):
@@ -17,12 +17,12 @@ class Generic(object):
     d = self._descr
     class LoGBody(object):
       def __call__(s):
-        A = set(d.leftTerm.indices - d.loopIndices)
-        B = set(d.rightTerm.indices - d.loopIndices)
-        C = set(d.result.indices - d.loopIndices)
-        Im = A & C
-        In = B & C
-        Ik = A & B
+        A = d.leftTerm.indices - d.loopIndices
+        B = d.rightTerm.indices - d.loopIndices
+        C = d.result.indices - d.loopIndices
+        Im = set(A) & set(C)
+        In = set(B) & set(C)
+        Ik = set(A) & set(B)
         
         hasLoops = len(d.loopIndices) > 0
         Aname = 'A' if hasLoops else d.leftTerm.name
@@ -32,10 +32,19 @@ class Generic(object):
           self._pointer(cpp, Aname, d.leftTerm, d.loopIndices)
           self._pointer(cpp, Bname, d.rightTerm, d.loopIndices)
           self._pointer(cpp, Cname, d.result, d.loopIndices)
+        
+        AmemLayout = d.leftTerm.memoryLayout.slice(d.leftTerm.indices, Im, Ik)
+        BmemLayout = d.rightTerm.memoryLayout.slice(d.rightTerm.indices, Ik, In)
+        CmemLayout = d.result.memoryLayout.slice(d.result.indices, Im, In)
+
+        Aeqspp = reduceSpp(d.leftTerm.eqspp, d.leftTerm.indices, A).reshape(AmemLayout.shape())
+        Beqspp = reduceSpp(d.rightTerm.eqspp, d.rightTerm.indices, B).reshape(BmemLayout.shape())
+        Ceqspp = reduceSpp(d.result.eqspp, d.result.indices, C).reshape(CmemLayout.shape())
+
         gemmDescr = gemm.Description(
-          result = TensorDescription(Cname, d.result.memoryLayout.slice(d.result.indices, Im, In)),
-          leftTerm = TensorDescription(Aname, d.leftTerm.memoryLayout.slice(d.leftTerm.indices, Im, Ik)),
-          rightTerm = TensorDescription(Bname, d.rightTerm.memoryLayout.slice(d.rightTerm.indices, Ik, In)),
+          leftTerm = TensorDescription(Aname, AmemLayout, Aeqspp),
+          rightTerm = TensorDescription(Bname, BmemLayout, Beqspp),
+          result = TensorDescription(Cname, CmemLayout, Ceqspp),
           transA = d.transA,
           transB = d.transB,
           alpha = 1.0,

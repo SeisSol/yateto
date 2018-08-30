@@ -20,9 +20,9 @@ class KernelFactory(Factory):
     assert len(argNames) == 2
     description = log.Description(
       add = add,
-      result = IndexedTensorDescription(resultName, node.indices, node.memoryLayout()),
-      leftTerm = IndexedTensorDescription(argNames[0], node.leftTerm().indices, node.leftTerm().memoryLayout()),
-      rightTerm = IndexedTensorDescription(argNames[1], node.rightTerm().indices, node.rightTerm().memoryLayout()),
+      result = IndexedTensorDescription.fromNode(resultName, node),
+      leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
+      rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm()),
       loopIndices = node.loopIndices(),
       transA = node.transA(),
       transB = node.transB()
@@ -34,8 +34,8 @@ class KernelFactory(Factory):
     assert len(argNames) == 1
     description = indexsum.Description(
       add = add,
-      result = IndexedTensorDescription(resultName, node.indices, node.memoryLayout()),
-      term = IndexedTensorDescription(argNames[0], node.term().indices, node.term().memoryLayout())
+      result = IndexedTensorDescription.fromNode(resultName, node),
+      term = IndexedTensorDescription.fromNode(argNames[0], node.term())
     )
     generator = indexsum.generator(self._arch, description)
     generator.generate(self._cpp)
@@ -44,9 +44,9 @@ class KernelFactory(Factory):
     assert len(argNames) == 2
     description = product.Description(
       add = add,
-      result = IndexedTensorDescription(resultName, node.indices, node.memoryLayout()),
-      leftTerm = IndexedTensorDescription(argNames[0], node.leftTerm().indices, node.leftTerm().memoryLayout()),
-      rightTerm = IndexedTensorDescription(argNames[1], node.rightTerm().indices, node.rightTerm().memoryLayout())
+      result = IndexedTensorDescription.fromNode(resultName, node),
+      leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
+      rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm())
     )
     generator = product.generator(self._arch, description)
     generator.generate(self._cpp)
@@ -58,8 +58,8 @@ class KernelFactory(Factory):
         description = copyscaleadd.Description(
           alpha = 1.0,
           beta = beta,
-          result = TensorDescription(resultName, node.memoryLayout()),
-          term = TensorDescription(argNames[i], child.memoryLayout()),
+          result = TensorDescription.fromNode(resultName, node),
+          term = TensorDescription.fromNode(argNames[i], child),
         )
         generator = copyscaleadd.generator(self._arch, description)
         generator.generate(self._cpp)

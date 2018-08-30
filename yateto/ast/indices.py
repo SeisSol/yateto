@@ -37,6 +37,9 @@ class Indices(object):
     assert len(index) == 1
     return self._indices.index(index)
   
+  def positions(self, I):
+    return sorted([self.find(i) for i in I])
+  
   def __eq__(self, other):
     return other != None and self._indices == other._indices and self._size == other._size
     
@@ -83,6 +86,50 @@ class Indices(object):
   
   def size(self):
     return self._size
+
+class Range(object):
+  def __init__(self, start, stop):
+    self.start = start
+    self.stop = stop
+  
+  def size(self):
+    return self.stop - self.start
+  
+  def __and__(self, other):
+    return Range(max(self.start, other.start), min(self.stop, other.stop))
+  
+  def __eq__(self, other):
+    return self.start == other.start and self.stop == other.stop
+  
+  def __str__(self):
+    return 'Range({}, {})'.format(self.start, self.stop)
+      
+class BoundingBox(object):
+  def __init__(self, listOfRanges):
+    self._box = listOfRanges
+  
+  @classmethod
+  def fromSpp(cls, spp):
+    nnz = spp.nonzero()
+    return cls([Range(d.min(), d.max()+1) for d in nnz])
+  
+  def size(self):
+    s = 1
+    for r in self._box:
+      s *= r.size()
+    return s
+  
+  def __getitem__(self, key):
+    return self._box[key]
+  
+  def __len__(self):
+    return len(self._box)
+    
+  def __iter__(self):
+    return iter(self._box)
+  
+  def __str__(self):
+    return '{}({})'.format(type(self).__name__, ', '.join([str(r) for r in self]))
 
 @functools.total_ordering
 class LoGCost(object):    

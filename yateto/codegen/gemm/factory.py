@@ -1,3 +1,4 @@
+from ...ast.indices import BoundingBox
 from ..common import TensorDescription
 from .generic import Generic
 from .libxsmm import Libxsmm
@@ -12,14 +13,35 @@ class Description(object):
     self.alpha = alpha
     self.beta = beta
     
+    bbA = BoundingBox.fromSpp(self.leftTerm.eqspp)
+    bbB = BoundingBox.fromSpp(self.rightTerm.eqspp)
+    bbC = BoundingBox.fromSpp(self.result.eqspp)
+    
+    kA = 1 if not transA else 0
+    kB = 0 if not transB else 1
+    
+    k = bbA[kA] & bbB[kB]
+    m = bbA[1-kA]
+    n = bbB[1-kB]
+    assert m == bbC[0]
+    assert n == bbC[1]
+    
+    self._mnk = (m.size(), n.size(), k.size())
+    self._mnkOffset = (m.start, n.start, k.start)
+  
+  def mnkOffset(self):
+    return self._mnkOffset
+  
+  def mnk(self):
+    return self._mnk
 
 def generator(arch, descr):
   requiresTranspositions = descr.transA or descr.transB
   simpleAlpha = descr.alpha in [-1.0, 1.0]
   simpleBeta = descr.beta in [0.0, 1.0]
-  strideOneA = descr.leftTerm.memoryLayout.stride(0) == 1
-  strideOneB = descr.rightTerm.memoryLayout.stride(0) == 1
-  strideOneC = descr.result.memoryLayout.stride(0) == 1
+  strideOneA = descr.leftTerm.memoryLayout.stridei(0) == 1
+  strideOneB = descr.rightTerm.memoryLayout.stridei(0) == 1
+  strideOneC = descr.result.memoryLayout.stridei(0) == 1
   strideOne = strideOneA and strideOneB and strideOneC
   if not requiresTranspositions and simpleAlpha and simpleBeta and strideOne:
     return Libxsmm(arch, descr)

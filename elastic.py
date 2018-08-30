@@ -16,8 +16,8 @@ order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
-#~ multipleSims = True
-#~ transpose = True
+multipleSims = True
+transpose = True
 multipleSims = False
 transpose = False
 
@@ -125,8 +125,9 @@ test = ImplementContractions().visit(test)
 test = ComputeAndSetSparsityPattern().visit(test)
 #~ PrettyPrinter().visit(test)
 
-test = volume
+#~ test = volume
 #~ test = localFlux
+test = derivatives[4]
 PrettyPrinter().visit(test)
 with Cpp() as cpp:
   KernelGenerator(cpp, getArchitectureByIdentifier('dsnb')).generate(test)

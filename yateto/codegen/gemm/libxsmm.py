@@ -14,18 +14,23 @@ class Libxsmm(object):
     
   def generate(self, cpp):
     d = self._descr
-    M, N, K = d.mnk()
-    mo, no, ko = d.mnkOffset()
+    m, n, k = d.mnk()
     ldA = d.leftTerm.memoryLayout.stridei(1)
     ldB = d.rightTerm.memoryLayout.stridei(1)
     ldC = d.result.memoryLayout.stridei(1)
     alignedA = self._arch.checkAlignment(ldA)
     alignedC = self._arch.checkAlignment(ldC)
+    if alignedA and alignedC:
+      m = m.aligned(self._arch)
+    
+    assert (m,k) in d.leftTerm.memoryLayout
+    assert (k,n) in d.rightTerm.memoryLayout
+    assert (m,n) in d.result.memoryLayout
     
     gemm = {
-      'M':            M,
-      'N':            N,
-      'K':            K,
+      'M':            m.size(),
+      'N':            n.size(),
+      'K':            k.size(),
       'LDA':          ldA,
       'LDB':          ldB,
       'LDC':          ldC,
@@ -38,7 +43,7 @@ class Libxsmm(object):
     
     cpp( '{}({}, {}, {}, NULL, NULL, NULL);'.format(
       self.generateRoutineName(gemm),
-      self._pointer(d.leftTerm, (mo, ko)),
-      self._pointer(d.rightTerm, (ko, no)),
-      self._pointer(d.result, (mo, no))
+      self._pointer(d.leftTerm, (m.start, k.start)),
+      self._pointer(d.rightTerm, (k.start, n.start)),
+      self._pointer(d.result, (m.start, n.start))
     ))

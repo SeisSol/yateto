@@ -26,11 +26,7 @@ class Description(object):
     assert m == bbC[0]
     assert n == bbC[1]
     
-    self._mnk = (m.size(), n.size(), k.size())
-    self._mnkOffset = (m.start, n.start, k.start)
-  
-  def mnkOffset(self):
-    return self._mnkOffset
+    self._mnk = (m, n, k)
   
   def mnk(self):
     return self._mnk

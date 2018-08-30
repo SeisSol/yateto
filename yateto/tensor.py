@@ -39,7 +39,7 @@ class Tensor(object):
     else:
       self._spp = ones(shape, dtype=bool)
     
-    self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout(self._shape)
+    self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout.fromSpp(self._spp)
     
 
   def __getitem__(self, indexNames):

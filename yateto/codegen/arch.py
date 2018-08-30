@@ -52,14 +52,15 @@ class Architecture(object):
     else:
       raise ValueError('Unknown precision type ' + self.precision)
     self.alignment = alignment
-    self.alignedReals = self.alignment / self.bytesPerReal
+    assert self.alignment % self.bytesPerReal == 0
+    self.alignedReals = self.alignment // self.bytesPerReal
     self.enablePrefetch = enablePrefetch
     
-  def getAlignedIndex(self, index):
+  def alignedLower(self, index):
     return index - index % self.alignedReals
 
-  def getAlignedDim(self, dim):
-    return dim + (self.alignedReals - dim % self.alignedReals) % self.alignedReals
+  def alignedUpper(self, index):
+    return index + (self.alignedReals - index % self.alignedReals) % self.alignedReals
 
   def checkAlignment(self, offset):
     return offset % self.alignedReals == 0

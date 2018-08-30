@@ -95,6 +95,9 @@ class Range(object):
   def size(self):
     return self.stop - self.start
   
+  def aligned(self, arch):
+    return Range(arch.alignedLower(self.start), arch.alignedUpper(self.stop))
+  
   def __and__(self, other):
     return Range(max(self.start, other.start), min(self.stop, other.stop))
   
@@ -118,6 +121,15 @@ class BoundingBox(object):
     for r in self._box:
       s *= r.size()
     return s
+  
+  def __contains__(self, entry):
+    if len(entry) != len(self):
+      return False
+    if len(self) == 0:
+      return True
+    if isinstance(entry[0], Range):
+      return all([e.start >= self[i].start and e.stop <= self[i].stop for i,e in enumerate(entry)])
+    return all([e >= self[i].start and e <= self[i].stop for i,e in enumerate(entry)])
   
   def __getitem__(self, key):
     return self._box[key]

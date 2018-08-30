@@ -85,7 +85,7 @@ class Op(Node):
     self._children = list(args)
   
   def memoryLayout(self):
-    return DenseMemoryLayout(self.indices.shape())
+    return DenseMemoryLayout.fromSpp(self.eqspp())
   
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')

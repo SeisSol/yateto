@@ -126,7 +126,7 @@ class KernelGenerator(Visitor):
     self._factory.create(node, resultName, names, add)
   
   def _getTemporary(self, node):
-    size = node.memoryLayout().size()
+    size = node.memoryLayout().requiredReals()
     name = None
     minSize = sys.maxsize
     for n in self._freeTmp:

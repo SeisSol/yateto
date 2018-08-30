@@ -12,6 +12,16 @@ class Generic(object):
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
     cpp('{}* {} = {}{};'.format(self._arch.typename, name, term.name, addressStr))
+    
+  def _memLayout(self, term, I, J):
+    if len(term.indices) > 2:
+      return term.memoryLayout.fusedSlice(term.indices, I, J)
+    return term.memoryLayout
+
+  def _reduce(self, term, subset, memLayout):
+    if len(term.indices) > 2:
+      return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape())
+    return term.eqspp
 
   def generate(self, cpp):
     d = self._descr
@@ -33,13 +43,13 @@ class Generic(object):
           self._pointer(cpp, Bname, d.rightTerm, d.loopIndices)
           self._pointer(cpp, Cname, d.result, d.loopIndices)
         
-        AmemLayout = d.leftTerm.memoryLayout.slice(d.leftTerm.indices, Im, Ik)
-        BmemLayout = d.rightTerm.memoryLayout.slice(d.rightTerm.indices, Ik, In)
-        CmemLayout = d.result.memoryLayout.slice(d.result.indices, Im, In)
+        AmemLayout = self._memLayout(d.leftTerm, Im, Ik)
+        BmemLayout = self._memLayout(d.rightTerm, Ik, In)
+        CmemLayout = self._memLayout(d.result, Im, In)
 
-        Aeqspp = reduceSpp(d.leftTerm.eqspp, d.leftTerm.indices, A).reshape(AmemLayout.shape())
-        Beqspp = reduceSpp(d.rightTerm.eqspp, d.rightTerm.indices, B).reshape(BmemLayout.shape())
-        Ceqspp = reduceSpp(d.result.eqspp, d.result.indices, C).reshape(CmemLayout.shape())
+        Aeqspp = self._reduce(d.leftTerm, A, AmemLayout)
+        Beqspp = self._reduce(d.rightTerm, B, BmemLayout)
+        Ceqspp = self._reduce(d.result, C, CmemLayout)
 
         gemmDescr = gemm.Description(
           leftTerm = TensorDescription(Aname, AmemLayout, Aeqspp),

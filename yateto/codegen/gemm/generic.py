@@ -14,16 +14,15 @@ class Generic(object):
     
   def generate(self, cpp):
     d = self._descr
-    M, N, K = d.mnk()
-    mo, no, ko = d.mnkOffset()
+    m, n, k = d.mnk()
     
-    Astride, Aoffset = self._strideOffset(d.leftTerm, (mo, ko), d.transA)
-    Bstride, Boffset = self._strideOffset(d.rightTerm, (ko, no), d.transB)
-    Cstride, Coffset = self._strideOffset(d.result, (mo, no), False)
+    Astride, Aoffset = self._strideOffset(d.leftTerm, (m.start, k.start), d.transA)
+    Bstride, Boffset = self._strideOffset(d.rightTerm, (k.start, n.start), d.transB)
+    Cstride, Coffset = self._strideOffset(d.result, (m.start, n.start), False)
     
-    with cpp.For('int n = 0; n < {0}; ++n'.format(N)):
-      with cpp.For('int k = 0; k < {0}; ++k'.format(K)):
-        with cpp.For('int m = 0; m < {0}; ++m'.format(M)):
+    with cpp.For('int n = 0; n < {0}; ++n'.format(n.size())):
+      with cpp.For('int k = 0; k < {0}; ++k'.format(k.size())):
+        with cpp.For('int m = 0; m < {0}; ++m'.format(m.size())):
           cpp( '{Cname}[{Coffset} + {Cstride[0]}*m + {Cstride[1]}*n] = {alpha} * {Aname}[{Aoffset} + {Astride[0]}*m + {Astride[1]}*k] * {Bname}[{Boffset} + {Bstride[0]}*k + {Bstride[1]}*n] + {beta} * {Cname}[{Coffset} + {Cstride[0]}*m + {Cstride[1]}*n];'.format(
               Cname = d.result.name,
               Coffset = Coffset,

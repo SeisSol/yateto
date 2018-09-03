@@ -69,8 +69,8 @@ class KernelGenerator(Visitor):
       description = copyscaleadd.Description(
         alpha = 1.0,
         beta = 0.0,
-        result = TensorDescription.fromNode(self._addArgument(names[0]), node.leftTerm()),
-        term = TensorDescription.fromNode(self._addArgument(names[1]), node.rightTerm()),
+        result = IndexedTensorDescription.fromNode(self._addArgument(names[0]), node.leftTerm()),
+        term = IndexedTensorDescription.fromNode(self._addArgument(names[1]), node.rightTerm()),
       )
       generator = copyscaleadd.generator(self._arch, description)
       generator.generate(self._cpp)

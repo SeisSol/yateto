@@ -169,6 +169,7 @@ class ImplementContractions(Transformer):
   def visit_Contraction(self, node):
     self.generic_visit(node)
     newNode = LoG(node)
+    newNode.setEqspp(newNode.computeSparsityPattern())
     return newNode
 
 class EquivalentSparsityPattern(Transformer):
@@ -210,7 +211,7 @@ class EquivalentSparsityPattern(Transformer):
 
     return node
 
-class ComputeAndSetSparsityPattern(Transformer):
+class ComputeSparsityPatternAndMemoryLayout(Transformer):
   def generic_visit(self, node):
     super().generic_visit(node)
     node.setEqspp( node.computeSparsityPattern() )

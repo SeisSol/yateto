@@ -4,8 +4,13 @@ class MemoryLayout(object):
   pass
 
 class DenseMemoryLayout(MemoryLayout):
-  def __init__(self, boundingBox, stride=None, aligned=False):
-    self._bbox = boundingBox
+  def __init__(self, shape, boundingBox=None, stride=None, aligned=False):
+    self._shape = shape
+
+    if boundingBox:
+      self._bbox = boundingBox
+    else:
+      self._bbox = BoundingBox([Range(0, s) for s in self._shape])
 
     if stride:
       self._stride = stride
@@ -18,7 +23,7 @@ class DenseMemoryLayout(MemoryLayout):
   @classmethod
   def fromSpp(cls, spp):
     bbox = BoundingBox.fromSpp(spp)
-    return cls(bbox)
+    return cls(spp.shape, bbox)
   
   def __contains__(self, entry):
     return entry in self._bbox
@@ -37,57 +42,66 @@ class DenseMemoryLayout(MemoryLayout):
     return self._stride[dim]
     
   def shape(self):
-    return tuple([b.size() for b in self._bbox])
+    return self._shape
   
   #~ def shapei(self, dim):
     #~ return self._shape[dim]
-  #~ 
+  #~
+
+  def bboxi(self, dim):
+    return self._bbox[dim]
+
   def requiredReals(self):
     size = self._bbox[-1].size() * self._stride[-1]
     return size
   
-  def offset(self, offset):
-    return self.address(offset)
-  
-  def addressString(self, indices, I = None, offset = None):
+  def addressString(self, indices, I = None):
     if I is None:
       I = set(indices)
     positions = indices.positions(I)
     a = list()
-    if offset:
-      o = self.offset(offset)
-      if o > 0:
-        a.append(o)
     for p in positions:
-      a.append('{}*{}'.format(self._stride[p], indices[p]))
+      a.append('{}*({}-{})'.format(self._stride[p], indices[p], self._bbox[p].start))
     return ' + '.join(a)
   
-  def _continuousIndices(self, positions):
-    return all( [self._stride[y] == self._bbox[x].size() * self._stride[x] for x,y in zip(positions[:-1], positions[1:])] )
-
-  def _firstStride(self, positions):
-    return self._stride[ positions[0] ]
+  def mayFuse(self, positions):
+    return all( [self._bbox[p].size() == self._shape[p] for p in positions[:-1]] )
   
-  def _subSize(self, positions):
+  def _subShape(self, positions):
     sub = 1
     for p in positions:
-      sub *= self._bbox[p].size()
+      sub *= self._shape[p]
     return sub
+  
+  def _subRange(self, positions):
+    start = 0
+    stop = 0
+    s = 1
+    for p in positions:
+      start += s * self._bbox[p].start
+      stop += s * (self._bbox[p].stop-1)
+      s *= self._shape[p]
+    return Range(start, stop+1)
+    
+  def _firstStride(self, positions):
+    return self._stride[ positions[0] ]
   
   def fusedSlice(self, indices, I, J):
     positionsI = indices.positions(I)
     positionsJ = indices.positions(J)
-    assert self._continuousIndices( indices.positions(I) ) and self._continuousIndices( indices.positions(J) )
+    assert self.mayFuse( indices.positions(I) ) and self.mayFuse( indices.positions(J) )
     
-    # TODO: Check slices for non-zero start and stop before stride?
-    #~ assert all([r.start == 0 for r in self._bbox])
-
-    stride = (self._firstStride(positionsI), self._firstStride(positionsJ))
-    shape = (self._subSize(positionsI), self._subSize(positionsJ))
     if positionsI[0] > positionsJ[0]:
-      stride = (stride[1], stride[0])
-      shape = (shape[1], shape[0])
-    return DenseMemoryLayout(BoundingBox([Range(0, shape[0]), Range(0, shape[1])]), stride)
+      positionsJ, positionsI = positionsI, positionsJ
+
+    shape = (self._subShape(positionsI), self._subShape(positionsJ))
+    bbox = BoundingBox([self._subRange(positionsI), self._subRange(positionsJ)])
+    stride = (self._firstStride(positionsI), self._firstStride(positionsJ))
+      
+    return DenseMemoryLayout(shape, bbox, stride)
+
+  def __str__(self):
+    return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)
     
       
     

@@ -1,4 +1,4 @@
-from ..common import IndexedTensorDescription
+from ..common import *
 from .generic import Generic
 
 class Description(object):
@@ -11,6 +11,17 @@ class Description(object):
     self.transA = transA
     self.transB = transB
     
+    rA = loopRanges(self.leftTerm, self.loopIndices)
+    rB = loopRanges(self.rightTerm, self.loopIndices)
+    rC = loopRanges(self.result, self.loopIndices)
+    assert testLoopRangesEqual(rA, rB)
+    assert testLoopRangesEqual(rA, rC)
+    assert testLoopRangesEqual(rB, rC)
+    
+    rA.update(rB)
+    rA.update(rC)
+
+    self.loopRanges = rA
 
 def generator(arch, descr):
   return Generic(arch, descr)

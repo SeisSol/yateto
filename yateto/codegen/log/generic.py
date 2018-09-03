@@ -20,7 +20,7 @@ class Generic(object):
 
   def _reduce(self, term, subset, memLayout):
     if len(term.indices) > 2:
-      return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape())
+      return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape(), order='F')
     return term.eqspp
 
   def generate(self, cpp):
@@ -62,4 +62,6 @@ class Generic(object):
         )
         generator = gemm.generator(self._arch, gemmDescr)
         generator.generate(cpp)
-    forLoops(cpp, d.loopIndices, len(d.loopIndices)-1, LoGBody())
+    
+    
+    forLoops(cpp, d.loopIndices, d.loopRanges, LoGBody())

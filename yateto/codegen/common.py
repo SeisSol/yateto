@@ -9,7 +9,7 @@ class TensorDescription(object):
     BoundingBox(eqspp)
   
   @classmethod
-  def fromNode(self, name, node):
+  def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())
 
 class IndexedTensorDescription(TensorDescription):
@@ -21,12 +21,28 @@ class IndexedTensorDescription(TensorDescription):
   def fromNode(cls, name, node):
     return cls(name, node.indices, node.memoryLayout(), node.eqspp())
 
-def forLoops(cpp, indices, indexNo, body):
+def forLoops(cpp, indexNames, ranges, body, indexNo=None):
+  if indexNo == None:
+    indexNo = len(indexNames)-1
   if indexNo < 0:
     body()
   else:
-    with cpp.For('int {0} = 0; {0} < {1}; ++{0}'.format(indices[indexNo], indices.shape()[indexNo])):
-      forLoops(cpp, indices, indexNo-1, body)
+    index = indexNames[indexNo]
+    rng = ranges[index]
+    with cpp.For('int {0} = {1}; {0} < {2}; ++{0}'.format(index, rng.start, rng.stop)):
+      forLoops(cpp, indexNames, ranges, body, indexNo-1)
+  
+def loopRanges(term: IndexedTensorDescription, loopIndices):
+  overlap = set(loopIndices) & set(term.indices)
+  return {index: term.memoryLayout.bboxi(term.indices.find(index)) for index in overlap}
+
+def testLoopRangesEqual(A, B):
+  overlap = A.keys() & B.keys()
+  return all([A[index] == B[index] for index in overlap])
+  
+def testLoopRangesAContainedInB(A, B):
+  overlap = A.keys() & B.keys()
+  return all([A[index] in B[index] for index in overlap])
 
 def reduceSpp(spp, sourceIndices, targetIndices):
   return np.einsum('{}->{}'.format(sourceIndices, targetIndices), spp)

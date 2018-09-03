@@ -96,10 +96,18 @@ g.generate('test')
 #~ test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
 #~ test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
 #~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,6,4))['ijmc'] * Tensor('B', (6,4,4,4))['mkab']
+#~ 
+#~ import numpy as np
+#~ spp = np.ones(shape=(4,4,4,4))
+#~ spp[0,:,:,:] = 0
+#~ spp[:,0,:,:] = 0
+#~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,4,4), spp)['ijmc'] * Tensor('B', (4,4,4,4), spp=spp)['mkab']
 
-#~ test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
+test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
-test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
+#~ test = Tensor('D', (4,4))['ji'] <= Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj']
+#~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
+test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij']
 #~ test = derivatives[4]
 PrettyPrinter().visit(test)
 
@@ -115,6 +123,9 @@ test = StrengthReduction().visit(test)
 test = FindContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
+test = ComputeSparsityPatternAndMemoryLayout().visit(test)
+#~ PrettyPrinter().visit(test)
+
 test = FindIndexPermutations().visit(test)
 test = SelectIndexPermutations().visit(test)
 #~ PrettyPrinter().visit(test)
@@ -122,12 +133,9 @@ test = SelectIndexPermutations().visit(test)
 test = ImplementContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
-test = ComputeAndSetSparsityPattern().visit(test)
-#~ PrettyPrinter().visit(test)
-
 #~ test = volume
 #~ test = localFlux
-test = derivatives[4]
+#~ test = derivatives[4]
 PrettyPrinter().visit(test)
 with Cpp() as cpp:
   KernelGenerator(cpp, getArchitectureByIdentifier('dsnb')).generate(test)

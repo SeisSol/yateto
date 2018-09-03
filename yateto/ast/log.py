@@ -12,7 +12,7 @@ def splitByDistance(p):
   splits = [i+1 for x,y,i in zip(p[:-1], p[1:], range(L)) if y-x != 1]
   return [p[i:j] for i,j in zip([0] + splits, splits + [L])]
 
-def fusedVariants(I, P, M, prune = False):
+def fusedVariants(memLayout, I, P, M, prune = False):
   D = list()
   indices = sorted([P[p] for p in I])
   groups = splitByDistance(indices)
@@ -20,6 +20,7 @@ def fusedVariants(I, P, M, prune = False):
   D = set([s for g in groupStrings for s in allSubstrings(g)])
   if prune:
     D = set([d for d in D if d[0] == M[0]])
+  D = set([d for d in D if memLayout.mayFuse(sorted([P[i] for i in d]))])  
   return D
 
 def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
@@ -56,12 +57,12 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   PB = {idx: pos for pos, idx in enumerate(B)}
   PC = {idx: pos for pos, idx in enumerate(C)}
 
-  CM = fusedVariants(Im, PC, C, True)
-  CN = fusedVariants(In, PC, C)
-  AM = fusedVariants(Im, PA, A)
-  AK = fusedVariants(Ik, PA, A)
-  BK = fusedVariants(Ik, PB, B)
-  BN = fusedVariants(In, PB, B)
+  CM = fusedVariants(contraction.memoryLayout(), Im, PC, C, True)
+  CN = fusedVariants(contraction.memoryLayout(), In, PC, C)
+  AM = fusedVariants(L.memoryLayout(), Im, PA, A)
+  AK = fusedVariants(L.memoryLayout(), Ik, PA, A)
+  BK = fusedVariants(R.memoryLayout(), Ik, PB, B)
+  BN = fusedVariants(R.memoryLayout(), In, PB, B)
   
   MC = CM & AM
   NC = CN & BN

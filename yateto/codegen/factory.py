@@ -58,8 +58,8 @@ class KernelFactory(Factory):
         description = copyscaleadd.Description(
           alpha = 1.0,
           beta = beta,
-          result = TensorDescription.fromNode(resultName, node),
-          term = TensorDescription.fromNode(argNames[i], child),
+          result = IndexedTensorDescription.fromNode(resultName, node),
+          term = IndexedTensorDescription.fromNode(argNames[i], child),
         )
         generator = copyscaleadd.generator(self._arch, description)
         generator.generate(self._cpp)

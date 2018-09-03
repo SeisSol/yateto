@@ -9,7 +9,7 @@ class Generic(object):
     if transpose:
       stride = stride[::-1]
       offset2 = offset2[::-1]
-    offset = term.memoryLayout.offset(offset2)
+    offset = term.memoryLayout.address(offset2)
     return (stride, offset)
     
   def generate(self, cpp):

@@ -101,6 +101,9 @@ class Range(object):
   def __and__(self, other):
     return Range(max(self.start, other.start), min(self.stop, other.stop))
   
+  def __contains__(self, other):
+    return self.start <= other.start and self.stop >= other.stop
+  
   def __eq__(self, other):
     return self.start == other.start and self.stop == other.stop
   
@@ -128,7 +131,7 @@ class BoundingBox(object):
     if len(self) == 0:
       return True
     if isinstance(entry[0], Range):
-      return all([e.start >= self[i].start and e.stop <= self[i].stop for i,e in enumerate(entry)])
+      return all([e in self[i] for i,e in enumerate(entry)])
     return all([e >= self[i].start and e <= self[i].stop for i,e in enumerate(entry)])
   
   def __getitem__(self, key):

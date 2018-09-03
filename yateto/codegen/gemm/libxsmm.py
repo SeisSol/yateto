@@ -7,7 +7,7 @@ class Libxsmm(object):
     return 'libxsmm_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alpha}_beta{beta}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(**gemm)
   
   def _pointer(self, term, offset2):
-    o = term.memoryLayout.offset(offset2)
+    o = term.memoryLayout.address(offset2)
     if o > 0:
       return '{} + {}'.format(term.name, o)
     return term.name

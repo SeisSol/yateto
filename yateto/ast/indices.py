@@ -1,5 +1,6 @@
 import sys
 import functools
+import numpy as np
 
 class Indices(object):
   def __init__(self, indexNames = '', shape = ()):
@@ -116,8 +117,13 @@ class BoundingBox(object):
   
   @classmethod
   def fromSpp(cls, spp):
-    nnz = spp.nonzero()
-    return cls([Range(d.min(), d.max()+1) for d in nnz])
+    n = len(spp.shape)
+    ranges = list()
+    for ax in range(n):
+      reduction = np.sum(spp, axis=tuple([a for a in range(n) if a != ax]))
+      m, M = np.where(reduction)[0][[0,-1]]
+      ranges.append(Range(m, M+1))
+    return cls(ranges)
   
   def size(self):
     s = 1

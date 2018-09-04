@@ -83,9 +83,14 @@ class Op(Node):
   def __init__(self, *args):
     super().__init__()
     self._children = list(args)
+    self._memoryLayout = None
+  
+  def setEqspp(self, spp):
+    super().setEqspp(spp)
+    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp())
   
   def memoryLayout(self):
-    return DenseMemoryLayout.fromSpp(self.eqspp())
+    return self._memoryLayout
   
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')
@@ -225,7 +230,6 @@ class IndexSum(Op):
       spps = [self.term().eqspp()]
     assert len(spps) == 1
     einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
-    print(einsumDescription)
     return np.einsum(einsumDescription, spps[0])
 
   def computeBoundingBox(self):

@@ -59,6 +59,8 @@ class Node(object):
     return self._binOp(other, Add)
     
   def __le__(self, other):
+    if isinstance(other, IndexedTensor) and not (self == other):
+      return Assign(self, Einsum(other))
     return Assign(self, other)
 
 class IndexedTensor(Node):
@@ -75,6 +77,9 @@ class IndexedTensor(Node):
   
   def memoryLayout(self):
     return self.tensor.memoryLayout()
+  
+  def __eq__(self, other):
+    return self.tensor == other.tensor and self.indices == other.indices
 
   def __str__(self):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
@@ -292,7 +297,10 @@ class LoopOverGEMM(BinOp):
     return cost
   
   def loopIndices(self):
-    return self.indices - (self._m + self._n)
+    i1 = self.indices - (self._m + self._n)
+    i2 = (self.leftTerm().indices - (self._m + self._k)) - i1
+    i3 = ((self.rightTerm().indices - (self._k + self._n)) - i1) - i2
+    return i1.merged(i2).merged(i3)
   
   def transA(self):
     return self._transA

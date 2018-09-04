@@ -19,8 +19,8 @@ numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
 multipleSims = True
 transpose = True
-multipleSims = False
-transpose = False
+#~ multipleSims = False
+#~ transpose = False
 
 if multipleSims:
   qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
@@ -109,13 +109,15 @@ for i in range(maxDegree):
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
 
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
-spp = np.ones((4,4,4), order='F')
-spp[0,:,:] = 0
-spp[:,0,:] = 0
-print(spp)
-test = Tensor('D', (4,4))['ji'] <= Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4),spp=spp)['zkj'] 
+#~ spp = np.ones((4,4,4), order='F')
+#~ spp[0,:,:] = 0
+#~ spp[:,0,:] = 0
+#~ print(spp)
+#~ test = Tensor('D', (4,4,4))['zij'] <= Tensor('B', (4,4,4),spp=spp)['zik'] * Tensor('C', (4,4))['kj']
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
-#~ test = derivatives[4]
+test = derivatives[4]
+#~ test = volume
+#~ test = localFlux
 PrettyPrinter().visit(test)
 
 test = DeduceIndices().visit(test)
@@ -140,9 +142,6 @@ test = SelectIndexPermutations().visit(test)
 test = ImplementContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
-#~ test = volume
-#~ test = localFlux
-#~ test = derivatives[4]
 PrettyPrinter().visit(test)
 with Cpp() as cpp:
   KernelGenerator(cpp, getArchitectureByIdentifier('dsnb')).generate(test)

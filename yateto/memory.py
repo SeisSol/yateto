@@ -114,8 +114,26 @@ class DenseMemoryLayout(MemoryLayout):
     shape = (self._subShape(positionsI), self._subShape(positionsJ))
     bbox = BoundingBox([self._subRange(positionsI), self._subRange(positionsJ)])
     stride = (self._firstStride(positionsI), self._firstStride(positionsJ))
-      
+
     return DenseMemoryLayout(shape, bbox, stride)
+  
+  def defuse(self, fusedRange, indices, I):
+    positions = indices.positions(I)
+    s = self._subShape(positions)
+    ranges = dict()
+    start = fusedRange.start
+    stop = fusedRange.stop-1
+    for p in reversed(positions):
+      s //= self._shape[p]
+      b = start // s
+      B = stop // s
+      ranges[ indices[p] ] = Range(b, B+1)
+      start -= b*s
+      stop -= B*s
+    return ranges
+
+  def __eq__(self, other):
+    return self._stride == other._stride and self._bbox == other._bbox and self._stride == other._stride
 
   def __str__(self):
     return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)

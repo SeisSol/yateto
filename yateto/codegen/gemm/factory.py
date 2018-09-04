@@ -23,8 +23,8 @@ class Description(object):
     k = bbA[kA] & bbB[kB]
     m = bbA[1-kA]
     n = bbB[1-kB]
-    assert m == bbC[0]
-    assert n == bbC[1]
+    assert m in bbC[0]
+    assert n in bbC[1]
     
     self._mnk = (m, n, k)
   

@@ -7,11 +7,8 @@ class Description(object):
     self.result = result
     self.term = term
     
-    rA = loopRanges(self.result, self.result.indices)
-    rB = loopRanges(self.term, self.result.indices)
-    print(self.term.memoryLayout.bbox())
-    print(self.result.memoryLayout.bbox())
-    print(rA['j'], rB['j'])
+    rA = loopRanges(self.term, self.result.indices)
+    rB = loopRanges(self.result, self.result.indices)
     assert testLoopRangesAContainedInB(rA, rB)
     
     self.loopRanges = rA

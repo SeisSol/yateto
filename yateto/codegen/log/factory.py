@@ -15,13 +15,13 @@ class Description(object):
     rB = loopRanges(self.rightTerm, self.loopIndices)
     rC = loopRanges(self.result, self.loopIndices)
     assert testLoopRangesEqual(rA, rB)
-    assert testLoopRangesEqual(rA, rC)
-    assert testLoopRangesEqual(rB, rC)
+    assert testLoopRangesAContainedInB(rA, rC)
+    assert testLoopRangesAContainedInB(rB, rC)
     
-    rA.update(rB)
-    rA.update(rC)
+    rC.update(rA)
+    rC.update(rB)
 
-    self.loopRanges = rA
+    self.loopRanges = rC
 
 def generator(arch, descr):
   return Generic(arch, descr)

@@ -35,7 +35,8 @@ def forLoops(cpp, indexNames, ranges, body, indexNo=None):
   
 def loopRanges(term: IndexedTensorDescription, loopIndices):
   overlap = set(loopIndices) & set(term.indices)
-  return {index: term.memoryLayout.bboxi(term.indices.find(index)) for index in overlap}
+  bbox = BoundingBox.fromSpp(term.eqspp)
+  return {index: bbox[term.indices.find(index)] for index in overlap}
 
 def testLoopRangesEqual(A, B):
   overlap = A.keys() & B.keys()
@@ -59,4 +60,5 @@ def initializeWithZero(cpp, arch, result: TensorDescription, writeBB):
   regions = splitByDistance(addresses)
   for region in regions:
     m, M = min(region), max(region)
-    cpp.memset(result.name, M-m+1, arch.typename)
+    initialAddress = '{} + {}'.format(result.name, m)
+    cpp.memset(initialAddress, M-m+1, arch.typename)

@@ -1,6 +1,6 @@
 import re
 from .ast.node import IndexedTensor, Indices
-from numpy import ndarray, zeros, ones
+from numpy import ndarray, zeros, ones, array_equal
 from .memory import DenseMemoryLayout
 
 class Collection(object):
@@ -66,6 +66,12 @@ class Tensor(object):
   
   def spp(self):
     return self._spp
+  
+  def __eq__(self, other):
+    equal = self._name == other._name
+    if equal:
+      assert self._shape == other._shape and array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
+    return equal
   
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)

@@ -12,11 +12,10 @@ class Description(object):
     rB = loopRanges(self.rightTerm, self.result.indices)
     rC = loopRanges(self.result, self.result.indices)
     assert testLoopRangesEqual(rA, rB)
-    assert testLoopRangesEqual(rA, rC)
-    assert testLoopRangesEqual(rB, rC)
+    assert testLoopRangesAContainedInB(rA, rC)
+    assert testLoopRangesAContainedInB(rB, rC)
     
     rA.update(rB)
-    rA.update(rC)
 
     self.loopRanges = rA    
 

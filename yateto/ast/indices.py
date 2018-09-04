@@ -127,6 +127,10 @@ class BoundingBox(object):
 
   @classmethod
   def fromSpp(cls, spp):
+    # dense case
+    if np.count_nonzero(spp) == spp.size:
+      return cls([Range(0, s) for s in spp.shape])
+
     n = len(spp.shape)
     ranges = list()
     cache = dict()

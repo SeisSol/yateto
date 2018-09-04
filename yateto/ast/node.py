@@ -26,19 +26,19 @@ class Node(object):
   
   def setEqspp(self, spp):
     self._eqspp = spp
-    self._boundingBox = BoundingBox.fromSpp(spp)
 
   def boundingBox(self):
-    return self._boundingBox
-  
-  def setBoundingBox(self, bb):
-    self._boundingBox = bb
+    return BoundingBox.fromSpp(self._eqspp)
   
   def memoryLayout(self):
     raise NotImplementedError
+  
+  def computeMemoryLayout(self):
+    pass
     
   def setIndexPermutation(self, indices):
-    self.indices.permute(indices)
+    if str(indices) != str(self.indices):
+      raise NotImplementedError
 
   def _binOp(self, other, opType):
     if isinstance(self, opType):
@@ -80,17 +80,26 @@ class IndexedTensor(Node):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
 
 class Op(Node):
+  OPTIMIZE_EINSUM = True
+
   def __init__(self, *args):
     super().__init__()
     self._children = list(args)
     self._memoryLayout = None
   
-  def setEqspp(self, spp):
-    super().setEqspp(spp)
-    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp())
-  
   def memoryLayout(self):
     return self._memoryLayout
+
+  def computeMemoryLayout(self):
+    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp())
+  
+  def setIndexPermutation(self, indices):
+    p = tuple([self.indices.find(idx) for idx in indices])
+    if self._eqspp is not None:
+      self._eqspp = self._eqspp.transpose(p)
+    if self._memoryLayout is not None:
+      self._memoryLayout.permute(p)
+    self.indices.permute(indices)
   
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')
@@ -141,8 +150,12 @@ def _productContractionLoGSparsityPattern(node, *spps):
   if len(spps) == 0:
     spps = [node.leftTerm().eqspp(), node.rightTerm().eqspp()]
   assert len(spps) == 2
+  # dense case
+  if all([np.count_nonzero(spps[i]) == spps[i].size for i in range(2)]):
+    return np.ones(node.indices.shape(), dtype=bool, order='F')
+  # sparse case
   einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
-  return np.einsum(einsumDescription, spps[0], spps[1])
+  return np.einsum(einsumDescription, spps[0], spps[1], optimize=Op.OPTIMIZE_EINSUM)
 
 class Product(BinOp):
   def __init__(self, lTerm, rTerm, target_indices):
@@ -161,12 +174,12 @@ class Product(BinOp):
       # self._cost *= size
 
     # Cost based on sparsity pattern
-    # self.setEqspp( self.computeSparsityPattern() )
-    # self._cost = np.count_nonzero( self.eqspp() )
+    self.setEqspp( self.computeSparsityPattern() )
+    self._cost = np.count_nonzero( self.eqspp() )
 
     # Cost based on bounding box
-    self.setBoundingBox( self.computeBoundingBox() )
-    self._cost = self.boundingBox().size()
+    # self.setBoundingBox( self.computeBoundingBox() )
+    # self._cost = self.boundingBox().size()
     
     for child in self._children:
       self._cost += getattr(child, '_cost', 0)
@@ -210,12 +223,12 @@ class IndexSum(Op):
       # self._cost *= size
 
     # Cost based on sparsity pattern
-    # self.setEqspp( self.computeSparsityPattern() )
-    # self._cost = np.count_nonzero( term.eqspp() ) - np.count_nonzero( self.eqspp() )
+    self.setEqspp( self.computeSparsityPattern() )
+    self._cost = np.count_nonzero( term.eqspp() ) - np.count_nonzero( self.eqspp() )
 
     # Cost based on bounding box
-    self.setBoundingBox( self.computeBoundingBox() )
-    self._cost = term.boundingBox().size() - self.boundingBox().size()
+    # self.setBoundingBox( self.computeBoundingBox() )
+    # self._cost = term.boundingBox().size() - self.boundingBox().size()
     
     self._cost += getattr(term, '_cost', 0)
   
@@ -230,7 +243,7 @@ class IndexSum(Op):
       spps = [self.term().eqspp()]
     assert len(spps) == 1
     einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
-    return np.einsum(einsumDescription, spps[0])
+    return np.einsum(einsumDescription, spps[0], optimize=Op.OPTIMIZE_EINSUM)
 
   def computeBoundingBox(self):
     bb = self.term().boundingBox()
@@ -248,6 +261,7 @@ class Contraction(BinOp):
     self.sumIndices = sumIndices
     self.indices = li.merged(lr)
     self.setIndexPermutation(indices)
+    self.setEqspp( self.computeSparsityPattern() )
   
   def computeSparsityPattern(self, *spps):
     return _productContractionLoGSparsityPattern(self, *spps)
@@ -264,6 +278,7 @@ class LoopOverGEMM(BinOp):
     self._k = k
     self._transA = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
     self._transB = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
+    self.setEqspp( self.computeSparsityPattern() )
   
   def computeSparsityPattern(self, *spps):
     return _productContractionLoGSparsityPattern(self, *spps)

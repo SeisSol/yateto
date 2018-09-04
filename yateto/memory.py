@@ -16,11 +16,14 @@ class DenseMemoryLayout(MemoryLayout):
     if stride:
       self._stride = stride
     else:
-      stride = [1]
-      for i in range(len(self._bbox)-1):
-        stride.append(stride[i] * self._bbox[i].size())
-      self._stride = tuple(stride)
-
+      self._computeStride()
+  
+  def _computeStride(self):
+    stride = [1]
+    for i in range(len(self._bbox)-1):
+      stride.append(stride[i] * self._bbox[i].size())
+    self._stride = tuple(stride)
+    
   @classmethod
   def fromSpp(cls, spp):
     bbox = BoundingBox.fromSpp(spp)
@@ -28,6 +31,11 @@ class DenseMemoryLayout(MemoryLayout):
   
   def __contains__(self, entry):
     return entry in self._bbox
+  
+  def permute(self, permutation):
+    self._shape = tuple([self._shape[p] for p in permutation])
+    self._bbox = BoundingBox([self._bbox[p] for p in permutation])
+    self._computeStride()
   
   def address(self, entry):
     assert entry in self._bbox

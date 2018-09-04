@@ -79,7 +79,7 @@ for i in range(maxDegree):
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
   #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
-g.generate('test')
+#~ g.generate('test')
 
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
@@ -97,14 +97,17 @@ g.generate('test')
 #~ test = Tensor('D', (24,24,24,24,24))['abckl'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab'] * Tensor('C', (24,24,24))['ijl']
 #~ test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
 #~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,6,4))['ijmc'] * Tensor('B', (6,4,4,4))['mkab']
+#~ test = Tensor('D', (14,14,14,14,14,14))['abcijk'] <= Tensor('A', (14,14,14,14))['ijmc'] * Tensor('B', (14,14,14,14))['mkab']
+#~ test = Tensor('D', (24,24,24,24,24,24))['abcijk'] <= Tensor('A', (24,24,24,24))['ijmc'] * Tensor('B', (24,24,24,24))['mkab']
 #~ 
 #~ spp = np.ones(shape=(4,4,4,4))
 #~ spp[0,:,:,:] = 0
 #~ spp[:,0,:,:] = 0
 #~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,4,4), spp)['ijmc'] * Tensor('B', (4,4,4,4), spp=spp)['mkab']
 
-test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
+#~ test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
+
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
 spp = np.ones((4,4,4), order='F')
 spp[0,:,:] = 0
@@ -127,7 +130,7 @@ test = StrengthReduction().visit(test)
 test = FindContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
-test = ComputeSparsityPatternAndMemoryLayout().visit(test)
+test = ComputeMemoryLayout().visit(test)
 #~ PrettyPrinter().visit(test)
 
 test = FindIndexPermutations().visit(test)

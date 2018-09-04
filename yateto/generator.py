@@ -1,6 +1,5 @@
 import itertools
 from .ast.node import Node
-#~ from .ast.visitor import PrettyPrinter
 from .ast.transformer import *
 
 class Kernel(object):
@@ -13,7 +12,7 @@ class Kernel(object):
     self._ast = EquivalentSparsityPattern().visit(self._ast)
     self._ast = StrengthReduction().visit(self._ast)
     self._ast = FindContractions().visit(self._ast)
-    self._ast = ComputeSparsityPatternAndMemoryLayout().visit(self._ast)
+    self._ast = ComputeMemoryLayout().visit(self._ast)
     self._ast = FindIndexPermutations().visit(self._ast)
     self._ast = SelectIndexPermutations().visit(self._ast)
     self._ast = ImplementContractions().visit(self._ast)

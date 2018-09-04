@@ -115,12 +115,24 @@ class BoundingBox(object):
   def __init__(self, listOfRanges):
     self._box = listOfRanges
   
+  @staticmethod
+  def sumAxes(spp, cache, axes):
+    if len(axes) == 0:
+      return spp
+    head = axes[0]
+    tail = axes[1:]
+    if not tail in cache:
+      cache[tail] = BoundingBox.sumAxes(spp, cache, tail)
+    return np.sum(cache[tail], axis=head)
+
   @classmethod
   def fromSpp(cls, spp):
     n = len(spp.shape)
     ranges = list()
-    for ax in range(n):
-      reduction = np.sum(spp, axis=tuple([a for a in range(n) if a != ax]))
+    cache = dict()
+    for axis in range(n):
+      axes = tuple([a for a in range(n) if a != axis])
+      reduction = cls.sumAxes(spp, cache, axes)
       m, M = np.where(reduction)[0][[0,-1]]
       ranges.append(Range(m, M+1))
     return cls(ranges)

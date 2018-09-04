@@ -1,7 +1,8 @@
-from ..common import forLoops
+from ..common import *
 
 class Generic(object):
   def __init__(self, arch, descr):
+    self._arch = arch
     self._descr = descr
   
   def _formatTerm(self, alpha, term):
@@ -12,10 +13,14 @@ class Generic(object):
       prefix = term.name
     else:
       prefix = '{} * {}'.format(alpha, term.name)
-    return '{}[{}]'.format(alpha, term.memoryLayout.addressString(term.indices))
+    return '{}[{}]'.format(prefix, term.memoryLayout.addressString(term.indices))
 
   def generate(self, cpp):
     d = self._descr
+    
+    if d.beta == 0.0:
+      writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
+      initializeWithZero(cpp, self._arch, d.result, writeBB)
 
     class CopyScaleAddBody(object):
       def __call__(s):

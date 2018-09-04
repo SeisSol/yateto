@@ -10,6 +10,7 @@ from yateto.codegen.code import Cpp
 from yateto.codegen.visitor import *
 from yateto.codegen.arch import getArchitectureByIdentifier
 import itertools
+import numpy as np
 
 maxDegree = 5
 order = maxDegree+1
@@ -97,7 +98,6 @@ g.generate('test')
 #~ test = Tensor('D', (24,24,4,4,4))['abckl'] <= Tensor('A', (24,24,4,4))['ijmc'] * Tensor('B', (4,4,24,24))['mkab'] * Tensor('C', (24,24,4))['ijl']
 #~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,6,4))['ijmc'] * Tensor('B', (6,4,4,4))['mkab']
 #~ 
-#~ import numpy as np
 #~ spp = np.ones(shape=(4,4,4,4))
 #~ spp[0,:,:,:] = 0
 #~ spp[:,0,:,:] = 0
@@ -105,9 +105,13 @@ g.generate('test')
 
 test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
-#~ test = Tensor('D', (4,4))['ji'] <= Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj']
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
-test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij']
+spp = np.ones((4,4,4), order='F')
+spp[0,:,:] = 0
+spp[:,0,:] = 0
+print(spp)
+test = Tensor('D', (4,4))['ji'] <= Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4),spp=spp)['zkj'] 
+#~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
 #~ test = derivatives[4]
 PrettyPrinter().visit(test)
 

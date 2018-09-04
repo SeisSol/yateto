@@ -1,4 +1,4 @@
-from ..common import forLoops
+from ..common import *
 
 class Generic(object):
   def __init__(self, arch, descr):
@@ -7,6 +7,11 @@ class Generic(object):
 
   def generate(self, cpp):
     d = self._descr
+    
+    if not d.add:
+      writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
+      initializeWithZero(cpp, self._arch, d.result, writeBB)
+    
     sumIndex = d.term.indices - d.result.indices
     assert len(sumIndex) == 1
     class IndexSumBody(object):

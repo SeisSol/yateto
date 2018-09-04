@@ -143,6 +143,9 @@ class BoundingBox(object):
   def __iter__(self):
     return iter(self._box)
   
+  def __eq__(self, other):
+    return all([s == o for s,o in zip(self,other)])
+  
   def __str__(self):
     return '{}({})'.format(type(self).__name__, ', '.join([str(r) for r in self]))
 

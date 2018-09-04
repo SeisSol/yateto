@@ -5,7 +5,7 @@ from ..memory import DenseMemoryLayout
 from ..ast.node import Add, IndexedTensor
 from ..ast.visitor import Visitor
 from .code import Cpp
-from .common import TensorDescription
+from .common import TensorDescription, IndexedTensorDescription
 from .factory import KernelFactory
 from . import copyscaleadd
 
@@ -65,7 +65,7 @@ class KernelGenerator(Visitor):
     resultName = node[0].name() if timesContained == 0 or (timesContained == 1 and isinstance(node[1], Add)) else None
     names = [self.visit(child, resultName=resultName) for child in node]
     # Copy if target buffer was not used directly
-    if resultName == None:
+    if resultName == None or isinstance(node[1], IndexedTensor):
       description = copyscaleadd.Description(
         alpha = 1.0,
         beta = 0.0,

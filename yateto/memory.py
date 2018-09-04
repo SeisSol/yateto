@@ -1,4 +1,5 @@
 from .ast.indices import BoundingBox, Range
+import itertools
 
 class MemoryLayout(object):
   pass
@@ -34,6 +35,15 @@ class DenseMemoryLayout(MemoryLayout):
     for i,e in enumerate(entry):
       a += (e-self._bbox[i].start)*self._stride[i]
     return a
+  
+  def notWrittenAddresses(self, writeBB):
+    if writeBB == self._bbox:
+      return []
+
+    assert writeBB in self._bbox
+    re = [range(r.start, r.stop) for r in self._bbox]
+    we = [range(w.start, w.stop) for w in writeBB]
+    return [self.address(e) for e in set(itertools.product(*re)) - set(itertools.product(*we))]
 
   def stride(self):
     return self._stride
@@ -44,9 +54,8 @@ class DenseMemoryLayout(MemoryLayout):
   def shape(self):
     return self._shape
   
-  #~ def shapei(self, dim):
-    #~ return self._shape[dim]
-  #~
+  def bbox(self):
+    return self._bbox
 
   def bboxi(self, dim):
     return self._bbox[dim]

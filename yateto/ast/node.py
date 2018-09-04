@@ -225,6 +225,7 @@ class IndexSum(Op):
       spps = [self.term().eqspp()]
     assert len(spps) == 1
     einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
+    print(einsumDescription)
     return np.einsum(einsumDescription, spps[0])
 
   def computeBoundingBox(self):

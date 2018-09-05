@@ -64,3 +64,13 @@ class KernelFactory(Factory):
         generator = copyscaleadd.generator(self._arch, description)
         generator.generate(self._cpp)
       beta = 1.0
+
+  def create_Assign(self, node, result, resultName, argNames, add):
+    description = copyscaleadd.Description(
+      alpha = 1.0,
+      beta = 0.0,
+      result = IndexedTensorDescription.fromNode(self._addArgument(argNames[0]), node.leftTerm()),
+      term = IndexedTensorDescription.fromNode(self._addArgument(argNames[1]), node.rightTerm()),
+    )
+    generator = copyscaleadd.generator(self._arch, description)
+    generator.generate(self._cpp)

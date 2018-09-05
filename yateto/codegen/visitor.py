@@ -13,10 +13,10 @@ class KernelGenerator(Visitor):
   ARGUMENT_NAME = 'p'
   TEMPORARY_RESULT = '_tmp'
   
-  class Temporary(object):
-    def __init__(self, number, size):
-      self.name = '_tmp' + str(number)
-      self.size = size
+  class Buffer(object):
+    def __init__(self, name, node):
+      self.name = name
+      self.node = node
   
   def __init__(self, cpp, arch):
     self._cpp = cpp
@@ -48,15 +48,12 @@ class KernelGenerator(Visitor):
     result = kwargs['result'] if 'result' in kwargs else None
     if not result:
       result = self._getTemporary(node)
-      resultName = result
-    else:
-      resultName = result.name()
 
     names = [self.visit(child) for child in node]
     add = kwargs['add'] if 'add' in kwargs else False
     self._callFactory(node, result, names, add)
     self._freeTemporary(names)
-    return resultName
+    return result.name
   
   def visit_Assign(self, node, **kwargs):
     # Identity operation, e.g. Q['ij'] <= Q['ij']
@@ -65,27 +62,18 @@ class KernelGenerator(Visitor):
 
     # We may use the target buffer directly, if it is not a child of the source node
     timesContained = self._nodeContainsTensor(node[1], node[0].name())
-    result = node[0] if timesContained == 0 or (timesContained == 1 and isinstance(node[1], Add)) else None
+    result = self.Buffer(node[0].name(), node[0]) if timesContained == 0 or (timesContained == 1 and isinstance(node[1], Add)) else None
     names = [self.visit(child, result=result) for child in node]
     # Copy if target buffer was not used directly
     if result is None or isinstance(node[1], IndexedTensor):
-      description = copyscaleadd.Description(
-        alpha = 1.0,
-        beta = 0.0,
-        result = IndexedTensorDescription.fromNode(self._addArgument(names[0]), node.leftTerm()),
-        term = IndexedTensorDescription.fromNode(self._addArgument(names[1]), node.rightTerm()),
-      )
-      generator = copyscaleadd.generator(self._arch, description)
-      generator.generate(self._cpp)
+      self._callFactory(node, result, names, False)
+    self._freeTemporary(names)
     return node[0].name()
   
   def visit_Add(self, node, **kwargs):
     result = kwargs['result'] if 'result' in kwargs else None
     if not result:
       result = self._getTemporary(node)
-      resultName = result
-    else:
-      resultName = result.name()
 
     add = False
     names = list()
@@ -93,10 +81,10 @@ class KernelGenerator(Visitor):
       names.append( self.visit(child, result=result, add=add) )
       add = True
     # Optimisation for the case that a tensor appears on the LHS and once on the RHS
-    if self._nodeContainsTensor(node, resultName) == 1:
+    if self._nodeContainsTensor(node, result.name) == 1:
       pos = -1
       for p,child in enumerate(node):
-        if isinstance(child, IndexedTensor) and child.name() == resultName:
+        if isinstance(child, IndexedTensor) and child.name() == result.name:
           pos = p
           break
       children = [child for child in node]
@@ -108,7 +96,7 @@ class KernelGenerator(Visitor):
     else:
       self._callFactory(node, result, names, False)
     self._freeTemporary(names)
-    return resultName
+    return result.name
   
   def visit_IndexedTensor(self, node, **kwargs):
     bn = node.tensor.baseName()
@@ -127,14 +115,11 @@ class KernelGenerator(Visitor):
     return '{}.{}'.format(self.ARGUMENT_NAME, name) if not self._isTemporary(name) else name
   
   def _callFactory(self, node, result, names, add):
-    if isinstance(result, IndexedTensor):
-      resultName = result.name()
-    else:
-      resultName = result
-      result = node
-    resultName = self._addArgument(resultName)
+    resultName = self._addArgument(result.name)
     names = [self._addArgument(name) for name in names]
-    self._factory.create(node, result, resultName, names, add)
+
+    assert node.memoryLayout().requiredReals() <= result.node.memoryLayout().requiredReals()
+    self._factory.create(node, result.node, result.name, names, add)
   
   def _getTemporary(self, node):
     size = node.memoryLayout().requiredReals()
@@ -149,7 +134,7 @@ class KernelGenerator(Visitor):
       name = '{}{}'.format(self.TEMPORARY_RESULT, len(self._tmp))
       self._cpp('{} {}[{}];'.format(self._arch.typename, name, size))
       self._tmp[name] = size
-    return name
+    return self.Buffer(name, node)
   
   def _isTemporary(self, name):
     return name.startswith(self.TEMPORARY_RESULT)

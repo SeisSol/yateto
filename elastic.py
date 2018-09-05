@@ -8,7 +8,7 @@ from yateto.ast.transformer import *
 from yateto.ast.node import Add
 from yateto.codegen.code import Cpp
 from yateto.codegen.visitor import *
-from yateto.codegen.arch import getArchitectureByIdentifier
+from yateto.arch import getArchitectureByIdentifier
 import itertools
 import numpy as np
 
@@ -17,6 +17,10 @@ order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
+
+arch = getArchitectureByIdentifier('dknl')
+DenseMemoryLayout.setAlignmentArch(arch)
+
 multipleSims = True
 transpose = True
 #~ multipleSims = False
@@ -25,21 +29,23 @@ transpose = True
 if multipleSims:
   qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
   qi = lambda x: 's' + x
+  alignStride=False
 else:
   qShape = (numberOf3DBasisFunctions, numberOfQuantities)
   qi = lambda x: x
+  alignStride=True
 
 t = (lambda x: x[::-1]) if transpose else (lambda x: x)
 
 clones = {
   'star': ['star[0]', 'star[1]', 'star[2]'],
 }
-db = parseXMLMatrixFile('matrices_{}.xml'.format(numberOf3DBasisFunctions), transpose=transpose)
+db = parseXMLMatrixFile('matrices_{}.xml'.format(numberOf3DBasisFunctions), transpose=transpose, alignStride=alignStride)
 db.update( parseXMLMatrixFile('star.xml'.format(numberOf3DBasisFunctions), clones) )
 
 # Quantities
-Q = Tensor('Q', qShape)
-I = Tensor('I', qShape)
+Q = Tensor('Q', qShape, alignStride=True)
+I = Tensor('I', qShape, alignStride=True)
 D = [Q]
 
 # Flux solver
@@ -70,7 +76,7 @@ for i in range(maxDegree):
     derivativeSum += db.kDivMT[j][t('kl')] * D[i][qi('lq')] * db.star[j]['qp']
   derivativeSum = DeduceIndices( Q[qi('kp')].indices ).visit(derivativeSum)
   derivativeSum = EquivalentSparsityPattern().visit(derivativeSum)
-  D.append( Tensor('dQ[{0}]'.format(i+1), qShape, spp=derivativeSum.eqspp()) )
+  D.append( Tensor('dQ[{0}]'.format(i+1), qShape, spp=derivativeSum.eqspp(), alignStride=True) )
   derivative = D[i+1][qi('kp')] <= derivativeSum
 
   derivatives.append(derivative)
@@ -108,15 +114,15 @@ for i in range(maxDegree):
 #~ test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
 
-#~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4))['ij'] + Tensor('Q', (4,4))['ij'] + Tensor('B', (4,4))['ij']
+#~ test = Tensor('Q', (4,4), alignStride=True)['ij'] <= Tensor('Q', (4,4), alignStride=True)['ij'] + Tensor('A', (4,4), alignStride=True)['ik'] * Tensor('B', (4,4))['kj']
 #~ spp = np.ones((4,4,4), order='F')
 #~ spp[0,:,:] = 0
 #~ spp[:,0,:] = 0
 #~ print(spp)
 #~ test = Tensor('D', (4,4,4))['zij'] <= Tensor('B', (4,4,4),spp=spp)['zik'] * Tensor('C', (4,4))['kj']
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
-test = derivatives[4]
-#~ test = volume
+#~ test = derivatives[4]
+test = volume
 #~ test = localFlux
 PrettyPrinter().visit(test)
 
@@ -144,4 +150,4 @@ test = ImplementContractions().visit(test)
 
 PrettyPrinter().visit(test)
 with Cpp() as cpp:
-  KernelGenerator(cpp, getArchitectureByIdentifier('dsnb')).generate(test)
+  KernelGenerator(cpp, arch).generate(test)

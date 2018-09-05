@@ -4,7 +4,7 @@ from .generic import Generic
 from .libxsmm import Libxsmm
 
 class Description(object):
-  def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta):
+  def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta, arch):
     self.result = result
     self.leftTerm = leftTerm
     self.rightTerm = rightTerm
@@ -25,9 +25,15 @@ class Description(object):
     n = bbB[1-kB]
     assert m in bbC[0]
     assert n in bbC[1]
+
+    self.alignedA = not transA and self.leftTerm.memoryLayout.alignedStride()
+    self.alignedC = self.result.memoryLayout.alignedStride()
+    
+    if self.alignedA and self.alignedC:
+      m = m.aligned(arch)
     
     self._mnk = (m, n, k)
-  
+
   def mnk(self):
     return self._mnk
 

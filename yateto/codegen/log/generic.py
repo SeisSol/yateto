@@ -58,7 +58,8 @@ class Generic(object):
       transA = d.transA,
       transB = d.transB,
       alpha = 1.0,
-      beta = 1.0 if d.add else 0.0
+      beta = 1.0 if d.add else 0.0,
+      arch = self._arch
     )
     
     if not d.add:

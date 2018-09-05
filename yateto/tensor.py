@@ -13,7 +13,7 @@ class Tensor(object):
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDEX)
   DEFAULT_ORDER = 'F'
 
-  def __init__(self, name, shape, spp=None, memoryLayout=None):
+  def __init__(self, name, shape, spp=None, memoryLayout=None, alignStride=False):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -40,7 +40,7 @@ class Tensor(object):
     else:
       self._spp = ones(shape, dtype=bool, order=self.DEFAULT_ORDER)
     
-    self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout.fromSpp(self._spp)
+    self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout.fromSpp(self._spp, alignStride=alignStride)
     
 
   def __getitem__(self, indexNames):

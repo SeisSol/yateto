@@ -1,17 +1,29 @@
 from .ast.indices import BoundingBox, Range
 import itertools
+import warnings
 
 class MemoryLayout(object):
-  pass
+  def alignedStride(object):
+    return False
 
 class DenseMemoryLayout(MemoryLayout):
-  def __init__(self, shape, boundingBox=None, stride=None, aligned=False):
+  ALIGNMENT_ARCH = None
+
+  @classmethod
+  def setAlignmentArch(cls, arch):
+    cls.ALIGNMENT_ARCH = arch
+  
+  def __init__(self, shape, boundingBox=None, stride=None, alignStride=False):
     self._shape = shape
 
     if boundingBox:
       self._bbox = boundingBox
     else:
       self._bbox = BoundingBox([Range(0, s) for s in self._shape])
+
+    self._range0 = None
+    if alignStride:
+      self._alignBB()
 
     if stride:
       self._stride = stride
@@ -23,18 +35,38 @@ class DenseMemoryLayout(MemoryLayout):
     for i in range(len(self._bbox)-1):
       stride.append(stride[i] * self._bbox[i].size())
     self._stride = tuple(stride)
+  
+  def _alignBB(self):
+    if self.ALIGNMENT_ARCH is not None:
+      self._range0 = self._bbox[0]
+      rnew = Range( self.ALIGNMENT_ARCH.alignedLower(self._range0.start), self.ALIGNMENT_ARCH.alignedUpper(self._range0.stop) )
+      self._bbox = BoundingBox([rnew] + self._bbox[1:])
+    else:
+      warnings.warn('Set architecture with DenseMemoryLayout.setAlignmentArch(arch) if you want to use the align stride feature.', UserWarning)
+  
+  def alignedStride(self):
+    if self.ALIGNMENT_ARCH is None:
+      return False
+    offsetOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].start)
+    ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
+    return offsetOk and ldOk
     
   @classmethod
-  def fromSpp(cls, spp):
+  def fromSpp(cls, spp, alignStride=False):
     bbox = BoundingBox.fromSpp(spp)
-    return cls(spp.shape, bbox)
+    return cls(spp.shape, bbox, alignStride=alignStride)
   
   def __contains__(self, entry):
     return entry in self._bbox
   
   def permute(self, permutation):
     self._shape = tuple([self._shape[p] for p in permutation])
-    self._bbox = BoundingBox([self._bbox[p] for p in permutation])
+    
+    originalBB = BoundingBox([self._range0] + self._bbox[1:]) if self._range0 else self._bbox
+    self._bbox = BoundingBox([originalBB[p] for p in permutation])
+    if self._range0:
+      self._alignBB()
+
     self._computeStride()
   
   def address(self, entry):
@@ -82,7 +114,7 @@ class DenseMemoryLayout(MemoryLayout):
     return ' + '.join(a)
   
   def mayFuse(self, positions):
-    return all( [self._bbox[p].size() == self._shape[p] for p in positions[:-1]] )
+    return all( [self._stride[j] == self._shape[i]*self._stride[i] for i,j in zip(positions[:-1], positions[1:])] )
   
   def _subShape(self, positions):
     sub = 1

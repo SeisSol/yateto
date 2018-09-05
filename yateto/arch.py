@@ -61,6 +61,9 @@ class Architecture(object):
 
   def alignedUpper(self, index):
     return index + (self.alignedReals - index % self.alignedReals) % self.alignedReals
+  
+  def alignedShape(self, shape):
+    return (self.alignedUpper(shape[0]),) + shape[1:]
 
   def checkAlignment(self, offset):
     return offset % self.alignedReals == 0

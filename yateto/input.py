@@ -5,7 +5,7 @@ from .tensor import Collection, Tensor
 def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
-def __parseMatrix(node, clones, transpose):
+def __parseMatrix(node, clones, transpose, alignStride):
   name = node.get('name')
   rows = int( node.get('rows') )
   columns = int( node.get('columns') )
@@ -28,13 +28,13 @@ def __parseMatrix(node, clones, transpose):
   matrices = dict()
   if name in clones:
     for clone in clones[name]:
-      matrices[clone] = Tensor(clone, (rows, columns), matrix)
+      matrices[clone] = Tensor(clone, (rows, columns), matrix, alignStride=alignStride)
   else:
-    matrices[name] = Tensor(name, (rows, columns), matrix)
+    matrices[name] = Tensor(name, (rows, columns), matrix, alignStride=alignStride)
   
   return matrices
 
-def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False):
+def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False, alignStride=None):
   tree = etree.parse(xmlFile)
   root = tree.getroot()
   
@@ -42,7 +42,7 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False):
   
   for child in root:
     if child.tag == 'matrix':
-      matrices.update( __parseMatrix(child, clones, transpose) )
+      matrices.update( __parseMatrix(child, clones, transpose, alignStride) )
     else:
       __complain(child)
   

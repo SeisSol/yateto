@@ -18,10 +18,6 @@ class Libxsmm(object):
     ldA = d.leftTerm.memoryLayout.stridei(1)
     ldB = d.rightTerm.memoryLayout.stridei(1)
     ldC = d.result.memoryLayout.stridei(1)
-    alignedA = self._arch.checkAlignment(d.leftTerm.memoryLayout.bboxi(0).start) and self._arch.checkAlignment(ldA)
-    alignedC = self._arch.checkAlignment(d.result.memoryLayout.bboxi(0).start) and self._arch.checkAlignment(ldC)
-    #~ if alignedA and alignedC:
-      #~ m = m.aligned(self._arch)
     
     assert (m,k) in d.leftTerm.memoryLayout
     assert (k,n) in d.rightTerm.memoryLayout
@@ -36,8 +32,8 @@ class Libxsmm(object):
       'LDC':          ldC,
       'alpha':        int(d.alpha),
       'beta':         int(d.beta),
-      'alignedA':     int(alignedA),
-      'alignedC':     int(alignedC),
+      'alignedA':     int(d.alignedA),
+      'alignedC':     int(d.alignedC),
       'prefetch':     'pfsigonly'
     }
     

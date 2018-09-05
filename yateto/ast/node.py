@@ -102,7 +102,8 @@ class Op(Node):
     return self._memoryLayout
 
   def computeMemoryLayout(self):
-    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp())
+    alignStride = any([child.memoryLayout().alignedStride() for child in self])
+    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride)
   
   def fixedIndexPermutation(self):
     return False

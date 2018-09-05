@@ -118,7 +118,6 @@ class KernelGenerator(Visitor):
     resultName = self._addArgument(result.name)
     names = [self._addArgument(name) for name in names]
 
-    assert node.memoryLayout().requiredReals() <= result.node.memoryLayout().requiredReals()
     self._factory.create(node, result.node, result.name, names, add)
   
   def _getTemporary(self, node):
@@ -132,7 +131,7 @@ class KernelGenerator(Visitor):
     
     if not name:
       name = '{}{}'.format(self.TEMPORARY_RESULT, len(self._tmp))
-      self._cpp('{} {}[{}];'.format(self._arch.typename, name, size))
+      self._cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
       self._tmp[name] = size
     return self.Buffer(name, node)
   

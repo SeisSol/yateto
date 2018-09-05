@@ -1,3 +1,6 @@
+import os
+from ..cache import RoutineGenerator
+
 class Libxsmm(object):
   def __init__(self, arch, descr):
     self._arch = arch
@@ -12,7 +15,7 @@ class Libxsmm(object):
       return '{} + {}'.format(term.name, o)
     return term.name
     
-  def generate(self, cpp):
+  def generate(self, cpp, routineCache):
     d = self._descr
     m, n, k = d.mnk()
     ldA = d.leftTerm.memoryLayout.stridei(1)
@@ -37,9 +40,53 @@ class Libxsmm(object):
       'prefetch':     'pfsigonly'
     }
     
+    routineName = self.generateRoutineName(gemm)
+    
     cpp( '{}({}, {}, {}, NULL, NULL, NULL);'.format(
-      self.generateRoutineName(gemm),
+      routineName,
       self._pointer(d.leftTerm, (m.start, k.start)),
       self._pointer(d.rightTerm, (k.start, n.start)),
       self._pointer(d.result, (m.start, n.start))
     ))
+    
+    routineCache.addRoutine(routineName, ExecuteLibxsmm(self._arch, gemm))
+
+class ExecuteLibxsmm(RoutineGenerator):
+  LIBXSMM_GENERATOR = 'libxsmm_gemm_generator'
+  
+  def __init__(self, arch, gemmDescr):
+    self._arch = arch
+    self._gemmDescr = gemmDescr
+  
+  def __eq__(self, other):
+    return self._arch == other._arch and self._gemmDescr == other._gemmDescr
+  
+  def header(self, cpp):
+    with cpp.PPIfndef('NDEBUG'):
+      cpp('extern long long libxsmm_num_total_flops;')
+    with cpp.PPIf('defined( __SSE3__) || defined(__MIC__)'):
+      cpp.includeSys('immintrin.h')
+  
+  def __call__(self, routineName, fileName):
+    callStr = '{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}P'.format(
+      self.LIBXSMM_GENERATOR,
+      'dense',
+      fileName,
+      routineName,
+      self._gemmDescr['M'],
+      self._gemmDescr['N'],
+      self._gemmDescr['K'],
+      self._gemmDescr['LDA'],
+      self._gemmDescr['LDB'],
+      self._gemmDescr['LDC'],
+      self._gemmDescr['alpha'],
+      self._gemmDescr['beta'],
+      self._gemmDescr['alignedA'],
+      self._gemmDescr['alignedC'],
+      self._arch.name,
+      self._gemmDescr['prefetch'],
+      self._arch.precision
+    )
+
+    os.system(callStr)
+  

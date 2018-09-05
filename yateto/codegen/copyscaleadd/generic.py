@@ -15,7 +15,7 @@ class Generic(object):
       prefix = '{} * {}'.format(alpha, term.name)
     return '{}[{}]'.format(prefix, term.memoryLayout.addressString(term.indices))
 
-  def generate(self, cpp):
+  def generate(self, cpp, routineCache):
     d = self._descr
     
     if d.beta == 0.0:

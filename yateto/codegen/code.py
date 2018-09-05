@@ -65,13 +65,14 @@ class HeaderGuard:
   def __exit__(self, type, value, traceback):
     self.writer('#endif')
     
-class Ifndef:
-  def __init__(self, writer, name):
+class PPIfBlock:
+  def __init__(self, writer, name, typ):
     self.writer = writer
     self.name = name
+    self.typ = typ
     
   def __enter__(self):
-    self.writer('#ifndef ' + self.name)
+    self.writer('#{} {}'.format(self.typ, self.name))
 
   def __exit__(self, type, value, traceback):
     self.writer('#endif')
@@ -119,8 +120,11 @@ class Cpp:
   def HeaderGuard(self, name):
     return HeaderGuard(self, name)
     
-  def Ifndef(self, name):
-    return Ifndef(self, name)
+  def PPIfndef(self, name):
+    return PPIfBlock(self, name, 'ifndef')
+    
+  def PPIf(self, name):
+    return PPIfBlock(self, name, 'if')
     
   def label(self, name):
     self.indent -= 1

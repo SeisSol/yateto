@@ -18,9 +18,10 @@ class KernelGenerator(Visitor):
       self.name = name
       self.node = node
   
-  def __init__(self, cpp, arch):
+  def __init__(self, cpp, arch, routineCache):
     self._cpp = cpp
     self._arch = arch
+    self._routineCache = routineCache
     self._tmp = dict()
     self._freeTmp = list()
     self._tensors = dict()
@@ -118,7 +119,7 @@ class KernelGenerator(Visitor):
     resultName = self._addArgument(result.name)
     names = [self._addArgument(name) for name in names]
 
-    self._factory.create(node, result.node, result.name, names, add)
+    self._factory.create(node, result.node, result.name, names, add, self._routineCache)
   
   def _getTemporary(self, node):
     size = node.memoryLayout().requiredReals()

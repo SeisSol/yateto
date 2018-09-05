@@ -12,7 +12,7 @@ class Generic(object):
     offset = term.memoryLayout.address(offset2)
     return (stride, offset)
     
-  def generate(self, cpp):
+  def generate(self, cpp, routineCache):
     d = self._descr
     m, n, k = d.mnk()
     

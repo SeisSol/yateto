@@ -7,6 +7,7 @@ from yateto.ast.visitor import *
 from yateto.ast.transformer import *
 from yateto.ast.node import Add
 from yateto.codegen.code import Cpp
+from yateto.codegen.cache import RoutineCache
 from yateto.codegen.visitor import *
 from yateto.arch import getArchitectureByIdentifier
 import itertools
@@ -23,8 +24,8 @@ DenseMemoryLayout.setAlignmentArch(arch)
 
 multipleSims = True
 transpose = True
-#~ multipleSims = False
-#~ transpose = False
+multipleSims = False
+transpose = False
 
 if multipleSims:
   qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
@@ -86,6 +87,7 @@ for i in range(maxDegree):
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
   #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
 #~ g.generate('test')
+#~ exit()
 
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
@@ -149,5 +151,9 @@ test = ImplementContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
 PrettyPrinter().visit(test)
+
+cache = RoutineCache()
 with Cpp() as cpp:
-  KernelGenerator(cpp, arch).generate(test)
+  KernelGenerator(cpp, arch, cache).generate(test)
+
+cache.generate('test/routines.cpp')

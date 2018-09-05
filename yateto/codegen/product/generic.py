@@ -5,7 +5,7 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
 
-  def generate(self, cpp):
+  def generate(self, cpp, routineCache):
     d = self._descr
     if not d.add:
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)

@@ -28,7 +28,7 @@ class Generic(object):
       return  {next(iter(I)): fusedRange}
     return term.memoryLayout.defuse(fusedRange, term.indices, I)
 
-  def generate(self, cpp):
+  def generate(self, cpp, routineCache):
     d = self._descr
     
     A = d.leftTerm.indices - d.loopIndices
@@ -78,6 +78,6 @@ class Generic(object):
           self._pointer(cpp, Bname, d.rightTerm, d.loopIndices)
           self._pointer(cpp, Cname, d.result, d.loopIndices)
         generator = gemm.generator(self._arch, gemmDescr)
-        generator.generate(cpp)
+        generator.generate(cpp, routineCache)
     
     forLoops(cpp, d.loopIndices, d.loopRanges, LoGBody())

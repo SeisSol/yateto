@@ -18,6 +18,9 @@ class Node(object):
   def __getitem__(self, key):
     return self._children[key]
   
+  def __len__(self):
+    return len(self._children)
+  
   def setChildren(self, children):
     self._children = children
 
@@ -35,6 +38,9 @@ class Node(object):
   
   def computeMemoryLayout(self):
     pass
+  
+  def fixedIndexPermutation(self):
+    return True
     
   def setIndexPermutation(self, indices):
     if str(indices) != str(self.indices):
@@ -97,6 +103,9 @@ class Op(Node):
 
   def computeMemoryLayout(self):
     self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp())
+  
+  def fixedIndexPermutation(self):
+    return False
   
   def setIndexPermutation(self, indices):
     p = tuple([self.indices.find(idx) for idx in indices])

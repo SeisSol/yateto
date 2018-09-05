@@ -48,7 +48,12 @@ class DeduceIndices(Transformer):
   
   def visit_Add(self, node):
     for child in node:
-      if isinstance(child, Op):
+      if child.fixedIndexPermutation():
+        node.indices = child.indices
+        break
+
+    for child in node:
+      if not child.fixedIndexPermutation():
         child.indices = node.indices
       self.visit(child)
 
@@ -114,21 +119,27 @@ class FindIndexPermutations(Transformer):
     setattr(node, '_findIndexPermutationsVariants', variants) 
     return node
   
-  def allPermutations(self, node):
+  def allPermutations(self, node, inheritIndices):
     super().generic_visit(node)
-    choices = list()
-    for child in node:
-      choices.append( str(child.indices) )
     iterator = itertools.permutations(node.indices)
-    variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), choices) for Cs in iterator}
+    if inheritIndices:
+      variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), [''.join(Cs)] * len(node)) for Cs in iterator}
+    else:
+      choices = [str(child.indices) for child in node]
+      variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), choices) for Cs in iterator}
     setattr(node, '_findIndexPermutationsVariants', variants) 
     return node
   
+  def visit_Add(self, node):
+    if any([child.fixedIndexPermutation() for child in node]):
+      return self.generic_visit(node)
+    return self.allPermutations(node, True)
+  
   def visit_Product(self, node):
-    return self.allPermutations(node)
+    return self.allPermutations(node, False)
     
   def visit_IndexSum(self, node):
-    return self.allPermutations(node)
+    return self.allPermutations(node, False)
 
   def visit_Contraction(self, node):
     node.setChildren([self.visit(node.leftTerm()), self.visit(node.rightTerm())])

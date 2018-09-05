@@ -196,7 +196,7 @@ class EquivalentSparsityPattern(Transformer):
     minTree = opt.strengthReduction(terms, targetIndices)
     minTree.setIndexPermutation(targetIndices)
     minTree = FindContractions().visit(minTree)
-    return ComputeSparsityPattern().visit(minTree)
+    return minTree.computeSparsityPattern(*[child.eqspp() for child in minTree])
   
   def visit_Einsum(self, node):
     self.generic_visit(node)

@@ -13,7 +13,7 @@ from yateto.arch import getArchitectureByIdentifier
 import itertools
 import numpy as np
 
-maxDegree = 5
+maxDegree = 1
 order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
@@ -154,6 +154,8 @@ PrettyPrinter().visit(test)
 
 cache = RoutineCache()
 with Cpp() as cpp:
-  KernelGenerator(cpp, arch, cache).generate(test)
+  KernelGenerator(cpp, arch, cache).generate('test', test)
+  InitializerGenerator(cpp, arch).generate([Q, db.kDivM[0], db.kDivM[2], D[1], db.star[1]])
+  
 
-cache.generate('test/routines.cpp')
+#~ cache.generate('test/routines.cpp')

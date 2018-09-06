@@ -52,6 +52,22 @@ class Block:
   def __exit__(self, type, value, traceback):
     self.writer.indent -= 1
     self.writer('}' + self.foot)
+
+class MultiBlock:
+  def __init__(self, writer, arguments, foot = ''):
+    self.writer = writer
+    self.arguments = arguments
+    self.foot = foot
+  
+  def __enter__(self):
+    for arg in self.arguments:
+      self.writer(arg + ' {')
+      self.writer.indent += 1
+  
+  def __exit__(self, type, value, traceback):
+    for arg in self.arguments:
+      self.writer.indent -= 1
+      self.writer('}' + self.foot)
     
 class HeaderGuard:
   def __init__(self, writer, name):
@@ -103,7 +119,10 @@ class Cpp:
     return Block(self, 'for ({})'.format(argument))
     
   def Namespace(self, name):
-    return Block(self, 'namespace ' + name)
+    spaces = name.split('::')
+    if len(spaces) == 1:
+      return Block(self, 'namespace ' + name)
+    return MultiBlock(self, ['namespace ' + space for space in spaces])
     
   def Function(self, name, arguments = '', returnType = 'void'):
     return Block(self, '{} {}({})'.format(returnType, name, arguments))

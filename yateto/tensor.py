@@ -25,9 +25,12 @@ class Tensor(object):
 
     self._name = name
     self._shape = shape
+    self._values = None
     
     if spp is not None:
       if isinstance(spp, dict):
+        if not isinstance(next(iter(spp.values())), bool):
+          self._values = spp
         self._spp = zeros(shape, dtype=bool, order=self.DEFAULT_ORDER)
         for multiIndex, value in spp.items():
           self._spp[multiIndex] = value
@@ -66,6 +69,9 @@ class Tensor(object):
   
   def spp(self):
     return self._spp
+  
+  def values(self):
+    return self._values
   
   def __eq__(self, other):
     equal = self._name == other._name

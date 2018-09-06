@@ -3,7 +3,7 @@ import itertools
 import warnings
 
 class MemoryLayout(object):
-  def alignedStride(object):
+  def alignedStride(self):
     return False
 
 class DenseMemoryLayout(MemoryLayout):

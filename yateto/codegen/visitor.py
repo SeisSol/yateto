@@ -9,16 +9,20 @@ from .common import TensorDescription, IndexedTensorDescription
 from .factory import KernelFactory
 from . import copyscaleadd
 
+DEFAULT_NAMESPACE = 'yateto'
+
 class KernelGenerator(Visitor):
   ARGUMENT_NAME = 'p'
   TEMPORARY_RESULT = '_tmp'
+  NAMESPACE = 'kernel'
+  EXECUTE_NAME = 'execute'
   
   class Buffer(object):
     def __init__(self, name, node):
       self.name = name
       self.node = node
   
-  def __init__(self, cpp, arch, routineCache):
+  def __init__(self, cpp, arch, routineCache, namespace=DEFAULT_NAMESPACE):
     self._cpp = cpp
     self._arch = arch
     self._routineCache = routineCache
@@ -26,24 +30,34 @@ class KernelGenerator(Visitor):
     self._freeTmp = list()
     self._tensors = dict()
     self._factory = None
+    self._namespace = namespace
   
-  def generate(self, node):
-    structName = 'test__params'
-    cpp = self._cpp
-    functionIO = StringIO()
-    function = ''
-    with Cpp(functionIO) as self._cpp:
-      self._factory = KernelFactory(self._cpp, self._arch)
-      with self._cpp.Function('test', '{}& {}'.format(structName, self.ARGUMENT_NAME)):
-        self.visit(node)
-      function = functionIO.getvalue()
-    with cpp.Struct(structName):
-      for baseName, maxGroup in self._tensors.items():
-        if maxGroup:
-          cpp('{}* {}[{}];'.format(self._arch.typename, baseName, maxGroup+1))
-        else:
-          cpp('{}* {};'.format(self._arch.typename, baseName))
-    cpp(function)
+  def generate(self, name, node):
+    self._cpp.includeSys('cassert')
+    with self._cpp.Namespace(self._namespace):
+      with self._cpp.Namespace(self.NAMESPACE):
+        cpp = self._cpp
+        functionIO = StringIO()
+        function = ''
+        with Cpp(functionIO) as self._cpp:
+          self._factory = KernelFactory(self._cpp, self._arch)
+          self.visit(node)
+          function = functionIO.getvalue()
+        with cpp.Struct(name):
+          for baseName, groups in self._tensors.items():
+            if groups:
+              size = max(groups)+1
+              cpp('{}* {}[{}] = {{{}}};'.format(self._arch.typename, baseName, size, ', '.join(['nullptr']*size)))
+            else:
+              cpp('{}* {} = nullptr;'.format(self._arch.typename, baseName))
+          with cpp.Function(self.EXECUTE_NAME):
+            for baseName, groups in self._tensors.items():
+              if groups:
+                for g in groups:
+                  cpp('assert({}[{}] != nullptr);'.format(baseName, g))
+              else:
+                cpp('assert({} != nullptr);'.format(baseName))
+            cpp(function)
 
   def generic_visit(self, node, **kwargs):
     result = kwargs['result'] if 'result' in kwargs else None
@@ -105,11 +119,11 @@ class KernelGenerator(Visitor):
     if bn in self._tensors:
       p = self._tensors[bn]
       if p is not None and g is not None:
-        self._tensors[bn] = max(p, g)
+        self._tensors[bn] = p | {g}
       elif not (p is None and g is None):
         raise ValueError('Grouped tensors ({}) and single tensors ({}) may not appear mixed in a kernel.'.format(node.name(), bn))        
     else:
-      self._tensors[bn] = g
+      self._tensors[bn] = {g} if g is not None else None
     return node.name()
   
   def _addArgument(self, name):
@@ -150,3 +164,88 @@ class KernelGenerator(Visitor):
       if isinstance(child, IndexedTensor) and child.name() == name:
         times += 1
     return times
+
+class InitializerGenerator(object):
+  VALUE_POINTER_TYPE = 'static constexpr unsigned'
+  MODIFIERS = 'static constexpr'
+  SHAPE_NAME = 'Shape'
+  START_NAME = 'Start'
+  STOP_NAME = 'Stop'
+  SIZE_NAME = 'Size'
+  VALUES_BASENAME = 'Values'
+  NAMESPACE = 'init'
+
+  def __init__(self, cpp, arch, namespace=DEFAULT_NAMESPACE):
+    self._cpp = cpp
+    self._arch = arch
+    self._namespace = namespace
+  
+  def generate(self, matrices):
+    collect = dict()
+    for matrix in matrices:
+      baseName = matrix.baseName()
+      group = matrix.group()
+      if baseName not in collect:
+        collect[baseName] = {group: matrix}
+      elif baseName in collect and group not in collect[baseName]:
+        collect[baseName][group] = matrix
+      else:
+        assert collect[baseName][group] == matrix
+    with self._cpp.Namespace(self._namespace):
+      with self._cpp.Namespace(self.NAMESPACE):
+        for baseName,matrixGroup in collect.items():
+          with self._cpp.Class(baseName):
+            self.visit(matrixGroup)
+
+  def visit(self, group):
+    self._cpp.label('public')
+
+    maxIndex = max(group.keys())
+
+    numberType = '{} {}'.format(self.MODIFIERS, self._arch.uintTypename)
+    self._array(numberType, self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex)
+    self._array(numberType, self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
+    self._array(numberType, self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
+    self._array(numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex)
+    
+    realType = '{} {}'.format(self.MODIFIERS, self._arch.typename)
+    realPtrType = realType + '*'
+    valueNames = dict()
+    if maxIndex is not None:
+      for k,v in group.items():
+        values = v.values()
+        memLayout = v.memoryLayout()
+        if values is not None:
+          memory = ['0.']*memLayout.requiredReals()
+          for idx,x in values.items():
+            memory[memLayout.address(idx)] = x
+          name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
+          valueNames[k] = ['&{}[0]'.format(name)]
+          self._cpp('{} {} = {{{}}};'.format(realType, name, ', '.join(memory)))
+      if len(valueNames) > 0:
+        self._array(realPtrType, self.VALUES_BASENAME, valueNames, maxIndex)
+  
+  def _array(self, typ, name, group, maxIndex):
+    dummy = [0]
+    formatArray = lambda L: ', '.join([str(x) for x in L])
+    maxLen = max(map(len, group.values())) if len(group.values()) > 0 else 0
+    if maxIndex is None:
+      init = [formatArray(next(iter(group.values())) if len(group.values()) > 0 else dummy)]
+    else:
+      groupSize = maxIndex+1
+      init = [None]*groupSize
+      for idx in range(groupSize):
+        init[idx] = formatArray(group[idx] if idx in group else dummy)
+
+    arrayIndices = ''
+    if maxLen > 1:
+      arrayIndices = '[{}]'.format(maxLen)
+      init = ['{{{}}}'.format(i) for i in init]
+    
+    initStr = ', '.join(init)
+    groupIndices = ''
+    if maxIndex is not None:
+      groupIndices = '[]'
+      initStr = '{{{}}}'.format(initStr)
+
+    self._cpp('{} {}{}{} = {};'.format(typ, name, groupIndices, arrayIndices, initStr))

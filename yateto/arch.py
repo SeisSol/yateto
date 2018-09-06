@@ -56,6 +56,8 @@ class Architecture(object):
     self.alignedReals = self.alignment // self.bytesPerReal
     self.enablePrefetch = enablePrefetch
     
+    self.uintTypename = 'unsigned'
+    
   def alignedLower(self, index):
     return index - index % self.alignedReals
 

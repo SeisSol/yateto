@@ -11,6 +11,9 @@ class Node(object):
   
   def size(self):
     return self.indices.size()
+  
+  def nonZeroFlops(self):
+    raise NotImplementedError
 
   def __iter__(self):
     return iter(self._children)
@@ -75,6 +78,9 @@ class IndexedTensor(Node):
     self.tensor = tensor
     self.indices = Indices(indexNames, self.tensor.shape())
   
+  def nonZeroFlops(self):
+    return 0
+  
   def spp(self):
     return self.tensor.spp()
   
@@ -133,6 +139,12 @@ class Add(Op):
     for i in range(1, len(spps)):
       spp = np.add(spp, spps[i])
     return spp
+  
+  def nonZeroFlops(self):
+    nzFlops = 0
+    for child in self:
+      nzFlops += np.count_nonzero( child.eqspp() )
+    return nzFlops - np.count_nonzero( self.eqspp() )
 
 class BinOp(Op):
   def __init__(self, lTerm, rTerm):
@@ -154,6 +166,9 @@ class Assign(BinOp):
     if not isinstance(children[0], IndexedTensor):
       raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0]))
     super().setChildren(children)
+    
+  def nonZeroFlops(self):
+    return 0
   
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
@@ -173,11 +188,8 @@ def _productContractionLoGSparsityPattern(node, *spps):
   return np.einsum(einsumDescription, spps[0], spps[1], optimize=Op.OPTIMIZE_EINSUM)
 
 class Product(BinOp):
-  def __init__(self, lTerm, rTerm, target_indices):
+  def __init__(self, lTerm, rTerm):
     super().__init__(lTerm, rTerm)
-    if target_indices.firstIndex() <= rTerm.indices:
-      lTerm, rTerm = rTerm, lTerm
-
     K = lTerm.indices & rTerm.indices
     assert lTerm.indices.subShape(K) == rTerm.indices.subShape(K)
 
@@ -190,7 +202,7 @@ class Product(BinOp):
 
     # Cost based on sparsity pattern
     self.setEqspp( self.computeSparsityPattern() )
-    self._cost = np.count_nonzero( self.eqspp() )
+    self._cost = self.nonZeroFlops()
 
     # Cost based on bounding box
     # self.setBoundingBox( self.computeBoundingBox() )
@@ -198,6 +210,9 @@ class Product(BinOp):
     
     for child in self._children:
       self._cost += getattr(child, '_cost', 0)
+  
+  def nonZeroFlops(self):
+    return np.count_nonzero( self.eqspp() )
   
   def computeSparsityPattern(self, *spps):
     return _productContractionLoGSparsityPattern(self, *spps)
@@ -239,13 +254,16 @@ class IndexSum(Op):
 
     # Cost based on sparsity pattern
     self.setEqspp( self.computeSparsityPattern() )
-    self._cost = np.count_nonzero( term.eqspp() ) - np.count_nonzero( self.eqspp() )
+    self._cost = self.nonZeroFlops()
 
     # Cost based on bounding box
     # self.setBoundingBox( self.computeBoundingBox() )
     # self._cost = term.boundingBox().size() - self.boundingBox().size()
     
     self._cost += getattr(term, '_cost', 0)
+  
+  def nonZeroFlops(self):
+    return np.count_nonzero( self.term().eqspp() ) - np.count_nonzero( self.eqspp() )
   
   def sumIndex(self):
     return self._sumIndex
@@ -277,6 +295,10 @@ class Contraction(BinOp):
     self.indices = li.merged(lr)
     self.setIndexPermutation(indices)
     self.setEqspp( self.computeSparsityPattern() )
+
+  def nonZeroFlops(self):
+    p = Product(self.leftTerm(), self.rightTerm())
+    return 2*p.nonZeroFlops() - np.count_nonzero( self.eqspp() )
   
   def computeSparsityPattern(self, *spps):
     return _productContractionLoGSparsityPattern(self, *spps)
@@ -294,6 +316,10 @@ class LoopOverGEMM(BinOp):
     self._transA = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
     self._transB = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
     self.setEqspp( self.computeSparsityPattern() )
+
+  def nonZeroFlops(self):
+    p = Product(self.leftTerm(), self.rightTerm())
+    return 2*p.nonZeroFlops() - np.count_nonzero( self.eqspp() )
   
   def computeSparsityPattern(self, *spps):
     return _productContractionLoGSparsityPattern(self, *spps)

@@ -27,7 +27,7 @@ def strengthReduction(terms, target_indices, split = 0):
   else:
     for i in range(n):
       for j in range(max(i+1,split),n):
-        mulTerm = Product(terms[i], terms[j], target_indices)
+        mulTerm = Product(terms[i], terms[j])
         selection = set(range(n)) - set([i,j])
         tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, j-1)
         possibilites.append(tree)

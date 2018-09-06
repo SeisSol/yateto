@@ -47,6 +47,13 @@ class ComputeSparsityPattern(Visitor):
   def visit_IndexedTensor(self, node):
     return node.eqspp()
 
+class ComputeOptimalFlopCount(Visitor):
+  def generic_visit(self, node):
+    childFlops = 0
+    for child in node:
+      childFlops += self.visit(child)
+    return childFlops + node.nonZeroFlops()
+
 class PrintEquivalentSparsityPatterns(Visitor):
   def __init__(self, directory):
     if not (pltSpec and colorsSpec and scipyspSpec):

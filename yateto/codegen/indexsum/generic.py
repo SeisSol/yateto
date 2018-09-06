@@ -22,4 +22,7 @@ class Generic(object):
         with cpp.For('int {0} = {1}; {0} < {2}; ++{0}'.format(sumIndex, d.sumLoopRange.start, d.sumLoopRange.stop)):
           cpp( 'sum += {}[{}];'.format(d.term.name, d.term.memoryLayout.addressString(d.term.indices)) )
         cpp( '{} = sum;'.format(target) )
-    forLoops(cpp, d.result.indices, d.loopRanges, IndexSumBody())
+        
+        return d.sumLoopRange.size()
+
+    return forLoops(cpp, d.result.indices, d.loopRanges, IndexSumBody())

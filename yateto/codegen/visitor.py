@@ -3,19 +3,20 @@ import sys
 from io import StringIO
 from ..memory import DenseMemoryLayout
 from ..ast.node import Add, IndexedTensor
-from ..ast.visitor import Visitor
+from ..ast.visitor import Visitor, ComputeOptimalFlopCount
 from .code import Cpp
-from .common import TensorDescription, IndexedTensorDescription
 from .factory import KernelFactory
-from . import copyscaleadd
 
 DEFAULT_NAMESPACE = 'yateto'
+MODIFIERS = 'static constexpr'
 
 class KernelGenerator(Visitor):
   ARGUMENT_NAME = 'p'
   TEMPORARY_RESULT = '_tmp'
   NAMESPACE = 'kernel'
   EXECUTE_NAME = 'execute'
+  NONZEROFLOPS_NAME = 'NonZeroFlops'
+  HARDWAREFLOPS_NAME = 'HardwareFlops'
   
   class Buffer(object):
     def __init__(self, name, node):
@@ -31,6 +32,7 @@ class KernelGenerator(Visitor):
     self._tensors = dict()
     self._factory = None
     self._namespace = namespace
+    self._flops = 0
   
   def generate(self, name, node):
     self._cpp.includeSys('cassert')
@@ -44,12 +46,17 @@ class KernelGenerator(Visitor):
           self.visit(node)
           function = functionIO.getvalue()
         with cpp.Struct(name):
+          nonZeroFlops = ComputeOptimalFlopCount().visit(node)
+          cpp('{} {} {} = {};'.format(MODIFIERS, self._arch.uintTypename, self.NONZEROFLOPS_NAME, nonZeroFlops))
+          cpp('{} {} {} = {};'.format(MODIFIERS, self._arch.uintTypename, self.HARDWAREFLOPS_NAME, self._flops))
+          cpp.emptyline()
           for baseName, groups in self._tensors.items():
             if groups:
               size = max(groups)+1
               cpp('{}* {}[{}] = {{{}}};'.format(self._arch.typename, baseName, size, ', '.join(['nullptr']*size)))
             else:
               cpp('{}* {} = nullptr;'.format(self._arch.typename, baseName))
+          cpp.emptyline()
           with cpp.Function(self.EXECUTE_NAME):
             for baseName, groups in self._tensors.items():
               if groups:
@@ -58,6 +65,7 @@ class KernelGenerator(Visitor):
               else:
                 cpp('assert({} != nullptr);'.format(baseName))
             cpp(function)
+    return self._flops
 
   def generic_visit(self, node, **kwargs):
     result = kwargs['result'] if 'result' in kwargs else None
@@ -133,7 +141,7 @@ class KernelGenerator(Visitor):
     resultName = self._addArgument(result.name)
     names = [self._addArgument(name) for name in names]
 
-    self._factory.create(node, result.node, result.name, names, add, self._routineCache)
+    self._flops += self._factory.create(node, result.node, result.name, names, add, self._routineCache)
   
   def _getTemporary(self, node):
     size = node.memoryLayout().requiredReals()
@@ -166,8 +174,6 @@ class KernelGenerator(Visitor):
     return times
 
 class InitializerGenerator(object):
-  VALUE_POINTER_TYPE = 'static constexpr unsigned'
-  MODIFIERS = 'static constexpr'
   SHAPE_NAME = 'Shape'
   START_NAME = 'Start'
   STOP_NAME = 'Stop'
@@ -202,13 +208,13 @@ class InitializerGenerator(object):
 
     maxIndex = max(group.keys())
 
-    numberType = '{} {}'.format(self.MODIFIERS, self._arch.uintTypename)
+    numberType = '{} {}'.format(MODIFIERS, self._arch.uintTypename)
     self._array(numberType, self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex)
     self._array(numberType, self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
     self._array(numberType, self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
     self._array(numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex)
     
-    realType = '{} {}'.format(self.MODIFIERS, self._arch.typename)
+    realType = '{} {}'.format(MODIFIERS, self._arch.typename)
     realPtrType = realType + '*'
     valueNames = dict()
     if maxIndex is not None:

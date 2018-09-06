@@ -37,3 +37,5 @@ class Generic(object):
               beta = d.beta
             )
           )
+
+    return 2 * m.size() * n.size() * k.size()

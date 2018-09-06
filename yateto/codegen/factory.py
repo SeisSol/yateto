@@ -28,7 +28,7 @@ class KernelFactory(Factory):
       transB = node.transB()
     )
     generator = log.generator(self._arch, description)
-    generator.generate(self._cpp, routineCache)
+    return generator.generate(self._cpp, routineCache)
   
   def create_IndexSum(self, node, result, resultName, argNames, add, routineCache):
     assert len(argNames) == 1
@@ -38,7 +38,7 @@ class KernelFactory(Factory):
       term = IndexedTensorDescription.fromNode(argNames[0], node.term())
     )
     generator = indexsum.generator(self._arch, description)
-    generator.generate(self._cpp, routineCache)
+    return generator.generate(self._cpp, routineCache)
   
   def create_Product(self, node, result, resultName, argNames, add, routineCache):
     assert len(argNames) == 2
@@ -49,10 +49,11 @@ class KernelFactory(Factory):
       rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm())
     )
     generator = product.generator(self._arch, description)
-    generator.generate(self._cpp, routineCache)
+    return generator.generate(self._cpp, routineCache)
   
   def create_Add(self, node, result, resultName, argNames, add, routineCache):
     beta = 1.0 if add else 0.0
+    flops = 0
     for i,child in enumerate(node):
       if isinstance(child, IndexedTensor):
         description = copyscaleadd.Description(
@@ -62,8 +63,9 @@ class KernelFactory(Factory):
           term = IndexedTensorDescription.fromNode(argNames[i], child),
         )
         generator = copyscaleadd.generator(self._arch, description)
-        generator.generate(self._cpp, routineCache)
+        flops += generator.generate(self._cpp, routineCache)
       beta = 1.0
+    return flops
 
   def create_Assign(self, node, result, resultName, argNames, add, routineCache):
     description = copyscaleadd.Description(
@@ -73,4 +75,4 @@ class KernelFactory(Factory):
       term = IndexedTensorDescription.fromNode(self._addArgument(argNames[1]), node.rightTerm()),
     )
     generator = copyscaleadd.generator(self._arch, description)
-    generator.generate(self._cpp, routineCache)
+    return generator.generate(self._cpp, routineCache)

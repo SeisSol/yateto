@@ -25,10 +25,19 @@ class Generic(object):
     class CopyScaleAddBody(object):
       def __call__(s):
         op = '='
+        flop = 0
         if d.beta == 1.0:
           op = '+='
+          flop = 1
         elif d.beta != 0.0:
           raise NotImplementedError
         cpp( '{} {} {};'.format(self._formatTerm(1.0, d.result), op, self._formatTerm(d.alpha, d.term)) )
+        
+        if d.alpha == 0.0:
+          flop -= 1
+        elif d.alpha != 1.0:
+          flop += 1
 
-    forLoops(cpp, d.result.indices, d.loopRanges, CopyScaleAddBody())
+        return flop
+
+    return forLoops(cpp, d.result.indices, d.loopRanges, CopyScaleAddBody())

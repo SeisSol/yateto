@@ -111,6 +111,9 @@ class Cpp:
     indentSpace = self.indent * '  '
     for line in code.splitlines():
       self.out.write(indentSpace + line + '\n')
+  
+  def emptyline(self):
+    self.out.write('\n')
       
   def If(self, argument):
     return Block(self, 'if ({})'.format(argument))

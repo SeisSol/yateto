@@ -78,6 +78,6 @@ class Generic(object):
           self._pointer(cpp, Bname, d.rightTerm, d.loopIndices)
           self._pointer(cpp, Cname, d.result, d.loopIndices)
         generator = gemm.generator(self._arch, gemmDescr)
-        generator.generate(cpp, routineCache)
+        return generator.generate(cpp, routineCache)
     
-    forLoops(cpp, d.loopIndices, d.loopRanges, LoGBody())
+    return forLoops(cpp, d.loopIndices, d.loopRanges, LoGBody())

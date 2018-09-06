@@ -111,7 +111,7 @@ for i in range(maxDegree):
 #~ spp = np.ones(shape=(4,4,4,4))
 #~ spp[0,:,:,:] = 0
 #~ spp[:,0,:,:] = 0
-#~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,4,4), spp)['ijmc'] * Tensor('B', (4,4,4,4), spp=spp)['mkab']
+#~ test = Tensor('D', (4,4,4,4,4,4))['abcijk'] <= Tensor('A', (4,4,4,4))['ijmc'] * Tensor('B', (4,4,4,4))['mkab']
 
 #~ test = Tensor('D', (4,4,4))['mij'] <= Tensor('A', (4,4))['ik'] * Tensor('B', (4,4))['kj'] * Tensor('C', (4,4))['ms']
 #~ test = Tensor('D', (4,4,4,4,4))['hmnyj'] <= Tensor('F', (4,4,4))['hiy'] * Tensor('A', (4,4))['ki'] * Tensor('B', (4,4,4))['zkj'] * Tensor('C', (4,4,4))['msn']
@@ -156,6 +156,5 @@ cache = RoutineCache()
 with Cpp() as cpp:
   KernelGenerator(cpp, arch, cache).generate('test', test)
   InitializerGenerator(cpp, arch).generate([Q, db.kDivM[0], db.kDivM[2], D[1], db.star[1]])
-  
 
 #~ cache.generate('test/routines.cpp')

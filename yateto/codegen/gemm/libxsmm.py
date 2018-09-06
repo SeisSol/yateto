@@ -50,6 +50,8 @@ class Libxsmm(object):
     ))
     
     routineCache.addRoutine(routineName, ExecuteLibxsmm(self._arch, gemm))
+    
+    return 2 * m.size() * n.size() * k.size()
 
 class ExecuteLibxsmm(RoutineGenerator):
   LIBXSMM_GENERATOR = 'libxsmm_gemm_generator'

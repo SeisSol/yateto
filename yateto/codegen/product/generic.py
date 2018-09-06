@@ -20,4 +20,6 @@ class Generic(object):
             d.rightTerm.name, d.rightTerm.memoryLayout.addressString(d.rightTerm.indices)
           )
         )
-    forLoops(cpp, d.result.indices, d.loopRanges, ProductBody())
+        return 2 if d.add else 1
+
+    return forLoops(cpp, d.result.indices, d.loopRanges, ProductBody())

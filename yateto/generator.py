@@ -108,14 +108,3 @@ class Generator(object):
       header.include(self.SUPPORT_LIBRARY_HEADER)
       with header.Namespace(namespace):
         InitializerGenerator(header, self._arch).generate(tensors.values())
-
-    #~ initFileName = os.path.join(outputDir, '{}.{}'.format(self.INIT_FILE_NAME, self.HEADER))
-    #~ 
-    #~ 
-        #~ 
-#~ with Cpp() as cpp:
-  #~ KernelGenerator(cpp, arch, cache).generate('test', test)
-  #~ InitializerGenerator(cpp, arch).generate([Q, db.kDivM[0], db.kDivM[2], D[1], db.star[1]])
-  #~ UnitTestGenerator(cpp, arch).generate('test', unitTest)
-#~ 
-#~ cache.generate('test/routines.cpp')

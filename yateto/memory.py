@@ -110,7 +110,10 @@ class DenseMemoryLayout(MemoryLayout):
     positions = indices.positions(I)
     a = list()
     for p in positions:
-      a.append('{}*({}-{})'.format(self._stride[p], indices[p], self._bbox[p].start))
+      if self._bbox[p].start != 0:
+        a.append('{}*({}-{})'.format(self._stride[p], indices[p], self._bbox[p].start))
+      else:
+        a.append('{}*{}'.format(self._stride[p], indices[p]))
     return ' + '.join(a)
   
   def mayFuse(self, positions):

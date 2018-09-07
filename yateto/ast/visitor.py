@@ -54,6 +54,16 @@ class ComputeOptimalFlopCount(Visitor):
       childFlops += self.visit(child)
     return childFlops + node.nonZeroFlops()
 
+class FindTensors(Visitor):
+  def generic_visit(self, node):
+    tensors = dict()
+    for child in node:
+      tensors.update( self.visit(child) )
+    return tensors
+
+  def visit_IndexedTensor(self, node):
+    return {node.name(): node.tensor}
+
 class PrintEquivalentSparsityPatterns(Visitor):
   def __init__(self, directory):
     if not (pltSpec and colorsSpec and scipyspSpec):

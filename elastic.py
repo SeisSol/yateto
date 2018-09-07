@@ -53,7 +53,7 @@ D = [Q]
 AplusT = [Tensor('AplusT[{}]'.format(dim), (numberOfQuantities, numberOfQuantities)) for dim in range(4)]
 AminusT = [Tensor('AminusT[{}]'.format(dim), (numberOfQuantities, numberOfQuantities)) for dim in range(4)]
 
-g = Generator()
+g = Generator(arch)
 
 volumeSum = Q[qi('kp')]
 for i in range(3):
@@ -86,8 +86,8 @@ for i in range(maxDegree):
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
   #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
-#~ g.generate('test')
-#~ exit()
+g.generate('test/generated_code', 'seissol')
+exit()
 
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
@@ -129,7 +129,7 @@ test = volume
 PrettyPrinter().visit(test)
 
 test = DeduceIndices().visit(test)
-#~ PrettyPrinter().visit(test)
+unitTest = copy.deepcopy(test)
 
 test = EquivalentSparsityPattern().visit(test)
 #~ PrettyPrinter().visit(test)
@@ -156,5 +156,6 @@ cache = RoutineCache()
 with Cpp() as cpp:
   KernelGenerator(cpp, arch, cache).generate('test', test)
   InitializerGenerator(cpp, arch).generate([Q, db.kDivM[0], db.kDivM[2], D[1], db.star[1]])
+  UnitTestGenerator(cpp, arch).generate('test', unitTest)
 
-#~ cache.generate('test/routines.cpp')
+cache.generate('test/routines.cpp')

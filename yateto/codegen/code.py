@@ -72,7 +72,7 @@ class MultiBlock:
 class HeaderGuard:
   def __init__(self, writer, name):
     self.writer = writer
-    self.name = 'GENERATED_{}_H_'.format(name.upper())
+    self.name = name
     
   def __enter__(self):
     self.writer('#ifndef ' + self.name)
@@ -129,6 +129,9 @@ class Cpp:
     
   def Function(self, name, arguments = '', returnType = 'void'):
     return Block(self, '{} {}({})'.format(returnType, name, arguments))
+    
+  def functionDeclaration(self, name, arguments = '', returnType = 'void'):
+    return self.__call__('{} {}({});'.format(returnType, name, arguments))
 
   def Class(self, name):
     return Block(self, 'class ' + name, foot=';')

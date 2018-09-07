@@ -91,4 +91,6 @@ class ExecuteLibxsmm(RoutineGenerator):
     )
 
     os.system(callStr)
+    
+    return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
   

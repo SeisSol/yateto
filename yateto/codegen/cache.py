@@ -18,11 +18,11 @@ class RoutineCache(object):
     if generatorName not in self._generators:
       self._generators[generatorName] = generator
   
-  def generate(self, fileName):
-    with Cpp(fileName) as cpp:
+  def generate(self, header, cppFileName):
+    with Cpp(cppFileName) as cpp:
       for generator in self._generators.values():
         generator.header(cpp)
 
     for name, generator in self._routines.items():
-      generator(name, fileName)
-      
+      declaration = generator(name, cppFileName)
+      header(declaration)

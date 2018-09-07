@@ -148,8 +148,15 @@ class UnitTestFactory(Factory):
     self._cpp('TS_ASSERT_LESS_THAN(sqrt(error), {});'.format(self._arch.epsilon))
 
   def create_Tensor(self, node, resultName, argNames):
-    size = node.memoryLayout().requiredReals()
+    ml = node.memoryLayout()
+    size = ml.requiredReals()
+    
+    memory = ['0.0']*size
+    nz = node.spp().nonzero()
+    for entry in zip(*nz):
+      addr = ml.address(entry)
+      memory[addr] = str(float(addr))
 
-    self._cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, resultName, size, self._arch.alignment))
-    with self._cpp.For('int idx = 0; idx < {}; ++idx'.format(size)):
-      self._cpp( '{}[idx] = idx;'.format(resultName) )
+    self._cpp('{} {}[{}] __attribute__((aligned({}))) = {{{}}};'.format(self._arch.typename, resultName, size, self._arch.alignment, ', '.join(memory)))
+    #~ with self._cpp.For('int idx = 0; idx < {}; ++idx'.format(size)):
+      #~ self._cpp( '{}[idx] = idx;'.format(resultName) )

@@ -1,3 +1,4 @@
+import collections
 import copy
 import sys
 from io import StringIO
@@ -11,7 +12,6 @@ SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 MODIFIERS = 'static constexpr'
 
 class KernelGenerator(Visitor):
-  ARGUMENT_NAME = 'p'
   TEMPORARY_RESULT = '_tmp'
   NAMESPACE = 'kernel'
   EXECUTE_NAME = 'execute'
@@ -27,9 +27,9 @@ class KernelGenerator(Visitor):
     self._cpp = None
     self._arch = arch
     self._routineCache = routineCache
-    self._tmp = dict()
+    self._tmp = collections.OrderedDict()
     self._freeTmp = list()
-    self._tensors = dict()
+    self._tensors = collections.OrderedDict()
     self._factory = None
     self._flops = 0
   
@@ -131,25 +131,23 @@ class KernelGenerator(Visitor):
     else:
       self._tensors[bn] = {g} if g is not None else None
     return node.name()
-  
-  def _addArgument(self, name):
-    return '{}.{}'.format(self.ARGUMENT_NAME, name) if not self._isTemporary(name) else name
-  
-  def _callFactory(self, node, result, names, add):
-    resultName = self._addArgument(result.name)
-    names = [self._addArgument(name) for name in names]
 
+  def _callFactory(self, node, result, names, add):
     self._flops += self._factory.create(node, result.node, result.name, names, add, self._routineCache)
   
   def _getTemporary(self, node):
     size = node.memoryLayout().requiredReals()
     name = None
     minSize = sys.maxsize
-    for n in self._freeTmp:
+    index = -1
+    for i,n in enumerate(self._freeTmp):
       if size <= self._tmp[n] and size <= minSize:
         name = n
         minSize = size
-    
+        index = i
+    if index >= 0:
+      self._freeTmp.pop(index)
+
     if not name:
       name = '{}{}'.format(self.TEMPORARY_RESULT, len(self._tmp))
       self._cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
@@ -174,7 +172,7 @@ class KernelGenerator(Visitor):
 class UnitTestGenerator(Visitor):
   TEMPORARY_RESULT = '_tmp'
   KERNEL_VAR = 'krnl'
-  NAMESPACE = 'unit_test'
+  CXXTEST_PREFIX = 'test'
   
   class Variable(object):
     def __init__(self, tensor):
@@ -182,6 +180,7 @@ class UnitTestGenerator(Visitor):
       group = tensor.group()
       self.name = '_{}_{}'.format(self.baseName, group) if group is not None else self.baseName
       self.utName = '_ut_' + self.name
+      self.viewName = '_view_' + self.utName
       self.tensor = tensor
     
     def groupTemplate(self):
@@ -196,46 +195,53 @@ class UnitTestGenerator(Visitor):
     self._cpp = cpp
     self._arch = arch
     self._tmp = 0
-    self._tensors = dict()
+    self._tensors = collections.OrderedDict()
     self._factory = None
   
   def generate(self, kernelName, node):
-    with self._cpp.Namespace(self.NAMESPACE):
-      cpp = self._cpp
-      functionIO = StringIO()
-      function = ''
-      with Cpp(functionIO) as self._cpp:
-        self._factory = UnitTestFactory(self._cpp, self._arch)
-        self.visit(node)
-        function = functionIO.getvalue()
-      with cpp.Function(kernelName):
-        for var in self._tensors.values():
-          self._factory = UnitTestFactory(cpp, self._arch)
-          self._factory.create(var.tensor, var.name, [])
-          
-          shape = var.tensor.shape()
-          size = 1
-          for s in var.tensor.shape():
-            size *= s
-          cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, var.utName, size, self._arch.alignment))
-          cpp( '{initNS}::{var.baseName}::view{groupTemplate}({var.name}).copyToView({supportNS}::DenseTensorView({var.utName}, {{{shape}}}, {{{start}}}, {{{shape}}}));'.format(
-              initNS = InitializerGenerator.NAMESPACE,
-              supportNS = SUPPORT_LIBRARY_NAMESPACE,
-              groupTemplate = var.groupTemplate(),
-              var=var,
-              shape=', '.join([str(s) for s in shape]),
-              start=', '.join(['0']*len(shape))
-            )
+    cpp = self._cpp
+    functionIO = StringIO()
+    function = ''
+    with Cpp(functionIO) as self._cpp:
+      self._factory = UnitTestFactory(self._cpp, self._arch)
+      self.visit(node)
+      function = functionIO.getvalue()
+    with cpp.Function(self.CXXTEST_PREFIX + kernelName):
+      for var in self._tensors.values():
+        self._factory = UnitTestFactory(cpp, self._arch)
+        self._factory.create(var.tensor, var.name, [])
+        
+        shape = var.tensor.shape()
+        size = 1
+        for s in var.tensor.shape():
+          size *= s
+        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, var.utName, size, self._arch.alignment))
+        
+        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {var.viewName}({var.utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
+            supportNS = SUPPORT_LIBRARY_NAMESPACE,
+            dim=len(shape),
+            arch = self._arch,
+            var=var,
+            shape=', '.join([str(s) for s in shape]),
+            start=', '.join(['0']*len(shape))
           )
-          cpp.emptyline()
-
-        cpp( '{}::{} {}();'.format(KernelGenerator.NAMESPACE, kernelName, self.KERNEL_VAR) )
-        for var in self._tensors.values():
-          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName, var.groupIndex(), var.name) )
-        cpp( '{}.{}();'.format(self.KERNEL_VAR, KernelGenerator.EXECUTE_NAME) )
+        )
+        cpp( '{initNS}::{var.baseName}::view{groupTemplate}({var.name}).copyToView({var.viewName});'.format(
+            initNS = InitializerGenerator.NAMESPACE,
+            supportNS = SUPPORT_LIBRARY_NAMESPACE,
+            groupTemplate=var.groupTemplate(),
+            var=var
+          )
+        )
         cpp.emptyline()
 
-        cpp(function)
+      cpp( '{}::{} {};'.format(KernelGenerator.NAMESPACE, kernelName, self.KERNEL_VAR) )
+      for var in self._tensors.values():
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName, var.groupIndex(), var.name) )
+      cpp( '{}.{}();'.format(self.KERNEL_VAR, KernelGenerator.EXECUTE_NAME) )
+      cpp.emptyline()
+
+      cpp(function)
     
   def generic_visit(self, node):
     names = [self.visit(child) for child in node]
@@ -319,21 +325,19 @@ class InitializerGenerator(object):
         assert collect[baseName][group] == tensor
     with self._cpp.Namespace(self.NAMESPACE):
       for baseName,tensorGroup in collect.items():
-        with self._cpp.Class(baseName):
+        with self._cpp.Namespace(baseName):
           self.visit(tensorGroup)
 
   def visit(self, group):
-    self._cpp.label('public')
-
     maxIndex = max(group.keys())
 
-    numberType = '{} {}'.format(MODIFIERS, self._arch.uintTypename)
+    numberType = '{} {} const'.format(MODIFIERS, self._arch.uintTypename)
     self._array(numberType, self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex)
     self._array(numberType, self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
     self._array(numberType, self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
     self._array(numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex)
     
-    realType = '{} {}'.format(MODIFIERS, self._arch.typename)
+    realType = '{} {} const'.format(MODIFIERS, self._arch.typename)
     realPtrType = realType + '*'
     valueNames = dict()
     if maxIndex is not None:
@@ -346,7 +350,7 @@ class InitializerGenerator(object):
             memory[memLayout.address(idx)] = x
           name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
           valueNames[k] = ['&{}[0]'.format(name)]
-          self._cpp('{} {} = {{{}}};'.format(realType, name, ', '.join(memory)))
+          self._cpp('{} {}[] = {{{}}};'.format(realType, name, ', '.join(memory)))
       if len(valueNames) > 0:
         self._array(realPtrType, self.VALUES_BASENAME, valueNames, maxIndex)
 
@@ -354,7 +358,7 @@ class InitializerGenerator(object):
     if maxIndex is None:
       ml = next(iter(group.values())).memoryLayout()
       tv = self._tensorViewGenerator(ml)
-      with self._cpp.Function('view', arguments=viewArgs, returnType='static ' + tv.typename(len(ml.shape()), self._arch)):
+      with self._cpp.Function('view', arguments=viewArgs, returnType=tv.typename(len(ml.shape()), self._arch)):
         tv.generate(self._cpp, ml, self._arch, None)
     else:
       self._cpp('template<int n> struct view_type {};')
@@ -364,7 +368,7 @@ class InitializerGenerator(object):
         tv = self._tensorViewGenerator(ml)
         typename = tv.typename(len(ml.shape()), self._arch)
         self._cpp( 'template<> struct view_type<{}> {{ typedef {} type; }};'.format(k, typename) )
-        with self._cpp.Function('view<{}>'.format(k), arguments=viewArgs, returnType='template<> static {}'.format(typename)):
+        with self._cpp.Function('view<{}>'.format(k), arguments=viewArgs, returnType='template<> {}'.format(typename)):
           tv.generate(self._cpp, ml, self._arch, k)
   
   def _array(self, typ, name, group, maxIndex):

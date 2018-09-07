@@ -42,7 +42,7 @@ class Libxsmm(object):
     
     routineName = self.generateRoutineName(gemm)
     
-    cpp( '{}({}, {}, {}, NULL, NULL, NULL);'.format(
+    cpp( '{}({}, {}, {}, nullptr, nullptr, nullptr);'.format(
       routineName,
       self._pointer(d.leftTerm, (m.start, k.start)),
       self._pointer(d.rightTerm, (k.start, n.start)),

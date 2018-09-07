@@ -136,6 +136,9 @@ class Cpp:
   def Class(self, name):
     return Block(self, 'class ' + name, foot=';')
   
+  def classDeclaration(self, name):
+    return self.__call__('class {};'.format(name))
+  
   def forwardStruct(self, name):
     self.__call__('struct {};'.format(name))
 

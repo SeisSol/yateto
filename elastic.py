@@ -13,13 +13,13 @@ from yateto.arch import getArchitectureByIdentifier
 import itertools
 import numpy as np
 
-maxDegree = 1
+maxDegree = 5
 order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
 
-arch = getArchitectureByIdentifier('dknl')
+arch = getArchitectureByIdentifier('dsnb')
 DenseMemoryLayout.setAlignmentArch(arch)
 
 multipleSims = True
@@ -81,7 +81,8 @@ for i in range(maxDegree):
   derivative = D[i+1][qi('kp')] <= derivativeSum
 
   derivatives.append(derivative)
-  g.add('derivative[{}]'.format(i), derivative)
+  #~ g.add('derivative[{}]'.format(i), derivative)
+  g.add('derivative{}'.format(i), derivative)
   
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)

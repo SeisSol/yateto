@@ -5,15 +5,13 @@ from .node import Op
 
 # Optional modules
 import importlib.util
-pltSpec = importlib.util.find_spec('matplotlib.pylab')
-colorsSpec = importlib.util.find_spec('matplotlib.colors')
-scipyspSpec = importlib.util.find_spec('scipy.sparse')
+mplSpec = importlib.util.find_spec('matplotlib')
+pltSpec = importlib.util.find_spec('matplotlib.pylab') if mplSpec else None
+colorsSpec = importlib.util.find_spec('matplotlib.colors') if mplSpec else None
 if pltSpec:
   plt = pltSpec.loader.load_module()
 if colorsSpec:
   colors = colorsSpec.loader.load_module()
-if scipyspSpec:
-  scipysp = scipyspSpec.loader.load_module()
 
 # Similar as ast.NodeVisitor
 class Visitor(object):
@@ -66,8 +64,8 @@ class FindTensors(Visitor):
 
 class PrintEquivalentSparsityPatterns(Visitor):
   def __init__(self, directory):
-    if not (pltSpec and colorsSpec and scipyspSpec):
-      raise NotImplementedError('Missing modules matplotlib and scipy')
+    if not (pltSpec and colorsSpec):
+      raise NotImplementedError('Missing modules matplotlib')
     self._directory = directory
     self._prefix = ''
     self._cmap = colors.ListedColormap(['white', 'black'])

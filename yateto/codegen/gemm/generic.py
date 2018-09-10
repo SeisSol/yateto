@@ -20,21 +20,32 @@ class Generic(object):
     Bstride, Boffset = self._strideOffset(d.rightTerm, (k.start, n.start), d.transB)
     Cstride, Coffset = self._strideOffset(d.result, (m.start, n.start), False)
     
+    CAddr = '{Cname}[{Coffset} + {Cstride[0]}*m + {Cstride[1]}*n]'.format(
+			Cname = d.result.name,
+			Coffset = Coffset,
+			Cstride = Cstride,
+    )
+    
     with cpp.For('int n = 0; n < {0}; ++n'.format(n.size())):
+      if d.beta != 1.0:
+        with cpp.For('int m = 0; m < {0}; ++m'.format(m.size())):
+          cpp('{} = {}{};'.format(
+              CAddr,
+              d.beta,
+              ' * ' + CAddr if d.beta != 0.0 else ''
+            )
+          )
       with cpp.For('int k = 0; k < {0}; ++k'.format(k.size())):
         with cpp.For('int m = 0; m < {0}; ++m'.format(m.size())):
-          cpp( '{Cname}[{Coffset} + {Cstride[0]}*m + {Cstride[1]}*n] = {alpha} * {Aname}[{Aoffset} + {Astride[0]}*m + {Astride[1]}*k] * {Bname}[{Boffset} + {Bstride[0]}*k + {Bstride[1]}*n] + {beta} * {Cname}[{Coffset} + {Cstride[0]}*m + {Cstride[1]}*n];'.format(
-              Cname = d.result.name,
-              Coffset = Coffset,
-              Cstride = Cstride,
+          cpp( '{CAddr} += {alpha} * {Aname}[{Aoffset} + {Astride[0]}*m + {Astride[1]}*k] * {Bname}[{Boffset} + {Bstride[0]}*k + {Bstride[1]}*n];'.format(
+              CAddr = CAddr,
               Aname = d.leftTerm.name,
               Aoffset = Aoffset,
               Astride = Astride,
               Bname = d.rightTerm.name,
               Boffset = Boffset,
               Bstride = Bstride,
-              alpha = d.alpha,
-              beta = d.beta
+              alpha = d.alpha
             )
           )
 

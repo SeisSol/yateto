@@ -155,7 +155,7 @@ class UnitTestFactory(Factory):
     nz = node.spp().nonzero()
     for entry in zip(*nz):
       addr = ml.address(entry)
-      memory[addr] = str(float(addr))
+      memory[addr] = str(float(addr)+1.0)
 
     self._cpp('{} {}[{}] __attribute__((aligned({}))) = {{{}}};'.format(self._arch.typename, resultName, size, self._arch.alignment, ', '.join(memory)))
     #~ with self._cpp.For('int idx = 0; idx < {}; ++idx'.format(size)):

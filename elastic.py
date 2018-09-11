@@ -10,6 +10,8 @@ from yateto.codegen.code import Cpp
 from yateto.codegen.cache import RoutineCache
 from yateto.codegen.visitor import *
 from yateto.arch import getArchitectureByIdentifier
+import yateto.controlflow.visitor as cfv
+import yateto.controlflow.transformer as cft
 import itertools
 import numpy as np
 
@@ -23,7 +25,7 @@ arch = getArchitectureByIdentifier('dsnb')
 DenseMemoryLayout.setAlignmentArch(arch)
 
 multipleSims = True
-transpose = True
+#~ transpose = True
 multipleSims = False
 transpose = False
 
@@ -87,8 +89,8 @@ for i in range(maxDegree):
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
   #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
-g.generate('test/generated_code', 'seissol')
-exit()
+#~ g.generate('test/generated_code', 'seissol')
+#~ exit()
 
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
@@ -124,10 +126,12 @@ exit()
 #~ print(spp)
 #~ test = Tensor('D', (4,4,4))['zij'] <= Tensor('B', (4,4,4),spp=spp)['zik'] * Tensor('C', (4,4))['kj']
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
-#~ test = derivatives[4]
-test = volume
+test = derivatives[4]
+#~ test = volume
+#~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lq')] * db.star[0]['qp'] + db.kDivM[1][t('kl')] * I[qi('lq')] * db.star[1]['qp']
+#~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * I[qi('lq')] * db.star[0]['qp'] + db.kDivM[1][t('kl')] * I[qi('lq')] * db.star[1]['qp']
 #~ test = localFlux
-PrettyPrinter().visit(test)
+#~ PrettyPrinter().visit(test)
 
 test = DeduceIndices().visit(test)
 unitTest = copy.deepcopy(test)
@@ -153,10 +157,35 @@ test = ImplementContractions().visit(test)
 
 PrettyPrinter().visit(test)
 
-cache = RoutineCache()
-with Cpp() as cpp:
-  KernelGenerator(cpp, arch, cache).generate('test', test)
-  InitializerGenerator(cpp, arch).generate([Q, db.kDivM[0], db.kDivM[2], D[1], db.star[1]])
-  UnitTestGenerator(cpp, arch).generate('test', unitTest)
+ast2cf = cfv.AST2ControlFlow()
+ast2cf.visit(test)
+cfg = ast2cf.cfg()
+cfv.PrettyPrinter().visit(cfg)
 
-cache.generate('test/routines.cpp')
+print('Greedy reorder')
+cfg = cft.GreedyReorder().visit(cfg)
+cfv.PrettyPrinter().visit(cfg)
+
+print('Find living')
+cfg = cft.FindLiving().visit(cfg)
+cfv.PrettyPrinter(True).visit(cfg)
+
+print('Eliminate tmp')
+cfg = cft.EliminateTemporaries().visit(cfg)
+cfv.PrettyPrinter().visit(cfg)
+
+print('Merge actions')
+cfg = cft.MergeActions().visit(cfg)
+cfv.PrettyPrinter().visit(cfg)
+
+print('Reuse temporaries')
+cfg = cft.ReuseTemporaries().visit(cfg)
+cfv.PrettyPrinter().visit(cfg)
+
+#~ cache = RoutineCache()
+#~ with Cpp() as cpp:
+  #~ KernelGenerator(cpp, arch, cache).generate('test', test)
+  #~ InitializerGenerator(cpp, arch).generate([Q, db.kDivM[0], db.kDivM[2], D[1], db.star[1]])
+  #~ UnitTestGenerator(cpp, arch).generate('test', unitTest)
+#~ 
+#~ cache.generate('test/routines.cpp')

@@ -129,7 +129,7 @@ for i in range(maxDegree):
 test = derivatives[4]
 #~ test = volume
 #~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lq')] * db.star[0]['qp'] + db.kDivM[1][t('kl')] * I[qi('lq')] * db.star[1]['qp']
-#~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * I[qi('lq')] * db.star[0]['qp'] + db.kDivM[1][t('kl')] * I[qi('lq')] * db.star[1]['qp']
+#~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')]) * db.star[1]['qp']
 #~ test = localFlux
 #~ PrettyPrinter().visit(test)
 

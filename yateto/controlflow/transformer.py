@@ -27,7 +27,7 @@ class EliminateTemporaries(object):
       u = cfg[i]
       v = cfg[i+1]
       for term in u.action.simpleTerms():
-        if not u.action.result.isGlobal() and term not in v.living:
+        if term.writable and not u.action.result.isGlobal() and term not in v.living:
           by = term
           when = u.action.result
           for j in range(i,n-1):

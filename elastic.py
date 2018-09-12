@@ -128,10 +128,12 @@ for i in range(maxDegree):
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
 test = derivatives[4]
 #~ test = volume
-#~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lq')] * db.star[0]['qp'] + db.kDivM[1][t('kl')] * I[qi('lq')] * db.star[1]['qp']
+#~ test = Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')]
+#~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + I[qi('kp')]
+#~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lp')] + db.kDivM[1][t('kl')] * Q[qi('lp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')]) * db.star[1]['qp']
 #~ test = localFlux
-#~ PrettyPrinter().visit(test)
+PrettyPrinter().visit(test)
 
 test = DeduceIndices().visit(test)
 unitTest = copy.deepcopy(test)
@@ -157,21 +159,26 @@ test = ImplementContractions().visit(test)
 
 PrettyPrinter().visit(test)
 
+print('Initial CF')
 ast2cf = cfv.AST2ControlFlow()
 ast2cf.visit(test)
 cfg = ast2cf.cfg()
-cfv.PrettyPrinter().visit(cfg)
-
-print('Greedy reorder')
-cfg = cft.GreedyReorder().visit(cfg)
 cfv.PrettyPrinter().visit(cfg)
 
 print('Find living')
 cfg = cft.FindLiving().visit(cfg)
 cfv.PrettyPrinter(True).visit(cfg)
 
-print('Eliminate tmp')
-cfg = cft.EliminateTemporaries().visit(cfg)
+print('Substitute forward')
+cfg = cft.SubstituteForward().visit(cfg)
+cfv.PrettyPrinter().visit(cfg)
+
+print('Substitute backward')
+cfg = cft.SubstituteBackward().visit(cfg)
+cfv.PrettyPrinter().visit(cfg)
+
+print('Remove empty statements')
+cfg = cft.RemoveEmptyStatements().visit(cfg)
 cfv.PrettyPrinter().visit(cfg)
 
 print('Merge actions')

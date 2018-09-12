@@ -16,7 +16,7 @@ class AST2ControlFlow(Visitor):
     variables = [self.visit(child) for child in node]
     
     result = self._nextTemporary()
-    action = ProgramAction(result, Expression(node, variables))
+    action = ProgramAction(result, Expression(node, variables), False)
     self._addAction(action)
     
     return result
@@ -27,12 +27,12 @@ class AST2ControlFlow(Visitor):
 
     variables.sort(key=lambda var: int(not var.writable) + int(not var.isGlobal()))
 
-    lastTmp = variables[0]
-    for var in variables[1:]:
-      tmp = self._nextTemporary()
-      action = ProgramAction(tmp, lastTmp, var)
-      lastTmp = tmp
+    tmp = self._nextTemporary()
+    add = False
+    for var in variables:
+      action = ProgramAction(tmp, var, add)
       self._addAction(action)
+      add = True
     
     return tmp
   
@@ -40,12 +40,8 @@ class AST2ControlFlow(Visitor):
     self._writable = self._writable | {node[0].name()}
     variables = [self.visit(child) for child in node]
     
-    last = self._cfg[-1]
-    if variables[0] in last.action.variables():
-      action = ProgramAction(variables[0], variables[1])
-      self._addAction(action)
-    else:
-      last.action.result = variables[0]
+    action = ProgramAction(variables[0], variables[1], False)
+    self._addAction(action)
     
     return variables[0]
   
@@ -67,6 +63,6 @@ class PrettyPrinter(object):
   def visit(self, cfg):
     for pp in cfg:
       if self._printPPState and pp.living:
-        print('Living: ' + str(pp.living))
+        print(pp.living)
       if pp.action:
-        print('  {} = {}'.format(pp.action.result, ' + '.join([str(term) for term in pp.action])))
+        print( '  {} {} {}'.format(pp.action.result, '+=' if pp.action.add else '=', pp.action.term) )

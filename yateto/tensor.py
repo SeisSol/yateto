@@ -20,7 +20,7 @@ class Tensor(object):
     if any(x < 1 for x in shape):
       raise ValueError('shape must not contain entries smaller than 1')
     
-    if not re.match(self.VALID_NAME, name):
+    if not self.isValidName(name):
       raise ValueError('Tensor name invalid (must match regexp {}): {}'.format(self.VALID_NAME, name))
 
     self._name = name
@@ -44,7 +44,10 @@ class Tensor(object):
       self._spp = ones(shape, dtype=bool, order=self.DEFAULT_ORDER)
     
     self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout.fromSpp(self._spp, alignStride=alignStride)
-    
+  
+  @classmethod
+  def isValidName(cls, name):
+    return re.match(cls.VALID_NAME, name) is not None
 
   def __getitem__(self, indexNames):
     return IndexedTensor(self, indexNames)

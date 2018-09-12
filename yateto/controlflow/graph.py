@@ -1,3 +1,4 @@
+from ..tensor import Tensor
 from ..ast.node import Node
 
 class Variable(object):
@@ -12,7 +13,7 @@ class Variable(object):
     return by if self == when else self
   
   def isGlobal(self):
-    return not self.name.startswith('_')
+    return Tensor.isValidName(self.name)
 
   def isLocal(self):
     return not self.isGlobal()
@@ -46,46 +47,28 @@ class Expression(object):
     return '{}({})'.format(type(self.node).__name__, ', '.join([str(var) for var in self._variables]))
 
 class ProgramAction(object):
-  def __init__(self, result, *terms):
+  def __init__(self, result, term, add):
     self.result = result
-    self.terms = list(terms)
+    self.term = term
+    self.add = add
+
+  def isRHSExpression(self):
+    return isinstance(self.term, Expression)
+
+  def isRHSVariable(self):
+    return not self.isRHSExpression()
   
-  def __iter__(self):
-    return iter(self.terms)
-  
-  def _isExpression(self, term):
-    return isinstance(term, Expression)
-  
-  def isPlusEquals(self):
-    return len(self.terms) > 1 and self.result in self.simpleTerms()
-  
-  def containsExpression(self):
-    return any([self._isExpression(term) for term in self.terms])
-  
-  def simpleTerms(self):
-    return [term for term in self.terms if not self._isExpression(term)]
-  
-  def prependTerms(self, *terms):
-    newTerms = terms
-    newTerms.extend(self.terms)
-    self.terms = newTerms
-    
+  def isCompound(self):
+    return self.add
+
   def variables(self):
-    V = set()
-    for term in self.terms:
-      V = V | term.variables()
-    return V
-    
-  def localVariables(self):
-    V = set()
-    for term in self.terms:
-      V = V | set([var for var in term.variables() if var.isLocal()])
-    if self.result.isLocal():
-      return V | {self.result}
+    V = self.term.variables()
+    if self.add:
+      V = V | self.result.variables()
     return V
   
-  def substituted(self, when, by):
-    return ProgramAction(self.result.substituted(when, by), *[term.substituted(when, by) for term in self.terms])    
+  def substituted(self, when, by, result = True, term = True):
+    return ProgramAction(self.result.substituted(when, by) if result else self.result, self.term.substituted(when, by) if term else self.term, self.add)
 
 class ProgramPoint(object):
   def __init__(self, action):

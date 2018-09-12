@@ -5,6 +5,7 @@ from io import StringIO
 from ..memory import DenseMemoryLayout
 from ..ast.node import Add, IndexedTensor
 from ..ast.visitor import Visitor, ComputeOptimalFlopCount
+from ..controlflow.visitor import SortedGlobalsList
 from .code import Cpp
 from .factory import *
 
@@ -198,7 +199,8 @@ class UnitTestGenerator(Visitor):
     self._tensors = collections.OrderedDict()
     self._factory = None
   
-  def generate(self, kernelName, node):
+  def generate(self, kernelName, cfg):
+    print(SortedGlobalsList().visit(cfg))
     cpp = self._cpp
     functionIO = StringIO()
     function = ''

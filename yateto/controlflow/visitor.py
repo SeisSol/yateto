@@ -56,6 +56,14 @@ class AST2ControlFlow(Visitor):
     self._tmp += 1
     return Variable(name, True)
 
+class SortedGlobalsList(object):
+  def visit(self, cfg):
+    V = set()
+    for pp in cfg:
+      if pp.action:
+        V = V | pp.action.result.variables() | pp.action.variables()
+    return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
+
 class PrettyPrinter(object):
   def __init__(self, printPPState = False):
     self._printPPState = printPPState

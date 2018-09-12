@@ -6,14 +6,20 @@ from .ast.transformer import *
 from .codegen.cache import *
 from .codegen.code import Cpp
 from .codegen.visitor import *
+from .controlflow.visitor import AST2ControlFlow
+from .controlflow.transformer import *
 
 class Kernel(object):
   def __init__(self, name, ast):
     self.name = name
     self.ast = ast
+    self.cfg = None
   
   def prepareUntilUnitTest(self):
     self.ast = DeduceIndices().visit(self.ast)
+    ast2cf = AST2ControlFlow()
+    ast2cf.visit(self.ast)
+    self.cfg = ast2cf.cfg()
   
   def prepareUntilCodeGen(self):
     self.ast = EquivalentSparsityPattern().visit(self.ast)
@@ -95,7 +101,7 @@ class Generator(object):
         with cpp.Class('{}::{}::{} : public CxxTest::TestSuite'.format(namespace, self.TEST_NAMESPACE, self.TEST_CLASS)):
           cpp.label('public')
           for kernel in self._kernels:
-            UnitTestGenerator(cpp, self._arch).generate(kernel.name, kernel.ast)
+            UnitTestGenerator(cpp, self._arch).generate(kernel.name, kernel.cfg)
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:

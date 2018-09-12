@@ -67,7 +67,7 @@ localFluxSum = Q[qi('kp')]
 for i in range(4):
   localFluxSum += db.rDivM[i][t('km')] * db.fMrT[i][t('ml')] * I[qi('lq')] * AplusT[i]['qp']
 localFlux = (Q[qi('kp')] <= localFluxSum)
-g.add('localFlux', localFlux)
+#~ g.add('localFlux', localFlux)
 
 neighbourFlux = lambda i,j,h: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i][t('km')] * db.fP[h][t('mn')] * db.rT[j][t('nl')] * I[qi('lq')] * AminusT[i]['qp']
 g.addFamily('neighboringFlux', simpleParameterSpace(4,4,3), neighbourFlux)
@@ -84,13 +84,13 @@ for i in range(maxDegree):
 
   derivatives.append(derivative)
   #~ g.add('derivative[{}]'.format(i), derivative)
-  g.add('derivative{}'.format(i), derivative)
+  #~ g.add('derivative{}'.format(i), derivative)
   
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
   #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
-#~ g.generate('test/generated_code', 'seissol')
-#~ exit()
+g.generate('test/generated_code', 'seissol')
+exit()
 
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/volume/').visit(volume)
 #~ PrintEquivalentSparsityPatterns('sparsityPatterns/localFlux/').visit(localFlux)
@@ -126,9 +126,9 @@ for i in range(maxDegree):
 #~ print(spp)
 #~ test = Tensor('D', (4,4,4))['zij'] <= Tensor('B', (4,4,4),spp=spp)['zik'] * Tensor('C', (4,4))['kj']
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
-test = derivatives[4]
+#~ test = derivatives[4]
 #~ test = volume
-#~ test = Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')]
+test = Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + I[qi('kp')]
 #~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lp')] + db.kDivM[1][t('kl')] * Q[qi('lp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')]) * db.star[1]['qp']

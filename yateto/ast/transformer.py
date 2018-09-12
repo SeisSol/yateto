@@ -205,6 +205,8 @@ class EquivalentSparsityPattern(Transformer):
   
   def getEqspp(self, terms, targetIndices):
     minTree = opt.strengthReduction(terms, targetIndices)
+    if isinstance(minTree, IndexedTensor):
+      return minTree.eqspp()
     minTree.setIndexPermutation(targetIndices)
     minTree = FindContractions().visit(minTree)
     return minTree.computeSparsityPattern(*[child.eqspp() for child in minTree])

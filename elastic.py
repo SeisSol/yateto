@@ -126,9 +126,9 @@ exit()
 #~ print(spp)
 #~ test = Tensor('D', (4,4,4))['zij'] <= Tensor('B', (4,4,4),spp=spp)['zik'] * Tensor('C', (4,4))['kj']
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
-#~ test = derivatives[4]
+test = derivatives[4]
 #~ test = volume
-test = Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')]
+#~ test = Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + I[qi('kp')]
 #~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lp')] + db.kDivM[1][t('kl')] * Q[qi('lp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')]) * db.star[1]['qp']
@@ -188,6 +188,10 @@ cfv.PrettyPrinter().visit(cfg)
 print('Reuse temporaries')
 cfg = cft.ReuseTemporaries().visit(cfg)
 cfv.PrettyPrinter().visit(cfg)
+
+print('Determine local initialization')
+cfg = cft.DetermineLocalInitialization().visit(cfg)
+cfv.PrettyPrinter(True).visit(cfg)
 
 #~ cache = RoutineCache()
 #~ with Cpp() as cpp:

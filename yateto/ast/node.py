@@ -12,6 +12,9 @@ class Node(object):
   def size(self):
     return self.indices.size()
   
+  def shape(self):
+    return self.indices.shape()
+  
   def nonZeroFlops(self):
     raise NotImplementedError
 

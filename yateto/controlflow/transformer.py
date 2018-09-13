@@ -102,3 +102,29 @@ class ReuseTemporaries(object):
             pass
         usedLocals = usedLocals | u.action.result.variables()
     return cfg
+
+class DetermineLocalInitialization(object):
+  def visit(self, cfg, sizeFun):
+    lcls = dict()
+    for pp in cfg:
+      ua = pp.action
+      if ua and not ua.isCompound() and ua.result.isLocal():
+        size = 0
+        if ua.isRHSExpression():
+          size = sizeFun(ua.term.node)
+        elif ua.term.isGlobal():
+          size = sizeFun(ua.term.tensor)
+        elif ua.term in lcls:
+          size = lcls[ua.term]
+        else:
+          raise RuntimeError('Control flow graph: Size of local variable is unclear.')
+        if ua.result in lcls:
+          size = max(size, lcls[ua.result])
+        lcls[ua.result] = size
+    for pp in cfg:
+      pp.initLocal = dict()
+      ua = pp.action
+      if ua and not ua.isCompound() and ua.result.isLocal() and ua.result in lcls:
+        pp.initLocal[ua.result] = lcls[ua.result]
+        lcls.pop(ua.result)
+    return cfg

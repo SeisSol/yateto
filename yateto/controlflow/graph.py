@@ -1,10 +1,10 @@
-from ..tensor import Tensor
 from ..ast.node import Node
 
 class Variable(object):
-  def __init__(self, name, writable):
+  def __init__(self, name, writable, tensor = None):
     self.name = name
     self.writable = writable
+    self.tensor = tensor
   
   def variables(self):
     return {self}
@@ -13,7 +13,7 @@ class Variable(object):
     return by if self == when else self
   
   def isGlobal(self):
-    return Tensor.isValidName(self.name)
+    return self.tensor is not None
 
   def isLocal(self):
     return not self.isGlobal()
@@ -29,7 +29,7 @@ class Variable(object):
   
   def __eq__(self, other):
     isEq = self.name == other.name
-    assert not isEq or self.writable == other.writable
+    assert not isEq or (self.writable == other.writable and self.tensor == other.tensor)
     return isEq
 
 class Expression(object):
@@ -39,7 +39,10 @@ class Expression(object):
   
   def variables(self):
     return set([var for var in self._variables])
-  
+
+  def variableList(self):
+    return self._variables
+
   def substituted(self, when, by):
     return Expression(self.node, [var.substituted(when, by) for var in self._variables])
   
@@ -74,4 +77,5 @@ class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
     self.living = None
+    self.initLocal = None
     

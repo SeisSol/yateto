@@ -6,6 +6,7 @@ from ..memory import DenseMemoryLayout
 from ..ast.node import Add, IndexedTensor
 from ..ast.visitor import Visitor, ComputeOptimalFlopCount
 from ..controlflow.visitor import SortedGlobalsList
+from ..controlflow.transformer import DetermineLocalInitialization
 from .code import Cpp
 from .factory import *
 
@@ -175,75 +176,109 @@ class UnitTestGenerator(Visitor):
   KERNEL_VAR = 'krnl'
   CXXTEST_PREFIX = 'test'
   
-  class Variable(object):
-    def __init__(self, tensor):
-      self.baseName = tensor.baseName()
-      group = tensor.group()
-      self.name = '_{}_{}'.format(self.baseName, group) if group is not None else self.baseName
-      self.utName = '_ut_' + self.name
-      self.viewName = '_view_' + self.utName
-      self.tensor = tensor
-    
-    def groupTemplate(self):
-      group = self.tensor.group()
-      return '<{}>'.format(group) if group is not None else ''
-
-    def groupIndex(self):
-      group = self.tensor.group()
-      return '[{}]'.format(group) if group is not None else ''
-  
   def __init__(self, cpp, arch):
     self._cpp = cpp
     self._arch = arch
-    self._tmp = 0
-    self._tensors = collections.OrderedDict()
-    self._factory = None
+  
+  def _name(self, var):
+    if var.isLocal():
+      return str(var)
+    baseName = var.tensor.baseName()
+    group = var.tensor.group()
+    return '_{}_{}'.format(baseName, group) if group is not None else baseName
+
+  def _utName(self, var):
+    if var.isLocal():
+      return str(var)
+    return '_ut_' + self._name(var)
+
+  def _viewName(self, var):
+    return '_view_' + self._utName(var)
+
+  def _groupTemplate(self, var):
+    group = var.tensor.group()
+    return '<{}>'.format(group) if group is not None else ''
+
+  def _groupIndex(self, var):
+    group = var.tensor.group()
+    return '[{}]'.format(group) if group is not None else ''
+
+  def _sizeFun(self, term):
+    return DenseMemoryLayout(term.shape()).requiredReals()
   
   def generate(self, kernelName, cfg):
-    print(SortedGlobalsList().visit(cfg))
+    cfg = DetermineLocalInitialization().visit(cfg, self._sizeFun)
+    variables = SortedGlobalsList().visit(cfg)
     cpp = self._cpp
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as self._cpp:
       self._factory = UnitTestFactory(self._cpp, self._arch)
-      self.visit(node)
+      #~ self.visit(node)
       function = functionIO.getvalue()
     with cpp.Function(self.CXXTEST_PREFIX + kernelName):
-      for var in self._tensors.values():
+      for var in variables:
         self._factory = UnitTestFactory(cpp, self._arch)
-        self._factory.create(var.tensor, var.name, [])
+        self._factory.tensor(var.tensor, self._name(var))
+        
+        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._utName(var), self._sizeFun(var.tensor), self._arch.alignment))
         
         shape = var.tensor.shape()
-        size = 1
-        for s in var.tensor.shape():
-          size *= s
-        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, var.utName, size, self._arch.alignment))
-        
-        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {var.viewName}({var.utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
+        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             dim=len(shape),
             arch = self._arch,
-            var=var,
+            utName=self._utName(var),
+            viewName=self._viewName(var),
             shape=', '.join([str(s) for s in shape]),
             start=', '.join(['0']*len(shape))
           )
         )
-        cpp( '{initNS}::{var.baseName}::view{groupTemplate}({var.name}).copyToView({var.viewName});'.format(
+        cpp( '{initNS}::{baseName}::view{groupTemplate}({name}).copyToView({viewName});'.format(
             initNS = InitializerGenerator.NAMESPACE,
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            groupTemplate=var.groupTemplate(),
-            var=var
+            groupTemplate=self._groupTemplate(var),
+            baseName=var.tensor.baseName(),
+            name=self._name(var),
+            viewName=self._viewName(var)
           )
         )
         cpp.emptyline()
 
       cpp( '{}::{} {};'.format(KernelGenerator.NAMESPACE, kernelName, self.KERNEL_VAR) )
-      for var in self._tensors.values():
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName, var.groupIndex(), var.name) )
+      for var in variables:
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var), self._name(var)) )
       cpp( '{}.{}();'.format(self.KERNEL_VAR, KernelGenerator.EXECUTE_NAME) )
       cpp.emptyline()
 
-      cpp(function)
+      factory = UnitTestFactory(cpp, self._arch)
+      
+      localML = dict()
+      for pp in cfg:
+        for name, size in pp.initLocal.items():
+          cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
+        action = pp.action
+        if action:
+          if action.isRHSExpression():
+            factory.create(action.term.node, self._utName(action.result), [self._utName(var) for var in action.term.variableList()], action.add)
+            if action.result.isLocal():
+              localML[action.result] = DenseMemoryLayout(action.term.node.shape())
+          else:
+            if action.term.isGlobal():
+              termML = DenseMemoryLayout(action.term.tensor.shape())
+              if action.result.isLocal():
+                localML[action.result] = termML
+                resultML = termML
+              else:
+                resultML = DenseMemoryLayout(action.result.tensor.shape())
+            else:
+              termML = localML[action.term]
+              resultML = localML[action.result] if action.result.isLocal() else DenseMemoryLayout(action.result.tensor.shape())
+            factory.simple(self._utName(action.result), resultML, self._utName(action.term), termML, action.add)
+      for var in variables:
+        if var.writable:
+          factory.compare(self._utName(var), DenseMemoryLayout(var.tensor.shape()), self._name(var), var.tensor.memoryLayout())
+      
     
   def generic_visit(self, node):
     names = [self.visit(child) for child in node]

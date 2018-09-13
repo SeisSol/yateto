@@ -46,7 +46,7 @@ class AST2ControlFlow(Visitor):
     return variables[0]
   
   def visit_IndexedTensor(self, node):
-    return Variable(node.name(), node.name() in self._writable)
+    return Variable(node.name(), node.name() in self._writable, node.tensor)
   
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
@@ -70,7 +70,10 @@ class PrettyPrinter(object):
 
   def visit(self, cfg):
     for pp in cfg:
-      if self._printPPState and pp.living:
-        print(pp.living)
+      if self._printPPState:
+        if pp.living:
+          print('L =', pp.living)
+        if pp.initLocal:
+          print('Init =', pp.initLocal)
       if pp.action:
         print( '  {} {} {}'.format(pp.action.result, '+=' if pp.action.add else '=', pp.action.term) )

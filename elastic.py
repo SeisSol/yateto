@@ -67,7 +67,7 @@ localFluxSum = Q[qi('kp')]
 for i in range(4):
   localFluxSum += db.rDivM[i][t('km')] * db.fMrT[i][t('ml')] * I[qi('lq')] * AplusT[i]['qp']
 localFlux = (Q[qi('kp')] <= localFluxSum)
-#~ g.add('localFlux', localFlux)
+g.add('localFlux', localFlux)
 
 neighbourFlux = lambda i,j,h: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i][t('km')] * db.fP[h][t('mn')] * db.rT[j][t('nl')] * I[qi('lq')] * AminusT[i]['qp']
 g.addFamily('neighboringFlux', simpleParameterSpace(4,4,3), neighbourFlux)
@@ -84,7 +84,7 @@ for i in range(maxDegree):
 
   derivatives.append(derivative)
   #~ g.add('derivative[{}]'.format(i), derivative)
-  #~ g.add('derivative{}'.format(i), derivative)
+  g.add('derivative{}'.format(i), derivative)
   
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)

@@ -1,10 +1,6 @@
 import collections
-import copy
-import sys
 from io import StringIO
 from ..memory import DenseMemoryLayout
-from ..ast.node import Add, IndexedTensor
-from ..ast.visitor import Visitor, ComputeOptimalFlopCount
 from ..controlflow.visitor import SortedGlobalsList
 from ..controlflow.transformer import DetermineLocalInitialization
 from .code import Cpp
@@ -13,42 +9,90 @@ from .factory import *
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 MODIFIERS = 'static constexpr'
 
-class KernelGenerator(Visitor):
-  TEMPORARY_RESULT = '_tmp'
+class KernelGenerator(object):  
+  def __init__(self, arch):
+    self._arch = arch
+
+  def _name(self, var):
+    raise NotImplementedError
+
+  def _memoryLayout(self, term):
+    raise NotImplementedError
+
+  def _sizeFun(self, term):
+    return self._memoryLayout(term).requiredReals()
+  
+  def generate(self, cpp, cfg, factory, routineCache=None):
+    cfg = DetermineLocalInitialization().visit(cfg, self._sizeFun)
+    localML = dict()
+    for pp in cfg:
+      for name, size in pp.initLocal.items():
+        cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
+      action = pp.action
+      if action:
+        if action.isRHSExpression() or action.term.isGlobal():
+          if action.isRHSExpression():
+            termML = self._memoryLayout(action.term.node)
+          else:
+            termML = self._memoryLayout(action.term.tensor)
+        else:
+          termML = localML[action.term]
+        if action.result.isLocal():
+          localML[action.result] = termML
+          resultML = termML
+        else:
+          resultML = self._memoryLayout(action.result.tensor)
+
+        if action.isRHSExpression():
+          factory.create(action.term.node, resultML, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, routineCache)
+        else:
+          factory.simple(self._name(action.result), resultML, self._name(action.term), termML, action.add)
+    return 0
+
+class OptimisedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'
   EXECUTE_NAME = 'execute'
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
   
-  class Buffer(object):
-    def __init__(self, name, node):
-      self.name = name
-      self.node = node
-  
   def __init__(self, arch, routineCache):
-    self._cpp = None
-    self._arch = arch
+    super().__init__(arch)
     self._routineCache = routineCache
-    self._tmp = collections.OrderedDict()
-    self._freeTmp = list()
-    self._tensors = collections.OrderedDict()
-    self._factory = None
-    self._flops = 0
+
+  def _name(self, var):
+    return str(var)
+
+  def _memoryLayout(self, term):
+    return term.memoryLayout()
   
-  def generate(self, cpp, header, name, node):
+  def generate(self, cpp, header, name, nonZeroFlops, cfg):
+    variables = SortedGlobalsList().visit(cfg)
+    tensors = collections.OrderedDict()
+    for var in variables:
+      bn = var.tensor.baseName()
+      g = var.tensor.group()
+      if bn in tensors:
+        p = tensors[bn]
+        if p is not None and g is not None:
+          tensors[bn] = p | {g}
+        elif not (p is None and g is None):
+          raise ValueError('Grouped tensors ({}) and single tensors ({}) may not appear mixed in a kernel.'.format(node.name(), bn))        
+      else:
+        tensors[bn] = {g} if g is not None else None
+
     functionIO = StringIO()
     function = ''
-    with Cpp(functionIO) as self._cpp:
-      self._factory = KernelFactory(self._cpp, self._arch)
-      self.visit(node)
+    with Cpp(functionIO) as fcpp:
+      factory = OptimisedKernelFactory(fcpp, self._arch)
+      hwFlops = super().generate(fcpp, cfg, factory, self._routineCache)
       function = functionIO.getvalue()
     with header.Namespace(self.NAMESPACE):
       with header.Struct(name):
-        nonZeroFlops = ComputeOptimalFlopCount().visit(node)
         header('{} {} {} = {};'.format(MODIFIERS, self._arch.uintTypename, self.NONZEROFLOPS_NAME, nonZeroFlops))
-        header('{} {} {} = {};'.format(MODIFIERS, self._arch.uintTypename, self.HARDWAREFLOPS_NAME, self._flops))
+        header('{} {} {} = {};'.format(MODIFIERS, self._arch.uintTypename, self.HARDWAREFLOPS_NAME, hwFlops))
         header.emptyline()
-        for baseName, groups in self._tensors.items():
+        
+        for baseName, groups in tensors.items():
           if groups:
             size = max(groups)+1
             header('{}* {}[{}] = {{{}}};'.format(self._arch.typename, baseName, size, ', '.join(['nullptr']*size)))
@@ -58,142 +102,36 @@ class KernelGenerator(Visitor):
         header.functionDeclaration(self.EXECUTE_NAME)
 
       with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, self.EXECUTE_NAME)):
-        for baseName, groups in self._tensors.items():
+        for baseName, groups in tensors.items():
           if groups:
             for g in groups:
               cpp('assert({}[{}] != nullptr);'.format(baseName, g))
           else:
             cpp('assert({} != nullptr);'.format(baseName))
         cpp(function)
-    return self._flops
+    return hwFlops
 
-  def generic_visit(self, node, **kwargs):
-    result = kwargs['result'] if 'result' in kwargs else None
-    if not result:
-      result = self._getTemporary(node)
-
-    names = [self.visit(child) for child in node]
-    add = kwargs['add'] if 'add' in kwargs else False
-    self._callFactory(node, result, names, add)
-    self._freeTemporary(names)
-    return result.name
-  
-  def visit_Assign(self, node, **kwargs):
-    # Identity operation, e.g. Q['ij'] <= Q['ij']
-    if isinstance(node[1], IndexedTensor) and node[0].name() == node[1].name():
-      return node[0].name()
-
-    # We may use the target buffer directly, if it is not a child of the source node
-    timesContained = self._nodeContainsTensor(node[1], node[0].name())
-    result = self.Buffer(node[0].name(), node[0]) if timesContained == 0 or (timesContained == 1 and isinstance(node[1], Add)) else None
-    names = [self.visit(child, result=result) for child in node]
-    # Copy if target buffer was not used directly
-    if result is None or isinstance(node[1], IndexedTensor):
-      self._callFactory(node, result, names, False)
-    self._freeTemporary(names)
-    return node[0].name()
-  
-  def visit_Add(self, node, **kwargs):
-    result = kwargs['result'] if 'result' in kwargs else None
-    if not result:
-      result = self._getTemporary(node)
-
-    add = False
-    names = list()
-    for child in node:
-      names.append( self.visit(child, result=result, add=add) )
-      add = True
-    # Optimisation for the case that a tensor appears on the LHS and once on the RHS
-    if self._nodeContainsTensor(node, result.name) == 1:
-      pos = -1
-      for p,child in enumerate(node):
-        if isinstance(child, IndexedTensor) and child.name() == result.name:
-          pos = p
-          break
-      children = [child for child in node]
-      del children[pos]
-      del names[pos]
-      tmpNode = copy.copy(node)
-      tmpNode.setChildren(children)
-      self._callFactory(tmpNode, result, names, True)
-    else:
-      self._callFactory(node, result, names, False)
-    self._freeTemporary(names)
-    return result.name
-  
-  def visit_IndexedTensor(self, node, **kwargs):
-    bn = node.tensor.baseName()
-    g = node.tensor.group()
-    if bn in self._tensors:
-      p = self._tensors[bn]
-      if p is not None and g is not None:
-        self._tensors[bn] = p | {g}
-      elif not (p is None and g is None):
-        raise ValueError('Grouped tensors ({}) and single tensors ({}) may not appear mixed in a kernel.'.format(node.name(), bn))        
-    else:
-      self._tensors[bn] = {g} if g is not None else None
-    return node.name()
-
-  def _callFactory(self, node, result, names, add):
-    self._flops += self._factory.create(node, result.node, result.name, names, add, self._routineCache)
-  
-  def _getTemporary(self, node):
-    size = node.memoryLayout().requiredReals()
-    name = None
-    minSize = sys.maxsize
-    index = -1
-    for i,n in enumerate(self._freeTmp):
-      if size <= self._tmp[n] and size <= minSize:
-        name = n
-        minSize = size
-        index = i
-    if index >= 0:
-      self._freeTmp.pop(index)
-
-    if not name:
-      name = '{}{}'.format(self.TEMPORARY_RESULT, len(self._tmp))
-      self._cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
-      self._tmp[name] = size
-    return self.Buffer(name, node)
-  
-  def _isTemporary(self, name):
-    return name.startswith(self.TEMPORARY_RESULT)
-  
-  def _freeTemporary(self, names):
-    for name in names:
-      if self._isTemporary(name) and name not in self._freeTmp:
-        self._freeTmp.append(name)
-  
-  def _nodeContainsTensor(self, node, name):
-    times = 0
-    for child in node:
-      if isinstance(child, IndexedTensor) and child.name() == name:
-        times += 1
-    return times
-
-class UnitTestGenerator(Visitor):
-  TEMPORARY_RESULT = '_tmp'
+class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
   CXXTEST_PREFIX = 'test'
   
-  def __init__(self, cpp, arch):
-    self._cpp = cpp
-    self._arch = arch
+  def __init__(self, arch):
+    super().__init__(arch)
   
-  def _name(self, var):
+  def _tensorName(self, var):
     if var.isLocal():
       return str(var)
     baseName = var.tensor.baseName()
     group = var.tensor.group()
     return '_{}_{}'.format(baseName, group) if group is not None else baseName
 
-  def _utName(self, var):
+  def _name(self, var):
     if var.isLocal():
       return str(var)
-    return '_ut_' + self._name(var)
+    return '_ut_' + self._tensorName(var)
 
   def _viewName(self, var):
-    return '_view_' + self._utName(var)
+    return '_view_' + self._name(var)
 
   def _groupTemplate(self, var):
     group = var.tensor.group()
@@ -203,32 +141,27 @@ class UnitTestGenerator(Visitor):
     group = var.tensor.group()
     return '[{}]'.format(group) if group is not None else ''
 
+  def _memoryLayout(self, term):
+    return DenseMemoryLayout(term.shape())
+
   def _sizeFun(self, term):
-    return DenseMemoryLayout(term.shape()).requiredReals()
+    return self._memoryLayout(term).requiredReals()
   
-  def generate(self, kernelName, cfg):
-    cfg = DetermineLocalInitialization().visit(cfg, self._sizeFun)
+  def generate(self, cpp, kernelName, cfg):
     variables = SortedGlobalsList().visit(cfg)
-    cpp = self._cpp
-    functionIO = StringIO()
-    function = ''
-    with Cpp(functionIO) as self._cpp:
-      self._factory = UnitTestFactory(self._cpp, self._arch)
-      #~ self.visit(node)
-      function = functionIO.getvalue()
     with cpp.Function(self.CXXTEST_PREFIX + kernelName):
       for var in variables:
         self._factory = UnitTestFactory(cpp, self._arch)
-        self._factory.tensor(var.tensor, self._name(var))
+        self._factory.tensor(var.tensor, self._tensorName(var))
         
-        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._utName(var), self._sizeFun(var.tensor), self._arch.alignment))
+        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._name(var), self._sizeFun(var.tensor), self._arch.alignment))
         
         shape = var.tensor.shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             dim=len(shape),
             arch = self._arch,
-            utName=self._utName(var),
+            utName=self._name(var),
             viewName=self._viewName(var),
             shape=', '.join([str(s) for s in shape]),
             start=', '.join(['0']*len(shape))
@@ -239,72 +172,24 @@ class UnitTestGenerator(Visitor):
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             groupTemplate=self._groupTemplate(var),
             baseName=var.tensor.baseName(),
-            name=self._name(var),
+            name=self._tensorName(var),
             viewName=self._viewName(var)
           )
         )
         cpp.emptyline()
 
-      cpp( '{}::{} {};'.format(KernelGenerator.NAMESPACE, kernelName, self.KERNEL_VAR) )
+      cpp( '{}::{} {};'.format(OptimisedKernelGenerator.NAMESPACE, kernelName, self.KERNEL_VAR) )
       for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var), self._name(var)) )
-      cpp( '{}.{}();'.format(self.KERNEL_VAR, KernelGenerator.EXECUTE_NAME) )
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
+      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME) )
       cpp.emptyline()
 
-      factory = UnitTestFactory(cpp, self._arch)
-      
-      localML = dict()
-      for pp in cfg:
-        for name, size in pp.initLocal.items():
-          cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
-        action = pp.action
-        if action:
-          if action.isRHSExpression():
-            factory.create(action.term.node, self._utName(action.result), [self._utName(var) for var in action.term.variableList()], action.add)
-            if action.result.isLocal():
-              localML[action.result] = DenseMemoryLayout(action.term.node.shape())
-          else:
-            if action.term.isGlobal():
-              termML = DenseMemoryLayout(action.term.tensor.shape())
-              if action.result.isLocal():
-                localML[action.result] = termML
-                resultML = termML
-              else:
-                resultML = DenseMemoryLayout(action.result.tensor.shape())
-            else:
-              termML = localML[action.term]
-              resultML = localML[action.result] if action.result.isLocal() else DenseMemoryLayout(action.result.tensor.shape())
-            factory.simple(self._utName(action.result), resultML, self._utName(action.term), termML, action.add)
+      factory = UnitTestFactory(cpp, self._arch)      
+      super().generate(cpp, cfg, factory)
+
       for var in variables:
         if var.writable:
-          factory.compare(self._utName(var), DenseMemoryLayout(var.tensor.shape()), self._name(var), var.tensor.memoryLayout())
-      
-    
-  def generic_visit(self, node):
-    names = [self.visit(child) for child in node]
-    result = self._getTemporary(node)
-    self._factory.create(node, result, names)
-    return result
-  
-  def visit_Assign(self, node):
-    names = [self.visit(child) for child in node]
-    result = self._getTemporary(node)
-    self._factory.create(node, self._tensors[ names[0] ].name, names)
-    return result
-  
-  def visit_IndexedTensor(self, node):
-    var = self.Variable(node.tensor)
-    self._tensors[var.utName] = var
-    return var.utName
-
-  def _getTemporary(self, node):
-    size = 1
-    for s in node.indices.shape():
-      size *= s
-    name = '{}{}'.format(self.TEMPORARY_RESULT, self._tmp)
-    self._cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, name, size, self._arch.alignment))
-    self._tmp += 1
-    return name
+          factory.compare(self._name(var), self._memoryLayout(var.tensor), self._tensorName(var), var.tensor.memoryLayout())
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'

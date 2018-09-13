@@ -1,7 +1,7 @@
 import os
 import itertools
 from .ast.node import Node
-from .ast.visitor import FindTensors
+from .ast.visitor import ComputeOptimalFlopCount, FindTensors
 from .ast.transformer import *
 from .codegen.cache import *
 from .codegen.code import Cpp
@@ -29,6 +29,16 @@ class Kernel(object):
     self.ast = FindIndexPermutations().visit(self.ast)
     self.ast = SelectIndexPermutations().visit(self.ast)
     self.ast = ImplementContractions().visit(self.ast)
+
+    ast2cf = AST2ControlFlow()
+    ast2cf.visit(self.ast)
+    self.cfg = ast2cf.cfg()
+    self.cfg = FindLiving().visit(self.cfg)
+    self.cfg = SubstituteForward().visit(self.cfg)
+    self.cfg = SubstituteBackward().visit(self.cfg)
+    self.cfg = RemoveEmptyStatements().visit(self.cfg)
+    self.cfg = MergeActions().visit(self.cfg)
+    self.cfg = ReuseTemporaries().visit(self.cfg)
     
 class KernelFamily(object):
   def __init__(self, name, parameterSpace, astGenerator):
@@ -101,7 +111,7 @@ class Generator(object):
         with cpp.Class('{}::{}::{} : public CxxTest::TestSuite'.format(namespace, self.TEST_NAMESPACE, self.TEST_CLASS)):
           cpp.label('public')
           for kernel in self._kernels:
-            UnitTestGenerator(cpp, self._arch).generate(kernel.name, kernel.cfg)
+            UnitTestGenerator(self._arch).generate(cpp, kernel.name, kernel.cfg)
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
@@ -119,7 +129,8 @@ class Generator(object):
           with cpp.Namespace(namespace):
             with header.Namespace(namespace):
               for kernel in self._kernels:
-                KernelGenerator(self._arch, cache).generate(cpp, header, kernel.name, kernel.ast)
+                nonZeroFlops = ComputeOptimalFlopCount().visit(kernel.ast)
+                OptimisedKernelGenerator(self._arch, cache).generate(cpp, header, kernel.name, nonZeroFlops, kernel.cfg)
 
     print('Calling external code generators...')
     with Cpp(routinesHPath) as header:

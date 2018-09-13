@@ -110,10 +110,8 @@ class DetermineLocalInitialization(object):
       ua = pp.action
       if ua and not ua.isCompound() and ua.result.isLocal():
         size = 0
-        if ua.isRHSExpression():
+        if ua.isRHSExpression() or ua.term.isGlobal():
           size = sizeFun(ua.term.node)
-        elif ua.term.isGlobal():
-          size = sizeFun(ua.term.tensor)
         elif ua.term in lcls:
           size = lcls[ua.term]
         else:

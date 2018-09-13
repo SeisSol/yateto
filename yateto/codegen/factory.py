@@ -18,18 +18,18 @@ class KernelFactory(object):
   def generic_create(self, node, *args):
     raise NotImplementedError
 
-  def simple(self, resultName, resultML, termName, termML, add):
+  def simple(self, resultName, result, termName, term, add, routineCache):
     raise NotImplementedError
 
 class OptimisedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch):
     super().__init__(cpp, arch)
 
-  def create_LoopOverGEMM(self, node, resultML, resultName, argNames, add, routineCache):
+  def create_LoopOverGEMM(self, node, result, resultName, argNames, add, routineCache):
     assert len(argNames) == 2
     description = log.Description(
       add = add,
-      result = IndexedTensorDescription.fromNode(resultName, node, overrideML=resultML),
+      result = IndexedTensorDescription.fromNode(resultName, result),
       leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
       rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm()),
       loopIndices = node.loopIndices(),
@@ -39,36 +39,33 @@ class OptimisedKernelFactory(KernelFactory):
     generator = log.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_IndexSum(self, node, resultML, resultName, argNames, add, routineCache):
+  def create_IndexSum(self, node, result, resultName, argNames, add, routineCache):
     assert len(argNames) == 1
     description = indexsum.Description(
       add = add,
-      result = IndexedTensorDescription.fromNode(resultName, node, overrideML=resultML),
+      result = IndexedTensorDescription.fromNode(resultName, result),
       term = IndexedTensorDescription.fromNode(argNames[0], node.term())
     )
     generator = indexsum.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_Product(self, node, resultML, resultName, argNames, add, routineCache):
+  def create_Product(self, node, result, resultName, argNames, add, routineCache):
     assert len(argNames) == 2
     description = product.Description(
       add = add,
-      result = IndexedTensorDescription.fromNode(resultName, node, overrideML=resultML),
+      result = IndexedTensorDescription.fromNode(resultName, result),
       leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
       rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm())
     )
     generator = product.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def simple(self, resultName, resultML, termName, termML, add):
-    shape = resultML.shape()
-    g = Indices(string.ascii_lowercase[:len(shape)], shape)
-
+  def simple(self, resultName, result, termName, term, add, routineCache):
     description = copyscaleadd.Description(
       alpha = 1.0,
       beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription(resultName, g, resultML, None),
-      term = IndexedTensorDescription(termName, g, termML, None)
+      result = IndexedTensorDescription.fromNode(resultName, result),
+      term = IndexedTensorDescription.fromNode(termName, term)
     )
     generator = copyscaleadd.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
@@ -81,13 +78,14 @@ class UnitTestFactory(KernelFactory):
     address = memLayout.addressString(indices)
     return '{}[{}]'.format(name, address)
   
-  def create_Einsum(self, node, resultML, resultName, argNames, add, routineCache):
+  def create_Einsum(self, node, resultNode, resultName, argNames, add, routineCache):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
     
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
     
+    resultML = DenseMemoryLayout(resultNode.shape())
     resultTerm = self._formatTerm(resultName, resultML, node.indices)
     terms = [self._formatTerm(argNames[i], DenseMemoryLayout(child.shape()), child.indices) for i,child in enumerate(node)]
     
@@ -101,14 +99,13 @@ class UnitTestFactory(KernelFactory):
 
     forLoops(self._cpp, g, ranges, EinsumBody())
 
-  def simple(self, resultName, resultML, termName, termML, add):
-    shape = resultML.shape()
-    g = Indices(string.ascii_lowercase[:len(shape)], shape)
+  def simple(self, resultName, resultNode, termName, termNode, add, routineCache):
+    g = resultNode.indices
     
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
     
-    result = self._formatTerm(resultName, resultML, g)
-    term = self._formatTerm(termName, termML, g)
+    result = self._formatTerm(resultName, DenseMemoryLayout(resultNode.shape()), g)
+    term = self._formatTerm(termName, DenseMemoryLayout(termNode.shape()), g)
     
     class AssignBody(object):
       def __call__(s):

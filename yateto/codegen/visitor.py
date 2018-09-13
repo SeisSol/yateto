@@ -24,29 +24,26 @@ class KernelGenerator(object):
   
   def generate(self, cpp, cfg, factory, routineCache=None):
     cfg = DetermineLocalInitialization().visit(cfg, self._sizeFun)
-    localML = dict()
+    localNodes = dict()
     for pp in cfg:
       for name, size in pp.initLocal.items():
         cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
       action = pp.action
       if action:
         if action.isRHSExpression() or action.term.isGlobal():
-          if action.isRHSExpression():
-            termML = self._memoryLayout(action.term.node)
-          else:
-            termML = self._memoryLayout(action.term.tensor)
+          termNode = action.term.node
         else:
-          termML = localML[action.term]
+          termNode = localNodes[action.term]
         if action.result.isLocal():
-          localML[action.result] = termML
-          resultML = termML
+          localNodes[action.result] = termNode
+          resultNode = termNode
         else:
-          resultML = self._memoryLayout(action.result.tensor)
+          resultNode = action.result.node
 
         if action.isRHSExpression():
-          factory.create(action.term.node, resultML, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, routineCache)
+          factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, routineCache)
         else:
-          factory.simple(self._name(action.result), resultML, self._name(action.term), termML, action.add)
+          factory.simple(self._name(action.result), resultNode, self._name(action.term), termNode, action.add, routineCache)
     return 0
 
 class OptimisedKernelGenerator(KernelGenerator):
@@ -69,8 +66,8 @@ class OptimisedKernelGenerator(KernelGenerator):
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     for var in variables:
-      bn = var.tensor.baseName()
-      g = var.tensor.group()
+      bn = var.node.tensor.baseName()
+      g = var.node.tensor.group()
       if bn in tensors:
         p = tensors[bn]
         if p is not None and g is not None:
@@ -121,8 +118,8 @@ class UnitTestGenerator(KernelGenerator):
   def _tensorName(self, var):
     if var.isLocal():
       return str(var)
-    baseName = var.tensor.baseName()
-    group = var.tensor.group()
+    baseName = var.node.tensor.baseName()
+    group = var.node.tensor.group()
     return '_{}_{}'.format(baseName, group) if group is not None else baseName
 
   def _name(self, var):
@@ -134,11 +131,11 @@ class UnitTestGenerator(KernelGenerator):
     return '_view_' + self._name(var)
 
   def _groupTemplate(self, var):
-    group = var.tensor.group()
+    group = var.node.tensor.group()
     return '<{}>'.format(group) if group is not None else ''
 
   def _groupIndex(self, var):
-    group = var.tensor.group()
+    group = var.node.tensor.group()
     return '[{}]'.format(group) if group is not None else ''
 
   def _memoryLayout(self, term):
@@ -152,11 +149,11 @@ class UnitTestGenerator(KernelGenerator):
     with cpp.Function(self.CXXTEST_PREFIX + kernelName):
       for var in variables:
         self._factory = UnitTestFactory(cpp, self._arch)
-        self._factory.tensor(var.tensor, self._tensorName(var))
+        self._factory.tensor(var.node.tensor, self._tensorName(var))
         
-        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._name(var), self._sizeFun(var.tensor), self._arch.alignment))
+        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._name(var), self._sizeFun(var.node), self._arch.alignment))
         
-        shape = var.tensor.shape()
+        shape = var.node.shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             dim=len(shape),
@@ -171,7 +168,7 @@ class UnitTestGenerator(KernelGenerator):
             initNS = InitializerGenerator.NAMESPACE,
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             groupTemplate=self._groupTemplate(var),
-            baseName=var.tensor.baseName(),
+            baseName=var.node.tensor.baseName(),
             name=self._tensorName(var),
             viewName=self._viewName(var)
           )
@@ -180,7 +177,7 @@ class UnitTestGenerator(KernelGenerator):
 
       cpp( '{}::{} {};'.format(OptimisedKernelGenerator.NAMESPACE, kernelName, self.KERNEL_VAR) )
       for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.node.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME) )
       cpp.emptyline()
 
@@ -189,7 +186,7 @@ class UnitTestGenerator(KernelGenerator):
 
       for var in variables:
         if var.writable:
-          factory.compare(self._name(var), self._memoryLayout(var.tensor), self._tensorName(var), var.tensor.memoryLayout())
+          factory.compare(self._name(var), self._memoryLayout(var.node), self._tensorName(var), var.node.memoryLayout())
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'

@@ -19,8 +19,8 @@ class IndexedTensorDescription(TensorDescription):
     self.indices = indices
 
   @classmethod
-  def fromNode(cls, name, node, overrideML = None):
-    return cls(name, node.indices, overrideML if overrideML else node.memoryLayout(), node.eqspp())
+  def fromNode(cls, name, node):
+    return cls(name, node.indices, node.memoryLayout(), node.eqspp())
 
 def forLoops(cpp, indexNames, ranges, body, indexNo=None):
   flops = 0

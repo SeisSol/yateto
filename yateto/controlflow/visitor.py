@@ -46,7 +46,7 @@ class AST2ControlFlow(Visitor):
     return variables[0]
   
   def visit_IndexedTensor(self, node):
-    return Variable(node.name(), node.name() in self._writable, node.tensor)
+    return Variable(node.name(), node.name() in self._writable, node)
   
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))

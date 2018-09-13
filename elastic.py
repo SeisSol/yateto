@@ -89,6 +89,14 @@ for i in range(maxDegree):
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
   #~ PrintEquivalentSparsityPatterns('sparsityPatterns/derivative{}/'.format(i)).visit(derivative)
+
+X = Tensor('X', qShape)
+Y = Tensor('Y', qShape)
+g.add('test1', Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')])
+g.add('test2', Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + I[qi('kp')])
+g.add('test3', Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lp')] + db.kDivM[1][t('kl')] * Q[qi('lp')])
+g.add('test4', I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (X[qi('lq')] + Y[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (X[qi('lq')] + Y[qi('lq')]) * db.star[1]['qp'])
+
 g.generate('test/generated_code', 'seissol')
 exit()
 

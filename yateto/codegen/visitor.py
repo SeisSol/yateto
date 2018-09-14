@@ -50,8 +50,10 @@ class KernelGenerator(object):
 class OptimisedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'
   EXECUTE_NAME = 'execute'
+  FIND_EXECUTE_NAME = 'findExecute'
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
+  MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   
   def __init__(self, arch, routineCache):
     super().__init__(arch)
@@ -63,7 +65,14 @@ class OptimisedKernelGenerator(KernelGenerator):
   def _memoryLayout(self, term):
     return term.memoryLayout()
   
-  def generate(self, cpp, header, name, nonZeroFlops, cfg):
+  class KernelOutline(object):
+    def __init__(self, nonZeroFlops, hwFlops, tensors, function):
+      self.nonZeroFlops = nonZeroFlops
+      self.hwFlops = hwFlops
+      self.tensors = tensors
+      self.function = function
+  
+  def generateKernelOutline(self, nonZeroFlops, cfg):
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     for var in variables:
@@ -83,11 +92,46 @@ class OptimisedKernelGenerator(KernelGenerator):
     with Cpp(functionIO) as fcpp:
       factory = OptimisedKernelFactory(fcpp, self._arch)
       hwFlops = super().generate(fcpp, cfg, factory, self._routineCache)
-      function = functionIO.getvalue()
+      function = functionIO.getvalue()    
+    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, function)
+
+  def generate(self, cpp, header, name, kernelOutlines, familyStride=None):
+    tensors = dict()
+    for ko in kernelOutlines:
+      if ko:
+        for key,groups in ko.tensors.items():
+          if key not in tensors:
+            tensors[key] = groups
+          else:
+            if tensors[key] is not None or groups is not None:
+              tensors[key] = tensors[key] | groups
+
+    if familyStride is not None:
+      executeName = lambda index: self.EXECUTE_NAME + str(index)
+      formatArray = lambda lst: '{{{}}}'.format(', '.join([str(l) for l in lst]))
+      brackets = '[]'
+    else:
+      executeName = lambda index: self.EXECUTE_NAME
+      formatArray = lambda lst: lst[0]
+      brackets = ''
+
+    kernelOutline = kernelOutlines[0]
     with header.Namespace(self.NAMESPACE):
       with header.Struct(name):
-        header('{} {} {} = {};'.format(MODIFIERS, self._arch.uintTypename, self.NONZEROFLOPS_NAME, nonZeroFlops))
-        header('{} {} {} = {};'.format(MODIFIERS, self._arch.uintTypename, self.HARDWAREFLOPS_NAME, hwFlops))
+        header('{} {} {}{} = {};'.format(
+          MODIFIERS,
+          self._arch.uintTypename,
+          self.NONZEROFLOPS_NAME,
+          brackets,
+          formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
+        ))
+        header('{} {} {}{} = {};'.format(
+          MODIFIERS,
+          self._arch.uintTypename,
+          self.HARDWAREFLOPS_NAME,
+          brackets,
+          formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
+        ))
         header.emptyline()
         
         for baseName, groups in tensors.items():
@@ -97,17 +141,36 @@ class OptimisedKernelGenerator(KernelGenerator):
           else:
             header('{}* {} = nullptr;'.format(self._arch.typename, baseName))
         header.emptyline()
-        header.functionDeclaration(self.EXECUTE_NAME)
+        for index, kernelOutline in enumerate(kernelOutlines):
+          if kernelOutline:
+            header.functionDeclaration(executeName(index))
+        
+        if familyStride is not None:
+          header('typedef void ({}::* const {})(void);'.format(name, self.MEMBER_FUNCTION_PTR_NAME))
+          ptrToMemberType = '{}::* const'.format(name)
+          header('{} {} {}[] = {};'.format(
+            MODIFIERS,
+            self.MEMBER_FUNCTION_PTR_NAME,
+            self.EXECUTE_NAME,
+            formatArray(['&{}::{}'.format(name, executeName(index)) if kernelOutline else 'nullptr' for index, kernelOutline in enumerate(kernelOutlines)])
+          ))
+          args = ['i' + str(i) for i,v in enumerate(familyStride)]
+          typedArgs = ['{} {}'.format(self._arch.uintTypename, arg) for arg in args]
+          with header.Function(self.FIND_EXECUTE_NAME, ', '.join(typedArgs), '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
+            header('return {}[{}];'.format(self.EXECUTE_NAME, ' + '.join(['{}*{}'.format(familyStride[i], arg) for i,arg in enumerate(args)])))
 
-      with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, self.EXECUTE_NAME)):
-        for baseName, groups in tensors.items():
-          if groups:
-            for g in groups:
-              cpp('assert({}[{}] != nullptr);'.format(baseName, g))
-          else:
-            cpp('assert({} != nullptr);'.format(baseName))
-        cpp(function)
-    return hwFlops
+      for index, kernelOutline in enumerate(kernelOutlines):
+        if kernelOutline is None:
+          continue
+
+        with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
+          for baseName, groups in kernelOutline.tensors.items():
+            if groups:
+              for g in groups:
+                cpp('assert({}[{}] != nullptr);'.format(baseName, g))
+            else:
+              cpp('assert({} != nullptr);'.format(baseName))
+          cpp(kernelOutline.function)
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
@@ -145,9 +208,9 @@ class UnitTestGenerator(KernelGenerator):
   def _sizeFun(self, term):
     return self._memoryLayout(term).requiredReals()
   
-  def generate(self, cpp, kernelName, cfg):
+  def generate(self, cpp, testName, kernelClass, cfg, index=None):
     variables = SortedGlobalsList().visit(cfg)
-    with cpp.Function(self.CXXTEST_PREFIX + kernelName):
+    with cpp.Function(self.CXXTEST_PREFIX + testName):
       for var in variables:
         self._factory = UnitTestFactory(cpp, self._arch)
         self._factory.tensor(var.node.tensor, self._tensorName(var))
@@ -176,10 +239,10 @@ class UnitTestGenerator(KernelGenerator):
         )
         cpp.emptyline()
 
-      cpp( '{}::{} {};'.format(OptimisedKernelGenerator.NAMESPACE, kernelName, self.KERNEL_VAR) )
+      cpp( '{}::{} {};'.format(OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
       for var in variables:
         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.node.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
-      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME) )
+      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
       factory = UnitTestFactory(cpp, self._arch)      

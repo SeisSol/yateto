@@ -1,5 +1,6 @@
 import os
 import itertools
+import re
 from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindTensors
 from .ast.transformer import *
@@ -10,10 +11,17 @@ from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
 
 class Kernel(object):
+  BASE_NAME = r'[a-zA-Z]\w*'
+  VALID_NAME = r'^{}$'.format(BASE_NAME)
+
   def __init__(self, name, ast):
     self.name = name
     self.ast = ast
     self.cfg = None
+
+  @classmethod
+  def isValidName(cls, name):
+    return re.match(cls.VALID_NAME, name) is not None
   
   def prepareUntilUnitTest(self):
     self.ast = DeduceIndices().visit(self.ast)
@@ -41,13 +49,69 @@ class Kernel(object):
     self.cfg = ReuseTemporaries().visit(self.cfg)
     
 class KernelFamily(object):
-  def __init__(self, name, parameterSpace, astGenerator):
-    self._name = name
-    self._parameterSpace = parameterSpace
-    self._astGenerator = astGenerator
+  GROUP_INDEX = r'\[(0|[1-9]\d*)\]'
+  VALID_NAME = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX)
+
+  def __init__(self):
+    self._kernels = dict()
+    self.name = None
+    self._stride = None
+  
+  def items(self):
+    return self._kernels.items()
+  
+  def __len__(self):
+    return max(self._kernels.keys()) + 1
+  
+  @classmethod  
+  def baseName(self, name):
+    return re.match(Kernel.BASE_NAME, name).group(0)
+  
+  @classmethod
+  def isValidName(cls, name):
+    return re.match(cls.VALID_NAME, name) is not None
+  
+  @classmethod
+  def group(cls, name):
+    m = re.search(cls.GROUP_INDEX, name)
+    return int(m.group(1))
+  
+  def setStride(self, stride):
+    self._stride = stride
+  
+  def stride(self):
+    if self._stride is not None:
+      return self._stride
+    return (len(self),)
+    
+  @classmethod
+  def linear(cls, stride, group):
+    assert len(stride) == len(group)
+    index = 0
+    for i,p in enumerate(group):
+      index += p*stride[i]
+    return index
+
+  def add(self, name, ast):
+    baseName = self.baseName(name)
+    if not self.name:
+      self.name = baseName
+    assert baseName == self.name
+    
+    group = self.group(name)
+    internalName = '_{}_{}'.format(baseName, group)
+    self._kernels[group] = Kernel(internalName, ast)
+  
+  def prepareUntilUnitTest(self):
+    for kernel in self._kernels.values():
+      kernel.prepareUntilUnitTest()
+  
+  def prepareUntilCodeGen(self):
+    for kernel in self._kernels.values():
+      kernel.prepareUntilCodeGen()
 
 def simpleParameterSpace(*args):
-  return itertools.product(*[list(range(i)) for i in args])
+  return list(itertools.product(*[list(range(i)) for i in args]))
 
 class Generator(object):
   HEADER = 'h'
@@ -63,16 +127,36 @@ class Generator(object):
   
   def __init__(self, arch):
     self._kernels = list()
+    self._kernelFamilies = dict()
     self._arch = arch
   
   def add(self, name: str, ast: Node):
-    kernel = Kernel(name, ast)
-    self._kernels.append(kernel)
+    if KernelFamily.isValidName(name):
+      baseName = KernelFamily.baseName(name)
+      if baseName not in self._kernelFamilies:
+        self._kernelFamilies[baseName] = KernelFamily()
+      self._kernelFamilies[baseName].add(name, ast)
+    else:      
+      if not Kernel.isValidName(name):
+        raise ValueError('Kernel name invalid (must match regexp {}): {}'.format(Kernel.VALID_NAME, name))
+      kernel = Kernel(name, ast)
+      self._kernels.append(kernel)
   
   def addFamily(self, name: str, parameterSpace, astGenerator):
-    pass
-    #~ family = KernelFamily(name, parameterSpace, astGenerator)
-    #~ self._kernels.append(family)
+    if name not in self._kernelFamilies:
+      self._kernelFamilies[name] = KernelFamily()
+    family = self._kernelFamilies[name]
+    pmax = max(parameterSpace)
+    stride = [1]
+    for i in range(len(pmax)-1):
+      stride.append(stride[i] * (pmax[i]+1))
+    stride = tuple(stride)
+    family.setStride(stride)
+    for p in parameterSpace:
+      indexedName = '{}[{}]'.format(name, KernelFamily.linear(stride, p))
+      ast = astGenerator(*p)
+      print(indexedName, ast)
+      family.add(indexedName, ast)
   
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
@@ -82,6 +166,8 @@ class Generator(object):
     print('Deducing indices...')
     for kernel in self._kernels:
       kernel.prepareUntilUnitTest()
+    for family in self._kernelFamilies.values():
+      family.prepareUntilUnitTest()
 
     unitTestsHPath = os.path.join(outputDir, '{}.t.{}'.format(self.UNIT_TESTS_FILE_NAME, self.HEADER))
     
@@ -111,14 +197,22 @@ class Generator(object):
         with cpp.Class('{}::{}::{} : public CxxTest::TestSuite'.format(namespace, self.TEST_NAMESPACE, self.TEST_CLASS)):
           cpp.label('public')
           for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.name, kernel.cfg)
+            UnitTestGenerator(self._arch).generate(cpp, kernel.name, kernel.name, kernel.cfg)
+          for family in self._kernelFamilies.values():
+            for group, kernel in family.items():
+              UnitTestGenerator(self._arch).generate(cpp, kernel.name, family.name, kernel.cfg, group)
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
+      print(kernel.name)
       kernel.prepareUntilCodeGen()
+    for family in self._kernelFamilies.values():
+      print(family.name)
+      family.prepareUntilCodeGen()
 
     print('Generating kernels...')
     cache = RoutineCache()
+    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
     with Cpp(kernelsCppPath) as cpp:
       cpp.includeSys('cassert')
       cpp.includeSys('cstring')
@@ -130,7 +224,14 @@ class Generator(object):
             with header.Namespace(namespace):
               for kernel in self._kernels:
                 nonZeroFlops = ComputeOptimalFlopCount().visit(kernel.ast)
-                OptimisedKernelGenerator(self._arch, cache).generate(cpp, header, kernel.name, nonZeroFlops, kernel.cfg)
+                kernelOutline = optKernelGenerator.generateKernelOutline(nonZeroFlops, kernel.cfg)
+                optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
+              for family in self._kernelFamilies.values():
+                kernelOutlines = [None] * len(family)
+                for group, kernel in family.items():
+                  nonZeroFlops = ComputeOptimalFlopCount().visit(kernel.ast)
+                  kernelOutlines[group] = optKernelGenerator.generateKernelOutline(nonZeroFlops, kernel.cfg)
+                optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
 
     print('Calling external code generators...')
     with Cpp(routinesHPath) as header:
@@ -140,6 +241,9 @@ class Generator(object):
     tensors = dict()
     for kernel in self._kernels:
       tensors.update( FindTensors().visit(kernel.ast) )
+    for family in self._kernelFamilies.values():
+      for group, kernel in family.items():
+        tensors.update( FindTensors().visit(kernel.ast) )
 
     print('Generating initialization code...')
     with Cpp(initHPath) as header:

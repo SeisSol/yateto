@@ -23,6 +23,7 @@ class KernelGenerator(object):
     return self._memoryLayout(term).requiredReals()
   
   def generate(self, cpp, cfg, factory, routineCache=None):
+    hwFlops = 0
     cfg = DetermineLocalInitialization().visit(cfg, self._sizeFun)
     localNodes = dict()
     for pp in cfg:
@@ -41,10 +42,10 @@ class KernelGenerator(object):
           resultNode = action.result.node
 
         if action.isRHSExpression():
-          factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, routineCache)
+          hwFlops += factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, routineCache)
         else:
-          factory.simple(self._name(action.result), resultNode, self._name(action.term), termNode, action.add, routineCache)
-    return 0
+          hwFlops += factory.simple(self._name(action.result), resultNode, self._name(action.term), termNode, action.add, routineCache)
+    return hwFlops
 
 class OptimisedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'

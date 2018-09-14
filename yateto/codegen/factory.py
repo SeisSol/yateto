@@ -95,9 +95,9 @@ class UnitTestFactory(KernelFactory):
     class EinsumBody(object):
       def __call__(s):
         self._cpp( '{} += {};'.format(resultTerm, ' * '.join(terms)) )
-        return 0
+        return len(terms)
 
-    forLoops(self._cpp, g, ranges, EinsumBody())
+    return forLoops(self._cpp, g, ranges, EinsumBody())
 
   def simple(self, resultName, resultNode, termName, termNode, add, routineCache):
     g = resultNode.indices
@@ -110,9 +110,9 @@ class UnitTestFactory(KernelFactory):
     class AssignBody(object):
       def __call__(s):
         self._cpp( '{} {} {};'.format(result, '+=' if add else '=', term) )
-        return 0
+        return 1 if add else 0
 
-    forLoops(self._cpp, g, ranges, AssignBody())
+    return forLoops(self._cpp, g, ranges, AssignBody())
 
   def compare(self, refName, refML, targetName, targetML):
     shape = refML.shape()

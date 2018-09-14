@@ -36,6 +36,9 @@ class Description(object):
 
   def mnk(self):
     return self._mnk
+  
+  def setBeta(self, beta):
+    self.beta = beta
 
 def generator(arch, descr):
   requiresTranspositions = descr.transA or descr.transB

@@ -1,3 +1,4 @@
+import copy
 from ..common import *
 from .generic import Generic
 
@@ -22,6 +23,25 @@ class Description(object):
     rC.update(rB)
 
     self.loopRanges = rC
+    
+    self.innerLoopIndices = self.loopIndices - self.result.indices
+    self.outerLoopIndices = self.loopIndices - self.innerLoopIndices
+    
+    self.assignLoopRanges = copy.deepcopy(self.loopRanges)
+    self.addLoopRanges = copy.deepcopy(self.loopRanges)
+
+    if len(self.innerLoopIndices) == 0:
+      if self.add:
+        self.assignLoopRanges = None
+      else:
+        self.addLoopRanges = None
+    elif not self.add:
+      peelOffIndex = str(self.innerLoopIndices.firstIndex())
+      self.assignLoopRanges[peelOffIndex].stop = self.loopRanges[peelOffIndex].start+1
+      self.addLoopRanges[peelOffIndex].start   = self.loopRanges[peelOffIndex].start+1
+    else:
+      self.assignLoopRanges = None
+      
 
 def generator(arch, descr):
   return Generic(arch, descr)

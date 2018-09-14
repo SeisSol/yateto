@@ -7,11 +7,11 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
   
-  def _pointer(self, cpp, name, term, loopIndices):
+  def _pointer(self, cpp, targetName, baseName, term, loopIndices):
     addressStr = term.memoryLayout.addressString(term.indices, term.indices & loopIndices)
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
-    cpp('{}* {} = {}{};'.format(self._arch.typename, name, term.name, addressStr))
+    cpp('{}* {} = {}{};'.format(self._arch.typename, targetName, baseName, addressStr))
     
   def _memLayout(self, term, I, J):
     if len(term.indices) > 2:
@@ -38,10 +38,15 @@ class Generic(object):
     In = set(B) & set(C)
     Ik = set(A) & set(B)
     
-    hasLoops = len(d.loopIndices) > 0
-    Aname = 'A' if hasLoops else d.leftTerm.name
-    Bname = 'B' if hasLoops else d.rightTerm.name
-    Cname = 'C' if hasLoops else d.result.name
+    hasOuterLoops = len(d.outerLoopIndices) > 0
+    outerAname = 'A' if hasOuterLoops else d.leftTerm.name
+    outerBname = 'B' if hasOuterLoops else d.rightTerm.name
+    outerCname = 'C' if hasOuterLoops else d.result.name
+    
+    hasInnerLoops = len(d.innerLoopIndices) > 0
+    innerAname = 'Ain' if hasInnerLoops else outerAname
+    innerBname = 'Bin' if hasInnerLoops else outerBname
+    innerCname = 'Cin' if hasInnerLoops else outerCname
     
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In)
@@ -52,9 +57,9 @@ class Generic(object):
     Ceqspp = self._reduce(d.result, C, CmemLayout)
 
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(Aname, AmemLayout, Aeqspp),
-      rightTerm = TensorDescription(Bname, BmemLayout, Beqspp),
-      result = TensorDescription(Cname, CmemLayout, Ceqspp),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp),
+      result = TensorDescription(innerCname, CmemLayout, Ceqspp),
       transA = d.transA,
       transB = d.transB,
       alpha = 1.0,
@@ -73,11 +78,26 @@ class Generic(object):
     
     class LoGBody(object):
       def __call__(s):
-        if hasLoops:
-          self._pointer(cpp, Aname, d.leftTerm, d.loopIndices)
-          self._pointer(cpp, Bname, d.rightTerm, d.loopIndices)
-          self._pointer(cpp, Cname, d.result, d.loopIndices)
+        if hasInnerLoops:
+          self._pointer(cpp, innerAname, outerAname, d.leftTerm, d.innerLoopIndices)
+          self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices)
+          self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices)
         generator = gemm.generator(self._arch, gemmDescr)
         return generator.generate(cpp, routineCache)
-    
-    return forLoops(cpp, d.loopIndices, d.loopRanges, LoGBody())
+
+    class InnerLoopBody(object):
+      def __call__(s):
+        flops = 0
+        if hasOuterLoops:
+          self._pointer(cpp, outerAname, d.leftTerm.name, d.leftTerm, d.outerLoopIndices)
+          self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices)
+          self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices)
+        if d.assignLoopRanges is not None:
+          gemmDescr.setBeta(0.0)
+          flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody())
+        if d.addLoopRanges is not None:
+          gemmDescr.setBeta(1.0)
+          flops += forLoops(cpp, d.innerLoopIndices, d.addLoopRanges, LoGBody())
+        return flops
+
+    return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody())

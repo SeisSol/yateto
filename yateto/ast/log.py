@@ -26,7 +26,7 @@ def fusedVariants(memLayout, I, P, M, prune = False):
 def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   L = contraction.leftTerm()
   R = contraction.rightTerm()
-  I = contraction.indices
+  I = contraction
   
   if Aperm is not None:
     L = copy.deepcopy(L)
@@ -35,12 +35,12 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
     R = copy.deepcopy(R)
     R.setIndexPermutation(Bperm)
   if Cperm is not None:
-    I = copy.deepcopy(I)
-    I.permute(Cperm)
+    I = copy.deepcopy(contraction)
+    I.setIndexPermutation(Cperm)
 
   A = L.indices.tostring()
   B = R.indices.tostring()
-  C = I.tostring()
+  C = I.indices.tostring()
 
   candidates = list()
   if set(C) != (set(A) | set(B)) - (set(A) & set(B)):
@@ -57,8 +57,8 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   PB = {idx: pos for pos, idx in enumerate(B)}
   PC = {idx: pos for pos, idx in enumerate(C)}
 
-  CM = fusedVariants(contraction.memoryLayout(), Im, PC, C, True)
-  CN = fusedVariants(contraction.memoryLayout(), In, PC, C)
+  CM = fusedVariants(I.memoryLayout(), Im, PC, C, True)
+  CN = fusedVariants(I.memoryLayout(), In, PC, C)
   AM = fusedVariants(L.memoryLayout(), Im, PA, A)
   AK = fusedVariants(L.memoryLayout(), Ik, PA, A)
   BK = fusedVariants(R.memoryLayout(), Ik, PB, B)
@@ -73,7 +73,7 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   for m in MC:
     for n in NC:
       for k in KC:
-        log = LoopOverGEMM(I, L, R, m, n, k)
+        log = LoopOverGEMM(I.indices, L, R, m, n, k)
         cost = log.cost()
         if cost < minCost:
           minCost = cost

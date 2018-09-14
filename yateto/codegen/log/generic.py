@@ -39,14 +39,14 @@ class Generic(object):
     Ik = set(A) & set(B)
     
     hasOuterLoops = len(d.outerLoopIndices) > 0
-    outerAname = 'A' if hasOuterLoops else d.leftTerm.name
-    outerBname = 'B' if hasOuterLoops else d.rightTerm.name
-    outerCname = 'C' if hasOuterLoops else d.result.name
+    outerAname = '_A' if hasOuterLoops else d.leftTerm.name
+    outerBname = '_B' if hasOuterLoops else d.rightTerm.name
+    outerCname = '_C' if hasOuterLoops else d.result.name
     
     hasInnerLoops = len(d.innerLoopIndices) > 0
-    innerAname = 'Ain' if hasInnerLoops else outerAname
-    innerBname = 'Bin' if hasInnerLoops else outerBname
-    innerCname = 'Cin' if hasInnerLoops else outerCname
+    innerAname = '_Ain' if hasInnerLoops else outerAname
+    innerBname = '_Bin' if hasInnerLoops else outerBname
+    innerCname = '_Cin' if hasInnerLoops else outerCname
     
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In)

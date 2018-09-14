@@ -21,20 +21,18 @@ def strengthReduction(terms, target_indices, split = 0):
       else:
         i = i + 1
 
-  possibilites = list()
   if n == 1:
     return terms[0]
-  else:
-    for i in range(n):
-      for j in range(max(i+1,split),n):
-        mulTerm = Product(terms[i], terms[j])
-        selection = set(range(n)) - set([i,j])
-        tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, j-1)
-        possibilites.append(tree)
+
   best = None
   minCost = sys.maxsize
-  for p in possibilites:
-    if p._cost < minCost:
-      best = p
-      minCost = p._cost
+  for i in range(n):
+    for j in range(max(i+1,split),n):
+      mulTerm = Product(terms[i], terms[j])
+      selection = set(range(n)) - set([i,j])
+      if mulTerm._cost < minCost:
+        tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, j-1)
+      if tree._cost < minCost:
+        best = tree
+        minCost = tree._cost
   return best

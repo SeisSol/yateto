@@ -255,7 +255,7 @@ class InitializerGenerator(object):
     self._array(numberType, self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex)
     self._array(numberType, self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
     self._array(numberType, self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
-    self._array(numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex)
+    self._array(numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex, alwaysArray=False)
     
     realType = '{} {} const'.format(MODIFIERS, self._arch.typename)
     realPtrType = realType + '*'
@@ -291,7 +291,7 @@ class InitializerGenerator(object):
         with self._cpp.Function('view<{}>'.format(k), arguments=viewArgs, returnType='template<> {}'.format(typename)):
           tv.generate(self._cpp, ml, self._arch, k)
   
-  def _array(self, typ, name, group, maxIndex):
+  def _array(self, typ, name, group, maxIndex, alwaysArray=True):
     dummy = [0]
     formatArray = lambda L: ', '.join([str(x) for x in L])
     maxLen = max(map(len, group.values())) if len(group.values()) > 0 else 0
@@ -304,7 +304,7 @@ class InitializerGenerator(object):
         init[idx] = formatArray(group[idx] if idx in group else dummy)
 
     arrayIndices = ''
-    if maxLen > 1:
+    if alwaysArray or maxLen > 1:
       arrayIndices = '[{}]'.format(maxLen)
       init = ['{{{}}}'.format(i) for i in init]
     

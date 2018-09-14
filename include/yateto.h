@@ -85,6 +85,10 @@ namespace yateto {
         }
         val += (m_stop[0]-stop0);
 
+        if (Dim == 1) {
+          break;
+        }
+
         uint_t d = 0;
         do {
           entry[d] = m_start[d];

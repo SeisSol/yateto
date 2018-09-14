@@ -155,7 +155,6 @@ class Generator(object):
     for p in parameterSpace:
       indexedName = '{}[{}]'.format(name, KernelFamily.linear(stride, p))
       ast = astGenerator(*p)
-      print(indexedName, ast)
       family.add(indexedName, ast)
   
   def _headerGuardName(self, namespace, fileBaseName):

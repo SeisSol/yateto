@@ -34,9 +34,23 @@ Z = Tensor('Z', (numberOf1DBasisFunctions, numberOf1DBasisFunctions))
 g = Generator(arch)
 
 spaceTimeIteration = I['mou'] <= chi0['u'] * Q0['mo'] + Z['ku'] * (db.kDivM[0]['ml'] * Q['lqk'] * db.star[0]['qo'] + db.kDivM[1]['ml'] * Q['lqk'] * db.star[1]['qo'] + db.kDivM[2]['ml'] * Q['lqk'] * db.star[2]['qo'])
-
 g.add('spaceTimeIteration', spaceTimeIteration)
+
+nDof = 6
+nVar = 40
+A = Tensor('A', (nVar, nDof, nDof, nDof))
+B = Tensor('B', (nVar, nDof, nDof, nDof))
+C1 = Tensor('C1', (nDof, nDof))
+C2 = Tensor('C2', (nDof, nDof))
+C3 = Tensor('C3', (nDof, nDof))
+
+gridProjection = A['pxyz'] <= B['pijk'] * C1['ix'] * C2['jy'] * C3['kz']
+g.add('gridProjection', gridProjection)
 
 g.generate('test/generated_code', 'seissol')
 
+print('SeisSol space-time predictor')
 PrettyPrinter().visit(spaceTimeIteration)
+print()
+print('Grid projection')
+PrettyPrinter().visit(gridProjection)

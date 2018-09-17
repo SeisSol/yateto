@@ -32,7 +32,7 @@ def strengthReduction(terms, target_indices, split = 0):
       selection = set(range(n)) - set([i,j])
       if mulTerm._cost < minCost:
         tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, j-1)
-      if tree._cost < minCost:
-        best = tree
-        minCost = tree._cost
+        if tree._cost < minCost:
+          best = tree
+          minCost = tree._cost
   return best

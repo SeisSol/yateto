@@ -2,7 +2,7 @@ import os
 import itertools
 import re
 from .ast.node import Node
-from .ast.visitor import ComputeOptimalFlopCount, FindTensors
+from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors
 from .ast.transformer import *
 from .codegen.cache import *
 from .codegen.code import Cpp
@@ -34,8 +34,8 @@ class Kernel(object):
     self.ast = StrengthReduction().visit(self.ast)
     self.ast = FindContractions().visit(self.ast)
     self.ast = ComputeMemoryLayout().visit(self.ast)
-    self.ast = FindIndexPermutations().visit(self.ast)
-    self.ast = SelectIndexPermutations().visit(self.ast)
+    permutationVariants = FindIndexPermutations().visit(self.ast)
+    self.ast = SelectIndexPermutations(permutationVariants).visit(self.ast)
     self.ast = ImplementContractions().visit(self.ast)
 
     ast2cf = AST2ControlFlow()

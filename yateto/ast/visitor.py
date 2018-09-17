@@ -1,7 +1,10 @@
 from numpy import arange, einsum, ndindex
+import itertools
 import re
 import os.path
 from .node import Op
+from .indices import LoGCost
+from .log import LoG
 
 # Optional modules
 import importlib.util
@@ -61,6 +64,75 @@ class FindTensors(Visitor):
 
   def visit_IndexedTensor(self, node):
     return {node.name(): node.tensor}
+
+class FindIndexPermutations(Visitor):
+  class Variant(object):
+    def __init__(self, cost, choices):
+      self._cost = cost
+      self._choices = choices
+  
+  def findVariants(self, node):
+    permutationVariants = dict()
+    for child in node:
+      permutationVariants.update( self.visit(child) )
+    return permutationVariants
+  
+  def generic_visit(self, node):
+    permutationVariants = self.findVariants(node)
+    choices = list()
+    for child in node:
+      choices.append( str(child.indices) )
+    variants = {str(node.indices): self.Variant(LoGCost.addIdentity(), choices)}
+    permutationVariants[node] = variants
+    return permutationVariants
+  
+  def allPermutations(self, node, inheritIndices):
+    permutationVariants = self.findVariants(node)
+    iterator = itertools.permutations(node.indices)
+    if inheritIndices:
+      variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), [''.join(Cs)] * len(node)) for Cs in iterator}
+    else:
+      choices = [str(child.indices) for child in node]
+      variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), choices) for Cs in iterator}
+    permutationVariants[node] = variants
+    return permutationVariants
+  
+  def visit_Add(self, node):
+    if any([child.fixedIndexPermutation() for child in node]):
+      return self.generic_visit(node)
+    return self.allPermutations(node, True)
+  
+  def visit_Product(self, node):
+    return self.allPermutations(node, False)
+    
+  def visit_IndexSum(self, node):
+    return self.allPermutations(node, False)
+
+  def visit_Contraction(self, node):
+    permutationVariants = self.findVariants(node)
+    
+    variants = dict()
+    iterator = itertools.permutations(node.indices)
+    for Cs in iterator:
+      C = ''.join(Cs)
+      minCost = LoGCost()
+      minAind = None
+      minBind = None
+      lV = permutationVariants[node.leftTerm()]
+      rV = permutationVariants[node.rightTerm()]
+      for Aind in sorted(lV):
+        for Bind in sorted(rV):
+          log = LoG(node, Aind, Bind, C)
+          cost = log.cost() + lV[Aind]._cost + rV[Bind]._cost
+          if cost < minCost:
+            minCost = cost
+            minAind = Aind
+            minBind = Bind
+      if minAind is not None and minBind is not None:
+        variants[C] = self.Variant(minCost, [minAind, minBind])
+    assert variants, 'Could not find implementation for Contraction. (Note: Matrix-Vector multiplication currently not supported.)'
+    permutationVariants[node] = variants
+    return permutationVariants
 
 class PrintEquivalentSparsityPatterns(Visitor):
   def __init__(self, directory):

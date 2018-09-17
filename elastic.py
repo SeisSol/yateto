@@ -15,7 +15,7 @@ import yateto.controlflow.transformer as cft
 import itertools
 import numpy as np
 
-maxDegree = 5
+maxDegree = 1
 order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
@@ -25,9 +25,9 @@ arch = getArchitectureByIdentifier('dsnb')
 DenseMemoryLayout.setAlignmentArch(arch)
 
 multipleSims = True
-#~ transpose = True
-multipleSims = False
-transpose = False
+transpose = True
+#~ multipleSims = False
+#~ transpose = False
 
 if multipleSims:
   qShape = (8, numberOf3DBasisFunctions, numberOfQuantities)
@@ -69,8 +69,8 @@ for i in range(4):
 localFlux = (Q[qi('kp')] <= localFluxSum)
 g.add('localFlux', localFlux)
 
-neighbourFlux = lambda i,j,h: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i][t('km')] * db.fP[h][t('mn')] * db.rT[j][t('nl')] * I[qi('lq')] * AminusT[i]['qp']
-g.addFamily('neighboringFlux', simpleParameterSpace(4,4,3), neighbourFlux)
+neighbourFlux = lambda h,j,i: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i][t('km')] * db.fP[h][t('mn')] * db.rT[j][t('nl')] * I[qi('lq')] * AminusT[i]['qp']
+#~ g.addFamily('neighboringFlux', simpleParameterSpace(3,4,4), neighbourFlux)
 
 derivatives = list()
 for i in range(maxDegree):
@@ -83,8 +83,8 @@ for i in range(maxDegree):
   derivative = D[i+1][qi('kp')] <= derivativeSum
 
   derivatives.append(derivative)
-  #~ g.add('derivative[{}]'.format(i), derivative)
-  g.add('derivative{}'.format(i), derivative)
+  g.add('derivative[{}]'.format(i), derivative)
+  #~ g.add('derivative{}'.format(i), derivative)
   
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
@@ -134,17 +134,17 @@ exit()
 #~ print(spp)
 #~ test = Tensor('D', (4,4,4))['zij'] <= Tensor('B', (4,4,4),spp=spp)['zik'] * Tensor('C', (4,4))['kj']
 #~ test = Tensor('Q', (4,4))['ij'] <= Tensor('B', (4,4), spp=spp)['ij']
-test = derivatives[4]
+#~ test = derivatives[4]
 #~ test = volume
 #~ test = Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + I[qi('kp')]
 #~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lp')] + db.kDivM[1][t('kl')] * Q[qi('lp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')]) * db.star[1]['qp']
-#~ test = localFlux
+test = localFlux
 PrettyPrinter().visit(test)
 
 test = DeduceIndices().visit(test)
-unitTest = copy.deepcopy(test)
+#~ unitTest = copy.deepcopy(test)
 
 test = EquivalentSparsityPattern().visit(test)
 #~ PrettyPrinter().visit(test)
@@ -158,14 +158,16 @@ test = FindContractions().visit(test)
 test = ComputeMemoryLayout().visit(test)
 #~ PrettyPrinter().visit(test)
 
-test = FindIndexPermutations().visit(test)
-test = SelectIndexPermutations().visit(test)
+permutationVariants = FindIndexPermutations().visit(test)
+test = SelectIndexPermutations(permutationVariants).visit(test)
 #~ PrettyPrinter().visit(test)
 
 test = ImplementContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
 PrettyPrinter().visit(test)
+
+exit()
 
 print('Initial CF')
 ast2cf = cfv.AST2ControlFlow()

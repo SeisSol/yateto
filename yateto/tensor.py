@@ -82,5 +82,8 @@ class Tensor(object):
       assert self._shape == other._shape and array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
     return equal
   
+  def __hash__(self):
+    return hash(self._name)
+  
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)

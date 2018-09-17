@@ -47,6 +47,9 @@ class Indices(object):
   def __ne__(self, other):
     return other == None or self._indices != other._indices or self._size != other._size
   
+  def __hash__(self):
+    return hash((self._indices, self.shape()))
+  
   def __iter__(self):
     return iter(self._indices)
   

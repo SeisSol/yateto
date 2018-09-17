@@ -343,7 +343,7 @@ class InitializerGenerator(object):
           valueNames[k] = ['&{}[0]'.format(name)]
           cpp('{} {}[] = {{{}}};'.format(realType, name, ', '.join(memory)))
       if len(valueNames) > 0:
-        self._array(cpp, realPtrType, self.VALUES_BASENAME, valueNames, maxIndex)
+        self._array(cpp, realPtrType, self.VALUES_BASENAME, valueNames, maxIndex, alwaysArray=False)
 
     viewArgs = self.TensorView.arguments(self._arch)
     if maxIndex is None:

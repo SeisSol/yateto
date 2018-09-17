@@ -31,6 +31,10 @@ class Description(object):
     
     if self.alignedA and self.alignedC:
       m = m.aligned(arch)
+    else:
+      mStartAligned = arch.checkAlignment(m.start)
+      self.alignedA = self.alignedA & mStartAligned
+      self.alignedC = self.alignedC & mStartAligned
     
     self._mnk = (m, n, k)
 

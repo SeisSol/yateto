@@ -135,7 +135,7 @@ class UnitTestFactory(KernelFactory):
     forLoops(self._cpp, g, ranges, CompareBody())
     self._cpp('TS_ASSERT_LESS_THAN(sqrt(error/refNorm), {});'.format(epsMult*self._arch.epsilon))
 
-  def tensor(self, node, resultName):
+  def tensor(self, node, resultName, maxValue = 512):
     ml = node.memoryLayout()
     size = ml.requiredReals()
     
@@ -143,6 +143,6 @@ class UnitTestFactory(KernelFactory):
     nz = node.spp().nonzero()
     for entry in zip(*nz):
       addr = ml.address(entry)
-      memory[addr] = str(float(addr)+1.0)
+      memory[addr] = str(float(addr % maxValue)+1.0)
 
     self._cpp('{} {}[{}] __attribute__((aligned({}))) = {{{}}};'.format(self._arch.typename, resultName, size, self._arch.alignment, ', '.join(memory)))

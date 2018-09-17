@@ -1,4 +1,5 @@
 from numpy import count_nonzero
+from .indices import BoundingBox
 
 class CostEstimator(object):
   def estimate(self, node):
@@ -38,6 +39,51 @@ class CachedCostEstimator(CostEstimator):
     cost = super().estimate(node)
     self._cost[node] = cost
     return cost
+
+class BoundingBoxCostEstimator(CachedCostEstimator):
+  def __init__(self):
+    super().__init__()
+    self._cache = dict()
+
+  def estimate_Add(self, node):
+    self._cache[node] = node.boundingBox()
+    return 0
+    
+  def estimate_IndexedTensor(self, node):
+    self._cache[node] = node.boundingBox()
+    return 0
+  
+  def estimate_Product(self, node):
+    childCost = self.estimate(node.leftTerm()) + self.estimate(node.rightTerm())
+    
+    lbb = self._cache[node.leftTerm()]
+    rbb = self._cache[node.rightTerm()]
+    lind = node.leftTerm().indices
+    rind = node.rightTerm().indices
+    ranges = list()
+    for index in node.indices:
+      if index in lind and index in rind:
+        lpos = lind.find(index)
+        rpos = rind.find(index)
+        ranges.append(lbb[lpos] & rbb[rpos])
+      elif index in lind:
+        ranges.append(lbb[lind.find(index)])
+      elif index in rind:
+        ranges.append(rbb[rind.find(index)])
+      else:
+        raise RuntimeError('Not supposed to happen.')
+    bb = BoundingBox(ranges)
+    self._cache[node] = bb
+
+    return childCost + bb.size()
+  
+  def estimate_IndexSum(self, node):
+    childCost = self.estimate(node.term())
+    tbb = self._cache[node.term()]
+    pos = node.term().indices.find(str(node.sumIndex()))
+    bb = BoundingBox([r for i,r in enumerate(tbb) if i != pos])
+    self._cache[node] = bb
+    return childCost + tbb.size() - bb.size()
 
 class ExactCost(CachedCostEstimator):
   def __init__(self):

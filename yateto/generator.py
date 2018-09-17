@@ -1,6 +1,7 @@
 import os
 import itertools
 import re
+from .ast.cost import BoundingBoxCostEstimator
 from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors
 from .ast.transformer import *
@@ -29,9 +30,9 @@ class Kernel(object):
     ast2cf.visit(self.ast)
     self.cfg = ast2cf.cfg()
   
-  def prepareUntilCodeGen(self):
+  def prepareUntilCodeGen(self, costEstimator):
     self.ast = EquivalentSparsityPattern().visit(self.ast)
-    self.ast = StrengthReduction().visit(self.ast)
+    self.ast = StrengthReduction(costEstimator).visit(self.ast)
     self.ast = FindContractions().visit(self.ast)
     self.ast = ComputeMemoryLayout().visit(self.ast)
     permutationVariants = FindIndexPermutations().visit(self.ast)
@@ -106,9 +107,9 @@ class KernelFamily(object):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest()
   
-  def prepareUntilCodeGen(self):
+  def prepareUntilCodeGen(self, costEstimator):
     for kernel in self._kernels.values():
-      kernel.prepareUntilCodeGen()
+      kernel.prepareUntilCodeGen(costEstimator)
 
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
@@ -161,7 +162,7 @@ class Generator(object):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
 
-  def generate(self, outputDir: str, namespace = 'yateto'):
+  def generate(self, outputDir: str, namespace = 'yateto', costEstimator = BoundingBoxCostEstimator):
     print('Deducing indices...')
     for kernel in self._kernels:
       kernel.prepareUntilUnitTest()
@@ -204,10 +205,10 @@ class Generator(object):
     print('Optimizing ASTs...')
     for kernel in self._kernels:
       print(kernel.name)
-      kernel.prepareUntilCodeGen()
+      kernel.prepareUntilCodeGen(costEstimator)
     for family in self._kernelFamilies.values():
       print(family.name)
-      family.prepareUntilCodeGen()
+      family.prepareUntilCodeGen(costEstimator)
 
     print('Generating kernels...')
     cache = RoutineCache()

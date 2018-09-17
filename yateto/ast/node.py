@@ -7,7 +7,6 @@ class Node(object):
     self.indices = None
     self._children = []
     self._eqspp = None
-    self._boundingBox = None
   
   def size(self):
     return self.indices.size()

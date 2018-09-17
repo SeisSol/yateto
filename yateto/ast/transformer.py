@@ -4,7 +4,7 @@ from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Con
 from .indices import Indices
 from .log import LoG
 from . import opt
-from .cost import ExactCost, ShapeCostEstimator
+from .cost import ShapeCostEstimator
 
 # Similar as ast.NodeTransformer
 class Transformer(Visitor): 
@@ -86,9 +86,12 @@ class DeduceIndices(Transformer):
 ### Optimal binary tree
 
 class StrengthReduction(Transformer):
+  def __init__(self, costEstimator):
+    self._costEstimator = costEstimator
+
   def visit_Einsum(self, node):
     self.generic_visit(node)
-    minTree = opt.strengthReduction(list(node), node.indices, ExactCost())
+    minTree = opt.strengthReduction(list(node), node.indices, self._costEstimator())
     minTree.setIndexPermutation(node.indices)
     return minTree
 

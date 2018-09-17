@@ -118,6 +118,7 @@ class Generator(object):
   HEADER = 'h'
   CPP = 'cpp'
   INIT_FILE_NAME = 'init'
+  SIZES_FILE_NAME = 'sizes'
   KERNELS_FILE_NAME = 'kernels'
   ROUTINES_FILE_NAME = 'routines'
   UNIT_TESTS_FILE_NAME = 'KernelTests'
@@ -178,10 +179,12 @@ class Generator(object):
     routinesHFileName = '{}.{}'.format(self.ROUTINES_FILE_NAME, self.HEADER)
     routinesHPath = os.path.join(outputDir, routinesHFileName)
     routinesCppPath = os.path.join(outputDir, '{}.{}'.format(self.ROUTINES_FILE_NAME, self.CPP))
-    
+
+    sizesHFileName = '{}.{}'.format(self.SIZES_FILE_NAME, self.HEADER)
+    sizesHPath = os.path.join(outputDir, sizesHFileName)
+
     initHFileName = '{}.{}'.format(self.INIT_FILE_NAME, self.HEADER)
     initHPath = os.path.join(outputDir, initHFileName)
-    initCppPath = os.path.join(outputDir, '{}.{}'.format(self.INIT_FILE_NAME, self.CPP))
 
     print('Generating unit tests...')
     with Cpp(unitTestsHPath) as cpp:
@@ -246,8 +249,14 @@ class Generator(object):
         tensors.update( FindTensors().visit(kernel.ast) )
 
     print('Generating initialization code...')
+    initGen = InitializerGenerator(self._arch, tensors.values())
+    with Cpp(sizesHPath) as header:
+      with header.HeaderGuard(self._headerGuardName(namespace, self.SIZES_FILE_NAME)):
+        with header.Namespace(namespace):
+          initGen.generateSizes(header)
     with Cpp(initHPath) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.INIT_FILE_NAME)):
+        header.include(sizesHFileName)
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):
-          InitializerGenerator(header, self._arch).generate(tensors.values())
+          initGen.generateInit(header)

@@ -229,9 +229,9 @@ class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):
     super().__init__(lTerm, rTerm)
     li = lTerm.indices - sumIndices
-    lr = rTerm.indices - sumIndices
-    self.sumIndices = sumIndices
+    lr = (rTerm.indices - sumIndices) - li
     self.indices = li.merged(lr)
+    self.sumIndices = sumIndices
     self.setIndexPermutation(indices)
 
   def nonZeroFlops(self):

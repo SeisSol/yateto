@@ -245,7 +245,7 @@ class UnitTestGenerator(KernelGenerator):
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
-      factory = UnitTestFactory(cpp, self._arch)      
+      factory = UnitTestFactory(cpp, self._arch)
       super().generate(cpp, cfg, factory)
 
       for var in variables:

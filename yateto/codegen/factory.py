@@ -114,7 +114,7 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, g, ranges, AssignBody())
 
-  def compare(self, refName, refML, targetName, targetML):
+  def compare(self, refName, refML, targetName, targetML, epsMult = 10.0):
     shape = refML.shape()
     g = Indices(string.ascii_lowercase[:len(shape)], shape)
     refTerm = self._formatTerm(refName, refML, g)
@@ -122,15 +122,18 @@ class UnitTestFactory(KernelFactory):
 
     class CompareBody(object):
       def __call__(s):
-        self._cpp( 'double diff = {} - {};'.format(refTerm, targetTerm) )
+        self._cpp( 'double ref = {};'.format(refTerm) )
+        self._cpp( 'double diff = ref - {};'.format(targetTerm) )
         self._cpp( 'error += diff * diff;' )
+        self._cpp( 'refNorm += ref * ref;' )
         return 0
 
     targetBBox = targetML.bbox()
     ranges = {idx: Range(targetBBox[i].start, min(targetBBox[i].stop, g.indexSize(idx))) for i,idx in enumerate(g)}
     self._cpp('double error = 0.0;')
+    self._cpp('double refNorm = 0.0;')
     forLoops(self._cpp, g, ranges, CompareBody())
-    self._cpp('TS_ASSERT_LESS_THAN(sqrt(error), {});'.format(self._arch.epsilon))
+    self._cpp('TS_ASSERT_LESS_THAN(sqrt(error/refNorm), {});'.format(epsMult*self._arch.epsilon))
 
   def tensor(self, node, resultName):
     ml = node.memoryLayout()

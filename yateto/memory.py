@@ -1,4 +1,5 @@
 from .ast.indices import BoundingBox, Range
+import copy
 import itertools
 import warnings
 
@@ -59,15 +60,12 @@ class DenseMemoryLayout(MemoryLayout):
   def __contains__(self, entry):
     return entry in self._bbox
   
-  def permute(self, permutation):
-    self._shape = tuple([self._shape[p] for p in permutation])
+  def permuted(self, permutation):
+    newShape = tuple([self._shape[p] for p in permutation])
     
     originalBB = BoundingBox([self._range0] + self._bbox[1:]) if self._range0 else self._bbox
-    self._bbox = BoundingBox([originalBB[p] for p in permutation])
-    if self._range0:
-      self._alignBB()
-
-    self._computeStride()
+    newBB = BoundingBox([copy.copy(originalBB[p]) for p in permutation])
+    return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None)
   
   def address(self, entry):
     assert entry in self._bbox

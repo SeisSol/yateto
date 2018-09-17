@@ -30,9 +30,9 @@ class Indices(object):
   def indexSize(self, index):
     return self._size[index]
   
-  def permute(self, indexNames):
+  def permuted(self, indexNames):
     assert set(indexNames) == set(self)
-    self._indices = tuple(indexNames)
+    return Indices(indexNames, self.subShape(indexNames))
     
   def find(self, index):
     assert len(index) == 1

@@ -29,13 +29,13 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   I = contraction
   
   if Aperm is not None:
-    L = copy.deepcopy(L)
+    L = copy.copy(L)
     L.setIndexPermutation(Aperm)
   if Bperm is not None:
-    R = copy.deepcopy(R)
+    R = copy.copy(R)
     R.setIndexPermutation(Bperm)
   if Cperm is not None:
-    I = copy.deepcopy(contraction)
+    I = copy.copy(contraction)
     I.setIndexPermutation(Cperm)
 
   A = L.indices.tostring()

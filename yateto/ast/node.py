@@ -111,12 +111,15 @@ class Op(Node):
     return False
   
   def setIndexPermutation(self, indices):
+    if str(indices) == str(self.indices):
+      return
+
     p = tuple([self.indices.find(idx) for idx in indices])
     if self._eqspp is not None:
-      self._eqspp = self._eqspp.transpose(p)
+      self._eqspp = self._eqspp.transpose(p).copy(order='F')
     if self._memoryLayout is not None:
-      self._memoryLayout.permute(p)
-    self.indices.permute(indices)
+      self._memoryLayout = self._memoryLayout.permuted(p)
+    self.indices = self.indices.permuted(indices)
   
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')

@@ -11,7 +11,7 @@ class Tensor(object):
   BASE_NAME = r'[a-zA-Z]\w*'
   GROUP_INDEX = r'\[(0|[1-9]\d*)\]'
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDEX)
-  DEFAULT_ORDER = 'F'
+  NUMPY_DEFAULT_ORDER = 'F'
 
   def __init__(self, name, shape, spp=None, memoryLayout=None, alignStride=False):
     if not isinstance(shape, tuple):
@@ -31,17 +31,17 @@ class Tensor(object):
       if isinstance(spp, dict):
         if not isinstance(next(iter(spp.values())), bool):
           self._values = spp
-        self._spp = zeros(shape, dtype=bool, order=self.DEFAULT_ORDER)
+        self._spp = zeros(shape, dtype=bool, order=self.NUMPY_DEFAULT_ORDER)
         for multiIndex, value in spp.items():
           self._spp[multiIndex] = value
       elif isinstance(spp, ndarray):
         if spp.shape != self._shape:
           raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
-        self._spp = spp.astype(bool, order=self.DEFAULT_ORDER)
+        self._spp = spp.astype(bool, order=self.NUMPY_DEFAULT_ORDER)
       else:
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')
     else:
-      self._spp = ones(shape, dtype=bool, order=self.DEFAULT_ORDER)
+      self._spp = ones(shape, dtype=bool, order=self.NUMPY_DEFAULT_ORDER)
     
     self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout.fromSpp(self._spp, alignStride=alignStride)
   

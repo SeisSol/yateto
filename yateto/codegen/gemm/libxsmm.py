@@ -1,5 +1,7 @@
-import os
+import subprocess
 from ..cache import RoutineGenerator
+
+LIBXSMM_GENERATOR = 'libxsmm_gemm_generator'
 
 class Libxsmm(object):
   def __init__(self, arch, descr):
@@ -53,9 +55,7 @@ class Libxsmm(object):
     
     return 2 * m.size() * n.size() * k.size()
 
-class ExecuteLibxsmm(RoutineGenerator):
-  LIBXSMM_GENERATOR = 'libxsmm_gemm_generator'
-  
+class ExecuteLibxsmm(RoutineGenerator):  
   def __init__(self, arch, gemmDescr):
     self._arch = arch
     self._gemmDescr = gemmDescr
@@ -70,8 +70,8 @@ class ExecuteLibxsmm(RoutineGenerator):
       cpp.includeSys('immintrin.h')
   
   def __call__(self, routineName, fileName):
-    callStr = '{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}P'.format(
-      self.LIBXSMM_GENERATOR,
+    argList = [
+      LIBXSMM_GENERATOR,
       'dense',
       fileName,
       routineName,
@@ -87,10 +87,13 @@ class ExecuteLibxsmm(RoutineGenerator):
       self._gemmDescr['alignedC'],
       self._arch.name,
       self._gemmDescr['prefetch'],
-      self._arch.precision
-    )
+      self._arch.precision + 'P'
+    ]
 
-    os.system(callStr)
+    try:
+      subprocess.call([str(arg) for arg in argList])
+    except OSError:
+      raise RuntimeError('Libxsmm executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(LIBXSMM_GENERATOR))
     
     return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
   

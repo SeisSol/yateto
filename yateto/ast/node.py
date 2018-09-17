@@ -92,12 +92,6 @@ class IndexedTensor(Node):
   
   def memoryLayout(self):
     return self.tensor.memoryLayout()
-  
-  def __eq__(self, other):
-    return self.tensor == other.tensor and self.indices == other.indices
-  
-  def __hash__(self):
-    return hash((self.tensor, self.indices))
 
   def __str__(self):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))

@@ -1,7 +1,7 @@
 import sys
 from .node import IndexSum, Product
 
-def strengthReduction(terms, target_indices, split = 0):
+def strengthReduction(terms, target_indices, cost_estimator, split = 0):
   n = len(terms)
   
   indexList = [index for term in terms for index in term.indices]
@@ -29,10 +29,12 @@ def strengthReduction(terms, target_indices, split = 0):
   for i in range(n):
     for j in range(max(i+1,split),n):
       mulTerm = Product(terms[i], terms[j])
-      selection = set(range(n)) - set([i,j])
-      if mulTerm._cost < minCost:
-        tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, j-1)
-        if tree._cost < minCost:
+      prodCost = cost_estimator.estimate(mulTerm)
+      if prodCost < minCost:
+        selection = set(range(n)) - set([i,j])
+        tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, cost_estimator, j-1)
+        treeCost = cost_estimator.estimate(tree)
+        if treeCost < minCost:
           best = tree
-          minCost = tree._cost
+          minCost = treeCost
   return best

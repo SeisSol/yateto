@@ -4,6 +4,7 @@ from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Con
 from .indices import Indices
 from .log import LoG
 from . import opt
+from .cost import ExactCost, ShapeCostEstimator
 
 # Similar as ast.NodeTransformer
 class Transformer(Visitor): 
@@ -87,7 +88,7 @@ class DeduceIndices(Transformer):
 class StrengthReduction(Transformer):
   def visit_Einsum(self, node):
     self.generic_visit(node)
-    minTree = opt.strengthReduction(list(node), node.indices)
+    minTree = opt.strengthReduction(list(node), node.indices, ExactCost())
     minTree.setIndexPermutation(node.indices)
     return minTree
 
@@ -143,7 +144,7 @@ class EquivalentSparsityPattern(Transformer):
     return node
   
   def getEqspp(self, terms, targetIndices):
-    minTree = opt.strengthReduction(terms, targetIndices)
+    minTree = opt.strengthReduction(terms, targetIndices, ShapeCostEstimator())
     if isinstance(minTree, IndexedTensor):
       return minTree.eqspp()
     minTree.setIndexPermutation(targetIndices)

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
-from yateto import Generator, Tensor
-from yateto.generator import simpleParameterSpace
+from yateto import *
 from yateto.input import parseXMLMatrixFile
 from yateto.ast.visitor import *
 from yateto.ast.transformer import *
@@ -9,7 +8,6 @@ from yateto.ast.node import Add
 from yateto.codegen.code import Cpp
 from yateto.codegen.cache import RoutineCache
 from yateto.codegen.visitor import *
-from yateto.arch import getArchitectureByIdentifier
 import yateto.controlflow.visitor as cfv
 import yateto.controlflow.transformer as cft
 import itertools
@@ -21,8 +19,7 @@ numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
 
-arch = getArchitectureByIdentifier('dsnb')
-DenseMemoryLayout.setAlignmentArch(arch)
+arch = useArchitectureIdentifiedBy('dsnb')
 
 multipleSims = True
 transpose = True

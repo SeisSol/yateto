@@ -37,6 +37,8 @@
 # @section DESCRIPTION
 #
 
+from .memory import DenseMemoryLayout
+
 class Architecture(object):
   def __init__(self, name, precision, alignment, enablePrefetch=False):
     self.name = name
@@ -73,7 +75,7 @@ class Architecture(object):
   def formatConstant(self, constant):
     return str(constant) + ('f' if self.precision == 'S' else '')
 
-def getArchitectureByIdentifier(ident):
+def getArchitectureIdentifiedBy(ident):
   precision = ident[0].upper()
   name = ident[1:]
   arch = {
@@ -86,3 +88,8 @@ def getArchitectureByIdentifier(ident):
     'knl':    Architecture(name, precision, 64, True) # Libxsmm currently supports prefetch only for KNL kernels
   }
   return arch[name]
+
+def useArchitectureIdentifiedBy(ident):
+  arch = getArchitectureIdentifiedBy(ident)
+  DenseMemoryLayout.setAlignmentArch(arch)
+  return arch

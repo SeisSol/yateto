@@ -256,6 +256,7 @@ class LoopOverGEMM(BinOp):
 
   def nonZeroFlops(self):
     p = Product(self.leftTerm(), self.rightTerm())
+    p.setEqspp( p.computeSparsityPattern() )
     return 2*p.nonZeroFlops() - np.count_nonzero( self.eqspp() )
   
   def computeSparsityPattern(self, *spps):

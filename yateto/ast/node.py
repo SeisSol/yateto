@@ -41,9 +41,6 @@ class Node(object):
   def memoryLayout(self):
     raise NotImplementedError
   
-  def computeMemoryLayout(self):
-    pass
-  
   def fixedIndexPermutation(self):
     return True
     
@@ -193,73 +190,21 @@ class Product(BinOp):
     assert lTerm.indices.subShape(K) == rTerm.indices.subShape(K)
 
     self.indices = lTerm.indices.merged(rTerm.indices - K)
-
-    # Cost based on indices
-    # self._cost = 1
-    # for size in self.indices.shape():
-      # self._cost *= size
-
-    # Cost based on sparsity pattern
-    self.setEqspp( self.computeSparsityPattern() )
-    self._cost = self.nonZeroFlops()
-
-    # Cost based on bounding box
-    # self.setBoundingBox( self.computeBoundingBox() )
-    # self._cost = self.boundingBox().size()
-    
-    for child in self._children:
-      self._cost += getattr(child, '_cost', 0)
   
   def nonZeroFlops(self):
     return np.count_nonzero( self.eqspp() )
   
   def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [node.eqspp() for node in self]
+    assert len(spps) == 2
     return _productContractionLoGSparsityPattern(self, *spps)
-  
-  def computeBoundingBox(self):
-    lt = self.leftTerm()
-    rt = self.rightTerm()
-    lbb = lt.boundingBox()
-    rbb = rt.boundingBox()
-    lind = set(lt.indices)
-    rind = set(rt.indices)
-    ranges = list()
-    for index in self.indices:
-      if index in lind and index in rind:
-        lpos = lt.indices.find(index)
-        rpos = rt.indices.find(index)
-        ranges.append(lbb[lpos] & rbb[rpos])
-      elif index in lind:
-        ranges.append(lbb[lt.indices.find(index)])
-      elif index in rind:
-        ranges.append(rbb[rt.indices.find(index)])
-      else:
-        raise RuntimeError('Not supposed to happen.')
-    return BoundingBox(ranges)
-  
-  def __str__(self):
-    return '{} [{}] ({})'.format(type(self).__name__, self.indices, self._cost)
 
 class IndexSum(Op):
   def __init__(self, term, sumIndex):
     super().__init__(term)
     self.indices = term.indices - set([sumIndex])
     self._sumIndex = term.indices.extract(sumIndex)
-    
-    # Cost based on indices
-    # self._cost = term.indices.size()[sumIndex] - 1
-    # for size in self.indices.shape():
-      # self._cost *= size
-
-    # Cost based on sparsity pattern
-    self.setEqspp( self.computeSparsityPattern() )
-    self._cost = self.nonZeroFlops()
-
-    # Cost based on bounding box
-    # self.setBoundingBox( self.computeBoundingBox() )
-    # self._cost = term.boundingBox().size() - self.boundingBox().size()
-    
-    self._cost += getattr(term, '_cost', 0)
   
   def nonZeroFlops(self):
     return np.count_nonzero( self.term().eqspp() ) - np.count_nonzero( self.eqspp() )
@@ -277,14 +222,6 @@ class IndexSum(Op):
     einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
     return np.einsum(einsumDescription, spps[0], optimize=Op.OPTIMIZE_EINSUM)
 
-  def computeBoundingBox(self):
-    bb = self.term().boundingBox()
-    pos = self.term().indices.find(str(self.sumIndex()))
-    return BoundingBox([r for i,r in enumerate(bb) if i != pos])
-
-  def __str__(self):
-    return '{}_{} [{}] ({})'.format(type(self).__name__, self._sumIndex, self.indices, self._cost)
-
 class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):
     super().__init__(lTerm, rTerm)
@@ -293,17 +230,16 @@ class Contraction(BinOp):
     self.sumIndices = sumIndices
     self.indices = li.merged(lr)
     self.setIndexPermutation(indices)
-    self.setEqspp( self.computeSparsityPattern() )
 
   def nonZeroFlops(self):
     p = Product(self.leftTerm(), self.rightTerm())
     return 2*p.nonZeroFlops() - np.count_nonzero( self.eqspp() )
   
   def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [node.eqspp() for node in self]
+    assert len(spps) == 2
     return _productContractionLoGSparsityPattern(self, *spps)
-  
-  def __str__(self):
-    return '{} [{}]'.format(type(self).__name__, self.indices)
 
 class LoopOverGEMM(BinOp):
   def __init__(self, indices, aTerm, bTerm, m, n, k):
@@ -314,13 +250,15 @@ class LoopOverGEMM(BinOp):
     self._k = k
     self._transA = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
     self._transB = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
-    self.setEqspp( self.computeSparsityPattern() )
 
   def nonZeroFlops(self):
     p = Product(self.leftTerm(), self.rightTerm())
     return 2*p.nonZeroFlops() - np.count_nonzero( self.eqspp() )
   
   def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [node.eqspp() for node in self]
+    assert len(spps) == 2
     return _productContractionLoGSparsityPattern(self, *spps)
   
   def cost(self):

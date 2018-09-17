@@ -15,7 +15,7 @@ import yateto.controlflow.transformer as cft
 import itertools
 import numpy as np
 
-maxDegree = 1
+maxDegree = 5
 order = maxDegree+1
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
@@ -70,7 +70,7 @@ localFlux = (Q[qi('kp')] <= localFluxSum)
 g.add('localFlux', localFlux)
 
 neighbourFlux = lambda h,j,i: Q[qi('kp')] <= Q[qi('kp')] + db.rDivM[i][t('km')] * db.fP[h][t('mn')] * db.rT[j][t('nl')] * I[qi('lq')] * AminusT[i]['qp']
-#~ g.addFamily('neighboringFlux', simpleParameterSpace(3,4,4), neighbourFlux)
+g.addFamily('neighboringFlux', simpleParameterSpace(3,4,4), neighbourFlux)
 
 derivatives = list()
 for i in range(maxDegree):

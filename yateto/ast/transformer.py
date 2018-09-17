@@ -123,6 +123,8 @@ class ImplementContractions(Transformer):
   def visit_Contraction(self, node):
     self.generic_visit(node)
     newNode = LoG(node)
+    newNode.setEqspp( node.eqspp() )
+    newNode.computeMemoryLayout()
     return newNode
 
 class EquivalentSparsityPattern(Transformer):
@@ -152,7 +154,7 @@ class EquivalentSparsityPattern(Transformer):
       return minTree.eqspp()
     minTree.setIndexPermutation(targetIndices)
     minTree = FindContractions().visit(minTree)
-    return minTree.computeSparsityPattern(*[child.eqspp() for child in minTree])
+    return ComputeSparsityPattern().visit(minTree)
   
   def visit_Einsum(self, node):
     self.generic_visit(node)
@@ -169,5 +171,9 @@ class EquivalentSparsityPattern(Transformer):
 class ComputeMemoryLayout(Transformer):
   def generic_visit(self, node):
     super().generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
     node.computeMemoryLayout()
+    return node
+  
+  def visit_IndexedTensor(self, node):
     return node

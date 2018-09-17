@@ -78,5 +78,6 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
         if cost < minCost:
           minCost = cost
           minLog = log
+  minLog.setEqspp( I.eqspp() )
   minLog.computeMemoryLayout()
   return minLog

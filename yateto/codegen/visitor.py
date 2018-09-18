@@ -7,7 +7,8 @@ from .code import Cpp
 from .factory import *
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
-MODIFIERS = 'constexpr static'
+CONSTEXPR = 'constexpr'
+MODIFIERS = '{} static'.format(CONSTEXPR)
 
 class KernelGenerator(object):  
   def __init__(self, arch):
@@ -288,8 +289,10 @@ class InitializerGenerator(object):
 
   def __init__(self, arch, tensors):
     self._arch = arch
-    self._numberType = '{} {} const'.format(MODIFIERS, self._arch.uintTypename)
-    self._collect = dict()
+    self._numberType = '{} const'.format(self._arch.uintTypename)
+    self._realType = '{} const'.format(self._arch.typename)
+    self._realPtrType = self._realType + '*'
+    self._collect = collections.OrderedDict()
     for tensor in tensors:
       baseName = tensor.baseName()
       group = tensor.group()
@@ -306,84 +309,107 @@ class InitializerGenerator(object):
     }
     return memLayoutMap[type(memoryLayout).__name__]()
   
-  def generateTensors(self, cpp):
-    with cpp.Namespace(self.TENSOR_NAMESPACE):
-      for baseName,tensorGroup in self._collect.items():
-        self.tensor(cpp, baseName, tensorGroup)
+  def generateTensorsH(self, header):
+    with header.Namespace(self.TENSOR_NAMESPACE):
+      for baseName,tensorGroup in self._collect.items():        
+        with header.Struct(baseName):
+          self._tensor(header, '', tensorGroup, False)
   
-  def generateInit(self, cpp):
-    with cpp.Namespace(self.INIT_NAMESPACE):
-      for baseName,tensorGroup in self._collect.items():
-        self.init(cpp, baseName, tensorGroup)
+  def generateTensorsCpp(self, cpp, namespace):
+    for baseName,tensorGroup in self._collect.items():
+      self._tensor(cpp, '::'.join([namespace, self.TENSOR_NAMESPACE, baseName, '']), tensorGroup, True)
   
-  def tensor(self, cpp, baseName, group):
-    maxIndex = max(group.keys())
-    with cpp.Struct(baseName):
-      self._array(cpp, self._numberType, self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex)
-      self._array(cpp, self._numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex, alwaysArray=False)
+  def generateInitH(self, header):
+    with header.Namespace(self.INIT_NAMESPACE):
+      for baseName,tensorGroup in self._collect.items():
+        self._init(header, baseName, '', tensorGroup, False)
 
-  def init(self, cpp, baseName, group):
+  def generateInitCpp(self, header, namespace):
+    for baseName,tensorGroup in self._collect.items():
+      self._init(header, baseName, '::'.join([namespace, self.INIT_NAMESPACE, baseName, '']), tensorGroup, True)
+  
+  def _tensor(self, cpp, name, group, declarationOnly):
     maxIndex = max(group.keys())
-    with cpp.Struct('{0} : {1}::{0}'.format(baseName, self.TENSOR_NAMESPACE)):
-      self._array(cpp, self._numberType, self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
-      self._array(cpp, self._numberType, self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
-      
-      realType = '{} {} const'.format(MODIFIERS, self._arch.typename)
-      realPtrType = realType + '*'
-      valueNames = dict()
+    self._array(cpp, self._numberType, name + self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex, declarationOnly)
+    self._array(cpp, self._numberType, name + self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex, declarationOnly, alwaysArray=False)
+
+  def _init(self, cpp, baseName, name, group, declarationOnly):
+    maxIndex = max(group.keys())
+    
+    def arrays():
+      self._array(cpp, self._numberType, name + self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex, declarationOnly)
+      self._array(cpp, self._numberType, name + self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex, declarationOnly)
+    
+    if declarationOnly:
+      arrays()
+    else:
+      with cpp.Struct('{0} : {1}::{0}'.format(baseName, self.TENSOR_NAMESPACE)):
+        arrays()
+        valueNames = dict()
+        if maxIndex is not None:
+          for k,v in group.items():
+            values = v.values()
+            memLayout = v.memoryLayout()
+            if values is not None:
+              memory = ['0.']*memLayout.requiredReals()
+              for idx,x in values.items():
+                memory[memLayout.address(idx)] = x
+              name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
+              valueNames[k] = ['&{}[0]'.format(name)]
+              cpp('{} {} {}[] = {{{}}};'.format(MODIFIERS, self._realType, name, ', '.join(memory)))
+          if len(valueNames) > 0:
+            self._array(cpp, self._realPtrType, self.VALUES_BASENAME, valueNames, maxIndex, alwaysArray=False)
+
+        viewArgs = self.TensorView.arguments(self._arch)
+        if maxIndex is None:
+          ml = next(iter(group.values())).memoryLayout()
+          tv = self._tensorViewGenerator(ml)
+          with cpp.Function('view', arguments=viewArgs, returnType='static {}'.format(tv.typename(len(ml.shape()), self._arch))):
+            tv.generate(cpp, ml, self._arch, None)
+        else:        
+          cpp('template<int n> struct view_type {};')
+          cpp('template<int n> static typename view_type<n>::type view({});'.format(viewArgs))
+
       if maxIndex is not None:
         for k,v in group.items():
-          values = v.values()
-          memLayout = v.memoryLayout()
-          if values is not None:
-            memory = ['0.']*memLayout.requiredReals()
-            for idx,x in values.items():
-              memory[memLayout.address(idx)] = x
-            name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
-            valueNames[k] = ['&{}[0]'.format(name)]
-            cpp('{} {}[] = {{{}}};'.format(realType, name, ', '.join(memory)))
-        if len(valueNames) > 0:
-          self._array(cpp, realPtrType, self.VALUES_BASENAME, valueNames, maxIndex, alwaysArray=False)
-
-      viewArgs = self.TensorView.arguments(self._arch)
-      if maxIndex is None:
-        ml = next(iter(group.values())).memoryLayout()
-        tv = self._tensorViewGenerator(ml)
-        with cpp.Function('view', arguments=viewArgs, returnType='static {}'.format(tv.typename(len(ml.shape()), self._arch))):
-          tv.generate(cpp, ml, self._arch, None)
-      else:        
-        cpp('template<int n> struct view_type {};')
-        cpp('template<int n> static typename view_type<n>::type view({});'.format(viewArgs))
-    if maxIndex is not None:
-      for k,v in group.items():
-        ml = v.memoryLayout()
-        tv = self._tensorViewGenerator(ml)
-        typename = tv.typename(len(ml.shape()), self._arch)
-        cpp( 'template<> struct {}::view_type<{}> {{ typedef {} type; }};'.format(baseName, k, typename) )
-        with cpp.Function('{}::view<{}>'.format(baseName, k), arguments=viewArgs, returnType='template<> {}'.format(typename)):
-          tv.generate(cpp, ml, self._arch, k)
+          ml = v.memoryLayout()
+          tv = self._tensorViewGenerator(ml)
+          typename = tv.typename(len(ml.shape()), self._arch)
+          cpp( 'template<> struct {}::view_type<{}> {{ typedef {} type; }};'.format(baseName, k, typename) )
+          with cpp.Function('{}::view<{}>'.format(baseName, k), arguments=viewArgs, returnType='template<> inline {}'.format(typename)):
+            tv.generate(cpp, ml, self._arch, k)
   
-  def _array(self, cpp, typ, name, group, maxIndex, alwaysArray=True):
-    dummy = [0]
-    formatArray = lambda L: ', '.join([str(x) for x in L])
+  def _array(self, cpp, typ, name, group, maxIndex, declarationOnly=False, alwaysArray=True):
     maxLen = max(map(len, group.values())) if len(group.values()) > 0 else 0
-    if maxIndex is None:
-      init = [formatArray(next(iter(group.values())) if len(group.values()) > 0 else dummy)]
-    else:
-      groupSize = maxIndex+1
-      init = [None]*groupSize
-      for idx in range(groupSize):
-        init[idx] = formatArray(group[idx] if idx in group else dummy)
 
-    arrayIndices = ''
-    if alwaysArray or maxLen > 1:
-      arrayIndices = '[{}]'.format(maxLen)
-      init = ['{{{}}}'.format(i) for i in init]
-    
-    initStr = ', '.join(init)
+    isGroup = maxIndex is not None
     groupIndices = ''
-    if maxIndex is not None:
+    if isGroup:
       groupIndices = '[]'
-      initStr = '{{{}}}'.format(initStr)
 
-    cpp('{} {}{}{} = {};'.format(typ, name, groupIndices, arrayIndices, initStr))
+    isArray = alwaysArray or maxLen > 1
+    arrayIndices = ''
+    if isArray:
+      arrayIndices = '[{}]'.format(maxLen)
+    
+    if declarationOnly:
+      cpp('{} {} {}{}{};'.format(CONSTEXPR, typ, name, groupIndices, arrayIndices))
+    else:
+      dummy = [0]
+      formatArray = lambda L: ', '.join([str(x) for x in L])
+      if isGroup:
+        groupSize = maxIndex+1
+        init = [None]*groupSize
+        for idx in range(groupSize):
+          init[idx] = formatArray(group[idx] if idx in group else dummy)
+      else:
+        init = [formatArray(next(iter(group.values())) if len(group.values()) > 0 else dummy)]
+
+      if isArray:
+        init = ['{{{}}}'.format(i) for i in init]
+      
+      initStr = ', '.join(init)
+      if isGroup:
+        initStr = '{{{}}}'.format(initStr)
+      
+      cpp('{} static {} {}{}{} = {};'.format(CONSTEXPR, typ, name, groupIndices, arrayIndices, initStr))

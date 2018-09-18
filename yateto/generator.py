@@ -1,6 +1,6 @@
-import os
 import itertools
 import re
+import os
 from .ast.cost import BoundingBoxCostEstimator
 from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors
@@ -115,17 +115,25 @@ def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
 
 class Generator(object):
-  HEADER = 'h'
-  CPP = 'cpp'
   INIT_FILE_NAME = 'init'
   TENSORS_FILE_NAME = 'tensor'
   KERNELS_FILE_NAME = 'kernel'
   ROUTINES_FILE_NAME = 'subroutine'
-  UNIT_TESTS_FILE_NAME = 'KernelTest'
+  UNIT_TESTS_FILE_NAME = 'KernelTest.t'
   HEADER_GUARD_SUFFIX = 'H_'
   SUPPORT_LIBRARY_HEADER = 'yateto.h'
   TEST_CLASS = 'KernelTestSuite'
   TEST_NAMESPACE = 'unit_test'
+  
+  class FileNames(object):
+    HEADER = 'h'
+    CPP = 'cpp'
+
+    def __init__(self, outputDir, name):
+      self.hName = '{}.{}'.format(name, self.HEADER)
+      self.cppName = '{}.{}'.format(name, self.CPP)
+      self.h = os.path.join(outputDir, self.hName)
+      self.cpp = os.path.join(outputDir, self.cppName)
   
   def __init__(self, arch):
     self._kernels = list()
@@ -170,28 +178,18 @@ class Generator(object):
     for family in self._kernelFamilies.values():
       family.prepareUntilUnitTest()
 
-    unitTestsHPath = os.path.join(outputDir, '{}.t.{}'.format(self.UNIT_TESTS_FILE_NAME, self.HEADER))
-    
-    kernelsHFileName = '{}.{}'.format(self.KERNELS_FILE_NAME, self.HEADER)
-    kernelsHPath = os.path.join(outputDir, kernelsHFileName)
-    kernelsCppPath = os.path.join(outputDir, '{}.{}'.format(self.KERNELS_FILE_NAME, self.CPP))
-    
-    routinesHFileName = '{}.{}'.format(self.ROUTINES_FILE_NAME, self.HEADER)
-    routinesHPath = os.path.join(outputDir, routinesHFileName)
-    routinesCppPath = os.path.join(outputDir, '{}.{}'.format(self.ROUTINES_FILE_NAME, self.CPP))
-
-    tensorsHFileName = '{}.{}'.format(self.TENSORS_FILE_NAME, self.HEADER)
-    tensorsHPath = os.path.join(outputDir, tensorsHFileName)
-
-    initHFileName = '{}.{}'.format(self.INIT_FILE_NAME, self.HEADER)
-    initHPath = os.path.join(outputDir, initHFileName)
+    fUT = self.FileNames(outputDir, self.UNIT_TESTS_FILE_NAME)
+    fKernels = self.FileNames(outputDir, self.KERNELS_FILE_NAME)
+    fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
+    fTensors = self.FileNames(outputDir, self.TENSORS_FILE_NAME)
+    fInit = self.FileNames(outputDir, self.INIT_FILE_NAME)
 
     print('Generating unit tests...')
-    with Cpp(unitTestsHPath) as cpp:
-      with cpp.HeaderGuard(self._headerGuardName(namespace, self.UNIT_TESTS_FILE_NAME)):
+    with Cpp(fUT.h) as cpp:
+      with cpp.HeaderGuard(self._headerGuardName(namespace, self.UNIT_TESTS_FILE_NAME.replace('.', '_'))):
         cpp.includeSys('cxxtest/TestSuite.h')
-        cpp.include(kernelsHFileName)
-        cpp.include(initHFileName)
+        cpp.include(fKernels.hName)
+        cpp.include(fInit.hName)
         with cpp.PPIfndef('NDEBUG'):
           cpp('long long libxsmm_num_total_flops = 0;')
         with cpp.Namespace(namespace):
@@ -216,13 +214,13 @@ class Generator(object):
     print('Generating kernels...')
     cache = RoutineCache()
     optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
-    with Cpp(kernelsCppPath) as cpp:
+    with Cpp(fKernels.cpp) as cpp:
       cpp.includeSys('cassert')
       cpp.includeSys('cstring')
-      cpp.include(routinesHFileName)
-      with Cpp(kernelsHPath) as header:
+      cpp.include(fRoutines.hName)
+      with Cpp(fKernels.h) as header:
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
-          cpp.include(kernelsHFileName)
+          cpp.include(fKernels.hName)
           with cpp.Namespace(namespace):
             with header.Namespace(namespace):
               for kernel in self._kernels:
@@ -237,9 +235,9 @@ class Generator(object):
                 optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
 
     print('Calling external code generators...')
-    with Cpp(routinesHPath) as header:
+    with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
-        cache.generate(header, routinesCppPath)
+        cache.generate(header, fRoutines.cpp)
     
     tensors = dict()
     for kernel in self._kernels:
@@ -249,14 +247,20 @@ class Generator(object):
         tensors.update( FindTensors().visit(kernel.ast) )
 
     print('Generating initialization code...')
-    initGen = InitializerGenerator(self._arch, tensors.values())
-    with Cpp(tensorsHPath) as header:
+    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=lambda x: x.name()))
+    with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):
-          initGen.generateTensors(header)
-    with Cpp(initHPath) as header:
+          initGen.generateTensorsH(header)
+    with Cpp(fTensors.cpp) as cpp:
+      cpp.include(fTensors.hName)
+      initGen.generateTensorsCpp(cpp, namespace)
+    with Cpp(fInit.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.INIT_FILE_NAME)):
-        header.include(tensorsHFileName)
+        header.include(fTensors.hName)
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):
-          initGen.generateInit(header)
+          initGen.generateInitH(header)
+    with Cpp(fInit.cpp) as cpp:
+      cpp.include(fInit.hName)
+      initGen.generateInitCpp(cpp, namespace)

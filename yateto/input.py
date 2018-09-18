@@ -1,12 +1,12 @@
 import re
 import json
-from lxml import etree
 from .tensor import Collection, Tensor
 
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')
-if lxmlSpec:
-  lxml = lxmlSpec.loader.load_module()
+etreeSpec = importlib.util.find_spec('lxml.etree') if lxmlSpec else None
+if etreeSpec:
+  etree = etreeSpec.loader.load_module()
 
 def __createCollection(matrices):
   maxIndex = dict()
@@ -54,10 +54,10 @@ def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
 def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False, alignStride=None):
-  if lxmlSpec is None:
+  if etreeSpec is None:
     raise RuntimeError('LXML module was not found. parseXMLMatrixFile is unavailable.')
 
-  tree = lxml.etree.parse(xmlFile)
+  tree = etree.parse(xmlFile)
   root = tree.getroot()
   
   matrices = dict()

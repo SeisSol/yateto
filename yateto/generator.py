@@ -83,7 +83,7 @@ class KernelFamily(object):
   def stride(self):
     if self._stride is not None:
       return self._stride
-    return (len(self),)
+    return (1,)
     
   @classmethod
   def linear(cls, stride, group):
@@ -254,7 +254,8 @@ class Generator(object):
           initGen.generateTensorsH(header)
     with Cpp(fTensors.cpp) as cpp:
       cpp.include(fTensors.hName)
-      initGen.generateTensorsCpp(cpp, namespace)
+      with cpp.Namespace(namespace):
+        initGen.generateTensorsCpp(cpp)
     with Cpp(fInit.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.INIT_FILE_NAME)):
         header.include(fTensors.hName)
@@ -263,4 +264,5 @@ class Generator(object):
           initGen.generateInitH(header)
     with Cpp(fInit.cpp) as cpp:
       cpp.include(fInit.hName)
-      initGen.generateInitCpp(cpp, namespace)
+      with cpp.Namespace(namespace):
+        initGen.generateInitCpp(cpp)

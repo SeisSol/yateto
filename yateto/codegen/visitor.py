@@ -67,15 +67,17 @@ class OptimisedKernelGenerator(KernelGenerator):
     return term.memoryLayout()
   
   class KernelOutline(object):
-    def __init__(self, nonZeroFlops, hwFlops, tensors, function):
+    def __init__(self, nonZeroFlops, hwFlops, tensors, writable, function):
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
       self.tensors = tensors
+      self.writable = writable
       self.function = function
   
   def generateKernelOutline(self, nonZeroFlops, cfg):
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
+    writable = dict()
     for var in variables:
       bn = var.node.tensor.baseName()
       g = var.node.tensor.group()
@@ -84,9 +86,12 @@ class OptimisedKernelGenerator(KernelGenerator):
         if p is not None and g is not None:
           tensors[bn] = p | {g}
         elif not (p is None and g is None):
-          raise ValueError('Grouped tensors ({}) and single tensors ({}) may not appear mixed in a kernel.'.format(node.name(), bn))        
+          raise ValueError('Grouped tensors ({}) and single tensors ({}) may not appear mixed in a kernel.'.format(node.name(), bn))
+        if var.writable:
+          writable[bn] = True
       else:
         tensors[bn] = {g} if g is not None else None
+        writable[bn] = var.writable
 
     functionIO = StringIO()
     function = ''
@@ -94,18 +99,22 @@ class OptimisedKernelGenerator(KernelGenerator):
       factory = OptimisedKernelFactory(fcpp, self._arch)
       hwFlops = super().generate(fcpp, cfg, factory, self._routineCache)
       function = functionIO.getvalue()    
-    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, function)
+    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, function)
 
   def generate(self, cpp, header, name, kernelOutlines, familyStride=None):
     tensors = dict()
+    writable = dict()
     for ko in kernelOutlines:
       if ko:
         for key,groups in ko.tensors.items():
           if key not in tensors:
             tensors[key] = groups
+            writable[key] = ko.writable[key]
           else:
             if tensors[key] is not None or groups is not None:
               tensors[key] = tensors[key] | groups
+            if ko.writable[key]:
+              writable[key] = True
 
     if familyStride is not None:
       executeName = lambda index: self.EXECUTE_NAME + str(index)
@@ -116,17 +125,16 @@ class OptimisedKernelGenerator(KernelGenerator):
       formatArray = lambda lst: lst[0]
       brackets = ''
 
-    kernelOutline = kernelOutlines[0]
     with header.Namespace(self.NAMESPACE):
       with header.Struct(name):
-        header('{} {} {}{} = {};'.format(
+        header('{} {} const {}{} = {};'.format(
           MODIFIERS,
           self._arch.uintTypename,
           self.NONZEROFLOPS_NAME,
           brackets,
           formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
         ))
-        header('{} {} {}{} = {};'.format(
+        header('{} {} const {}{} = {};'.format(
           MODIFIERS,
           self._arch.uintTypename,
           self.HARDWAREFLOPS_NAME,
@@ -136,11 +144,14 @@ class OptimisedKernelGenerator(KernelGenerator):
         header.emptyline()
         
         for baseName, groups in tensors.items():
+          typ = self._arch.typename
+          if not writable[baseName]:
+            typ += ' const'
           if groups:
             size = max(groups)+1
-            header('{}* {}[{}] = {{{}}};'.format(self._arch.typename, baseName, size, ', '.join(['nullptr']*size)))
+            header('{}* {}[{}] = {{{}}};'.format(typ, baseName, size, ', '.join(['nullptr']*size)))
           else:
-            header('{}* {} = nullptr;'.format(self._arch.typename, baseName))
+            header('{}* {} = nullptr;'.format(typ, baseName))
         header.emptyline()
         for index, kernelOutline in enumerate(kernelOutlines):
           if kernelOutline:
@@ -148,7 +159,6 @@ class OptimisedKernelGenerator(KernelGenerator):
         
         if familyStride is not None:
           header('typedef void ({}::* const {})(void);'.format(name, self.MEMBER_FUNCTION_PTR_NAME))
-          ptrToMemberType = '{}::* const'.format(name)
           header('{} {} {}[] = {};'.format(
             MODIFIERS,
             self.MEMBER_FUNCTION_PTR_NAME,
@@ -156,22 +166,48 @@ class OptimisedKernelGenerator(KernelGenerator):
             formatArray(['&{}::{}'.format(name, executeName(index)) if kernelOutline else 'nullptr' for index, kernelOutline in enumerate(kernelOutlines)])
           ))
           args = ['i' + str(i) for i,v in enumerate(familyStride)]
+          argsStr = ' + '.join(['{}*{}'.format(familyStride[i], arg) for i,arg in enumerate(args)])
           typedArgs = ['{} {}'.format(self._arch.uintTypename, arg) for arg in args]
-          with header.Function(self.FIND_EXECUTE_NAME, ', '.join(typedArgs), '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
-            header('return {}[{}];'.format(self.EXECUTE_NAME, ' + '.join(['{}*{}'.format(familyStride[i], arg) for i,arg in enumerate(args)])))
+          typedArgsStr = ', '.join(typedArgs)
+          with header.Function(self.FIND_EXECUTE_NAME, typedArgsStr, '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
+            header('return {}[{}];'.format(self.EXECUTE_NAME, argsStr))
 
-      for index, kernelOutline in enumerate(kernelOutlines):
-        if kernelOutline is None:
-          continue
+          flopFuns = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
+          for flopFun in flopFuns:
+            funName = flopFun[:1].lower() + flopFun[1:]
+            with header.Function(funName, typedArgsStr, '{} {}'.format(MODIFIERS, self._arch.uintTypename)):
+              header('return {}[{}];'.format(flopFun, argsStr))
 
-        with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
-          for baseName, groups in kernelOutline.tensors.items():
-            if groups:
-              for g in groups:
-                cpp('assert({}[{}] != nullptr);'.format(baseName, g))
-            else:
-              cpp('assert({} != nullptr);'.format(baseName))
-          cpp(kernelOutline.function)
+    flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
+    for fc in flopCounters:
+      cpp('{} {} const {}::{}::{}{};'.format(
+        CONSTEXPR,
+        self._arch.uintTypename,
+        self.NAMESPACE,
+        name,
+        fc,
+        brackets
+      ))
+    if familyStride is not None:
+      cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
+        CONSTEXPR,
+        self.NAMESPACE,
+        name,
+        self.MEMBER_FUNCTION_PTR_NAME,
+        self.EXECUTE_NAME
+      ))
+    for index, kernelOutline in enumerate(kernelOutlines):
+      if kernelOutline is None:
+        continue
+
+      with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
+        for baseName, groups in kernelOutline.tensors.items():
+          if groups:
+            for g in groups:
+              cpp('assert({}[{}] != nullptr);'.format(baseName, g))
+          else:
+            cpp('assert({} != nullptr);'.format(baseName))
+        cpp(kernelOutline.function)
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
@@ -315,18 +351,18 @@ class InitializerGenerator(object):
         with header.Struct(baseName):
           self._tensor(header, '', tensorGroup, False)
   
-  def generateTensorsCpp(self, cpp, namespace):
+  def generateTensorsCpp(self, cpp):
     for baseName,tensorGroup in self._collect.items():
-      self._tensor(cpp, '::'.join([namespace, self.TENSOR_NAMESPACE, baseName, '']), tensorGroup, True)
+      self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, baseName, '']), tensorGroup, True)
   
   def generateInitH(self, header):
     with header.Namespace(self.INIT_NAMESPACE):
       for baseName,tensorGroup in self._collect.items():
         self._init(header, baseName, '', tensorGroup, False)
 
-  def generateInitCpp(self, header, namespace):
+  def generateInitCpp(self, header):
     for baseName,tensorGroup in self._collect.items():
-      self._init(header, baseName, '::'.join([namespace, self.INIT_NAMESPACE, baseName, '']), tensorGroup, True)
+      self._init(header, baseName, '::'.join([self.INIT_NAMESPACE, baseName, '']), tensorGroup, True)
   
   def _tensor(self, cpp, name, group, declarationOnly):
     maxIndex = max(group.keys())
@@ -342,6 +378,15 @@ class InitializerGenerator(object):
     
     if declarationOnly:
       arrays()
+      if maxIndex is not None:
+        nValueArrays = 0
+        for k,v in group.items():
+          if v.values() is not None:
+            valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, k if k is not None else '')
+            cpp('{} {} {}[];'.format(CONSTEXPR, self._realType, valuesName))
+            nValueArrays += 1
+        if nValueArrays > 0:
+          cpp('{} {} {}{}[];'.format(CONSTEXPR, self._realPtrType, name, self.VALUES_BASENAME))
     else:
       with cpp.Struct('{0} : {1}::{0}'.format(baseName, self.TENSOR_NAMESPACE)):
         arrays()

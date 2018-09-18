@@ -7,11 +7,11 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
   
-  def _pointer(self, cpp, targetName, baseName, term, loopIndices):
+  def _pointer(self, cpp, targetName, baseName, term, loopIndices, const=True):
     addressStr = term.memoryLayout.addressString(term.indices, term.indices & loopIndices)
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
-    cpp('{}* {} = {}{};'.format(self._arch.typename, targetName, baseName, addressStr))
+    cpp('{} {}* {} = {}{};'.format(self._arch.typename, 'const' if const else '', targetName, baseName, addressStr))
     
   def _memLayout(self, term, I, J):
     if len(term.indices) > 2:
@@ -81,7 +81,7 @@ class Generic(object):
         if hasInnerLoops:
           self._pointer(cpp, innerAname, outerAname, d.leftTerm, d.innerLoopIndices)
           self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices)
-          self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices)
+          self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, const=False)
         generator = gemm.generator(self._arch, gemmDescr)
         return generator.generate(cpp, routineCache)
 
@@ -91,7 +91,7 @@ class Generic(object):
         if hasOuterLoops:
           self._pointer(cpp, outerAname, d.leftTerm.name, d.leftTerm, d.outerLoopIndices)
           self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices)
-          self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices)
+          self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices, const=False)
         if d.assignLoopRanges is not None:
           gemmDescr.setBeta(0.0)
           flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody())

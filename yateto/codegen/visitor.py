@@ -7,7 +7,7 @@ from .code import Cpp
 from .factory import *
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
-MODIFIERS = 'static constexpr'
+MODIFIERS = 'constexpr static'
 
 class KernelGenerator(object):  
   def __init__(self, arch):
@@ -229,7 +229,7 @@ class UnitTestGenerator(KernelGenerator):
           )
         )
         cpp( '{initNS}::{baseName}::view{groupTemplate}({name}).copyToView({viewName});'.format(
-            initNS = InitializerGenerator.NAMESPACE,
+            initNS = InitializerGenerator.INIT_NAMESPACE,
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             groupTemplate=self._groupTemplate(var),
             baseName=var.node.tensor.baseName(),
@@ -258,7 +258,8 @@ class InitializerGenerator(object):
   STOP_NAME = 'Stop'
   SIZE_NAME = 'Size'
   VALUES_BASENAME = 'Values'
-  NAMESPACE = 'init'
+  TENSOR_NAMESPACE = 'tensor'
+  INIT_NAMESPACE = 'init'
   
   class TensorView(object):
     ARGUMENT_NAME = 'values'
@@ -305,61 +306,61 @@ class InitializerGenerator(object):
     }
     return memLayoutMap[type(memoryLayout).__name__]()
   
-  def generateSizes(self, cpp):
-    with cpp.Namespace(self.NAMESPACE):
+  def generateTensors(self, cpp):
+    with cpp.Namespace(self.TENSOR_NAMESPACE):
       for baseName,tensorGroup in self._collect.items():
-        with cpp.Namespace(baseName):
-          self.sizes(cpp, tensorGroup)
+        self.tensor(cpp, baseName, tensorGroup)
   
   def generateInit(self, cpp):
-    with cpp.Namespace(self.NAMESPACE):
+    with cpp.Namespace(self.INIT_NAMESPACE):
       for baseName,tensorGroup in self._collect.items():
-        with cpp.Namespace(baseName):
-          self.init(cpp, tensorGroup)
+        self.init(cpp, baseName, tensorGroup)
   
-  def sizes(self, cpp, group):
+  def tensor(self, cpp, baseName, group):
     maxIndex = max(group.keys())
-    self._array(cpp, self._numberType, self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex)
-    self._array(cpp, self._numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex, alwaysArray=False)
+    with cpp.Struct(baseName):
+      self._array(cpp, self._numberType, self.SHAPE_NAME, {k: v.shape() for k,v in group.items()}, maxIndex)
+      self._array(cpp, self._numberType, self.SIZE_NAME, {k: [v.memoryLayout().requiredReals()] for k,v in group.items()}, maxIndex, alwaysArray=False)
 
-  def init(self, cpp, group):
+  def init(self, cpp, baseName, group):
     maxIndex = max(group.keys())
+    with cpp.Struct('{0} : {1}::{0}'.format(baseName, self.TENSOR_NAMESPACE)):
+      self._array(cpp, self._numberType, self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
+      self._array(cpp, self._numberType, self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
+      
+      realType = '{} {} const'.format(MODIFIERS, self._arch.typename)
+      realPtrType = realType + '*'
+      valueNames = dict()
+      if maxIndex is not None:
+        for k,v in group.items():
+          values = v.values()
+          memLayout = v.memoryLayout()
+          if values is not None:
+            memory = ['0.']*memLayout.requiredReals()
+            for idx,x in values.items():
+              memory[memLayout.address(idx)] = x
+            name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
+            valueNames[k] = ['&{}[0]'.format(name)]
+            cpp('{} {}[] = {{{}}};'.format(realType, name, ', '.join(memory)))
+        if len(valueNames) > 0:
+          self._array(cpp, realPtrType, self.VALUES_BASENAME, valueNames, maxIndex, alwaysArray=False)
 
-    self._array(cpp, self._numberType, self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
-    self._array(cpp, self._numberType, self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex)
-    
-    realType = '{} {} const'.format(MODIFIERS, self._arch.typename)
-    realPtrType = realType + '*'
-    valueNames = dict()
+      viewArgs = self.TensorView.arguments(self._arch)
+      if maxIndex is None:
+        ml = next(iter(group.values())).memoryLayout()
+        tv = self._tensorViewGenerator(ml)
+        with cpp.Function('view', arguments=viewArgs, returnType='static {}'.format(tv.typename(len(ml.shape()), self._arch))):
+          tv.generate(cpp, ml, self._arch, None)
+      else:        
+        cpp('template<int n> struct view_type {};')
+        cpp('template<int n> static typename view_type<n>::type view({});'.format(viewArgs))
     if maxIndex is not None:
-      for k,v in group.items():
-        values = v.values()
-        memLayout = v.memoryLayout()
-        if values is not None:
-          memory = ['0.']*memLayout.requiredReals()
-          for idx,x in values.items():
-            memory[memLayout.address(idx)] = x
-          name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
-          valueNames[k] = ['&{}[0]'.format(name)]
-          cpp('{} {}[] = {{{}}};'.format(realType, name, ', '.join(memory)))
-      if len(valueNames) > 0:
-        self._array(cpp, realPtrType, self.VALUES_BASENAME, valueNames, maxIndex, alwaysArray=False)
-
-    viewArgs = self.TensorView.arguments(self._arch)
-    if maxIndex is None:
-      ml = next(iter(group.values())).memoryLayout()
-      tv = self._tensorViewGenerator(ml)
-      with cpp.Function('view', arguments=viewArgs, returnType=tv.typename(len(ml.shape()), self._arch)):
-        tv.generate(cpp, ml, self._arch, None)
-    else:
-      cpp('template<int n> struct view_type {};')
-      cpp('template<int n> static typename view_type<n>::type view({});'.format(viewArgs))
       for k,v in group.items():
         ml = v.memoryLayout()
         tv = self._tensorViewGenerator(ml)
         typename = tv.typename(len(ml.shape()), self._arch)
-        cpp( 'template<> struct view_type<{}> {{ typedef {} type; }};'.format(k, typename) )
-        with cpp.Function('view<{}>'.format(k), arguments=viewArgs, returnType='template<> {}'.format(typename)):
+        cpp( 'template<> struct {}::view_type<{}> {{ typedef {} type; }};'.format(baseName, k, typename) )
+        with cpp.Function('{}::view<{}>'.format(baseName, k), arguments=viewArgs, returnType='template<> {}'.format(typename)):
           tv.generate(cpp, ml, self._arch, k)
   
   def _array(self, cpp, typ, name, group, maxIndex, alwaysArray=True):

@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 
-from yateto import Generator, Tensor
-from yateto.generator import simpleParameterSpace
+from yateto import *
 from yateto.input import parseXMLMatrixFile
-from yateto.arch import getArchitectureByIdentifier
 from yateto.ast.visitor import PrettyPrinter
-from yateto.codegen.code import Cpp
-from yateto.codegen.visitor import *
 
 maxDegree = 5
 order = maxDegree+1
@@ -14,8 +10,8 @@ numberOf1DBasisFunctions = order
 numberOf2DBasisFunctions = order*(order+1)//2
 numberOf3DBasisFunctions = order*(order+1)*(order+2)//6
 numberOfQuantities = 9
-arch = getArchitectureByIdentifier('dsnb')
-DenseMemoryLayout.setAlignmentArch(arch)
+
+arch = useArchitectureIdentifiedBy('dsnb')
 
 clones = {
   'star': ['star[0]', 'star[1]', 'star[2]'],

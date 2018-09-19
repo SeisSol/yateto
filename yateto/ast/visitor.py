@@ -41,8 +41,14 @@ class PrettyPrinter(Visitor):
     self._indent = self._indent - 1
 
 class ComputeSparsityPattern(Visitor):
+  def __init__(self, useAvailable):
+    self._useAvailable = useAvailable
+
   def generic_visit(self, node):
-    spps = [self.visit(child) for child in node]
+    if self._useAvailable:
+      spps = [child.eqspp() if child.eqspp() is not None else self.visit(child) for child in node]
+    else:
+      spps = [self.visit(child) for child in node]
     return node.computeSparsityPattern(*spps)
   
   def visit_IndexedTensor(self, node):

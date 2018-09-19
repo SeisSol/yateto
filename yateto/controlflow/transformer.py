@@ -3,7 +3,7 @@ from .graph import *
 class MergeScalarMultiplications(object):   
   def visit(self, cfg):
     n = len(cfg)-1
-    i = 0
+    i = 1
     while i < n:
       ua = cfg[i].action
       if ua.isRHSVariable() and not ua.isCompound() and ua.scalar is not None:

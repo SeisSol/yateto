@@ -9,7 +9,8 @@ class Libxsmm(object):
     self._descr = descr
   
   def generateRoutineName(self, gemm):
-    return 'libxsmm_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alpha}_beta{beta}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(**gemm)
+    alpha = '1' if gemm['alpha'] == 1 else '_1'
+    return 'libxsmm_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{beta}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(alphaSubs=alpha, **gemm)
   
   def _pointer(self, term, offset2):
     o = term.memoryLayout.address(offset2)

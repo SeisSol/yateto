@@ -25,9 +25,10 @@ class OptimisedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch):
     super().__init__(cpp, arch)
 
-  def create_LoopOverGEMM(self, node, result, resultName, argNames, add, routineCache):
+  def create_LoopOverGEMM(self, node, result, resultName, argNames, add, scalar, routineCache):
     assert len(argNames) == 2
     description = log.Description(
+      alpha = scalar,
       add = add,
       result = IndexedTensorDescription.fromNode(resultName, result),
       leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
@@ -39,9 +40,10 @@ class OptimisedKernelFactory(KernelFactory):
     generator = log.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_IndexSum(self, node, result, resultName, argNames, add, routineCache):
+  def create_IndexSum(self, node, result, resultName, argNames, add, scalar, routineCache):
     assert len(argNames) == 1
     description = indexsum.Description(
+      alpha = scalar,
       add = add,
       result = IndexedTensorDescription.fromNode(resultName, result),
       term = IndexedTensorDescription.fromNode(argNames[0], node.term())
@@ -49,9 +51,10 @@ class OptimisedKernelFactory(KernelFactory):
     generator = indexsum.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_Product(self, node, result, resultName, argNames, add, routineCache):
+  def create_Product(self, node, result, resultName, argNames, add, scalar, routineCache):
     assert len(argNames) == 2
     description = product.Description(
+      alpha = scalar,
       add = add,
       result = IndexedTensorDescription.fromNode(resultName, result),
       leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
@@ -60,9 +63,9 @@ class OptimisedKernelFactory(KernelFactory):
     generator = product.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def simple(self, resultName, result, termName, term, add, routineCache):
+  def simple(self, resultName, result, termName, term, add, scalar, routineCache):
     description = copyscaleadd.Description(
-      alpha = 1.0,
+      alpha = scalar,
       beta = 1.0 if add else 0.0,
       result = IndexedTensorDescription.fromNode(resultName, result),
       term = IndexedTensorDescription.fromNode(termName, term)
@@ -78,7 +81,7 @@ class UnitTestFactory(KernelFactory):
     address = memLayout.addressString(indices)
     return '{}[{}]'.format(name, address)
   
-  def create_Einsum(self, node, resultNode, resultName, argNames, add, routineCache):
+  def create_Einsum(self, node, resultNode, resultName, argNames, add, scalar, routineCache):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
@@ -89,6 +92,9 @@ class UnitTestFactory(KernelFactory):
     resultTerm = self._formatTerm(resultName, resultML, node.indices)
     terms = [self._formatTerm(argNames[i], DenseMemoryLayout(child.shape()), child.indices) for i,child in enumerate(node)]
     
+    if scalar and scalar != 1.0:
+      terms.insert(0, str(scalar))
+    
     if not add:
       self._cpp.memset(resultName, resultML.requiredReals(), self._arch.typename)
     
@@ -98,14 +104,20 @@ class UnitTestFactory(KernelFactory):
         return len(terms)
 
     return forLoops(self._cpp, g, ranges, EinsumBody())
+  
+  def create_ScalarMultiplication(self, node, resultNode, resultName, argNames, add, scalar, routineCache):
+    return self.simple(resultName, resultNode, argNames[0], node, add, scalar, routineCache)
 
-  def simple(self, resultName, resultNode, termName, termNode, add, routineCache):
+  def simple(self, resultName, resultNode, termName, termNode, add, scalar, routineCache):
     g = resultNode.indices
     
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
     
     result = self._formatTerm(resultName, DenseMemoryLayout(resultNode.shape()), g)
     term = self._formatTerm(termName, DenseMemoryLayout(termNode.shape()), g)
+
+    if scalar and scalar != 1.0:
+      term = '{} * {}'.format(scalar, term)
     
     class AssignBody(object):
       def __call__(s):

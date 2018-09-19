@@ -48,6 +48,10 @@ class Node(object):
     if str(indices) != str(self.indices):
       raise NotImplementedError
 
+  def _checkMultipleScalarMults(self):
+    if isinstance(self, ScalarMultiplication):
+      raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
+
   def _binOp(self, other, opType):
     if isinstance(self, opType):
       if isinstance(other, opType):
@@ -61,10 +65,36 @@ class Node(object):
     return opType(self, other)
 
   def __mul__(self, other):
+    if not isinstance(other, Node):
+      self._checkMultipleScalarMults()
+      return ScalarMultiplication(other, self)
+    if isinstance(self, ScalarMultiplication):
+      other._checkMultipleScalarMults()
+      self._children[0] = self.term() * other
+      return self
+    elif isinstance(other, ScalarMultiplication):
+      self._checkMultipleScalarMults()
+      other._children[0] = self * other.term()
+      return other
     return self._binOp(other, Einsum)
   
+  def __rmul__(self, other):
+    return self.__mul__(other)
+  
   def __add__(self, other):
+    if not isinstance(other, Node):
+      raise ValueError('Unsupported operation: Cannot add {} to {}.'.format(self, other))
     return self._binOp(other, Add)
+  
+  def __radd__(self, other):
+    return self.__add__(other)
+  
+  def __neg__(self):
+    self._checkMultipleScalarMults()
+    return ScalarMultiplication(-1.0, self)
+
+  def __sub__(self, other):
+    return self._binOp(-other, Add)
     
   def __le__(self, other):
     if isinstance(other, IndexedTensor) and not (self == other):
@@ -145,6 +175,36 @@ class Add(Op):
       nzFlops += np.count_nonzero( child.eqspp() )
     return nzFlops - np.count_nonzero( self.eqspp() )
 
+class UnaryOp(Op):
+  def term(self):
+    return self._children[0]
+
+class ScalarMultiplication(UnaryOp):
+  def __init__(self, scalar, term):
+    super().__init__(term)
+    self._isConstant = isinstance(scalar, float) or isinstance(scalar, int)
+    self._scalar = float(scalar) if self._isConstant else scalar
+  
+  def name(self):
+    return str(self._scalar) if self._isConstant else self._scalar.name()
+  
+  def scalar(self):
+    return self._scalar
+  
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      return self.term().eqspp()
+    assert len(spps) == 1
+    return spps[0]
+
+  def nonZeroFlops(self):
+    if self._isConstant and self._scalar in [-1.0, 1.0]:
+      return 0
+    return np.count_nonzero( self.eqspp() )
+  
+  def __str__(self):
+    return '{}: {}'.format(super().__str__(), str(self._scalar))
+
 class BinOp(Op):
   def __init__(self, lTerm, rTerm):
     super().__init__(lTerm, rTerm)
@@ -203,7 +263,7 @@ class Product(BinOp):
     assert len(spps) == 2
     return _productContractionLoGSparsityPattern(self, *spps)
 
-class IndexSum(Op):
+class IndexSum(UnaryOp):
   def __init__(self, term, sumIndex):
     super().__init__(term)
     self.indices = term.indices - set([sumIndex])
@@ -214,9 +274,6 @@ class IndexSum(Op):
   
   def sumIndex(self):
     return self._sumIndex
-  
-  def term(self):
-    return self._children[0]
   
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:

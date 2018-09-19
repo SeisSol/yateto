@@ -8,7 +8,7 @@ class Generic(object):
   def _formatTerm(self, alpha, term):
     prefix = ''
     if alpha == 0.0:
-      return None
+      return ''
     if alpha == 1.0:
       prefix = term.name
     else:
@@ -26,17 +26,19 @@ class Generic(object):
       def __call__(s):
         op = '='
         flop = 0
-        if d.beta == 1.0:
+        alpha = d.alpha
+        if alpha not in [-1.0, 1.0]:
+          flop += 1
+        if d.beta == 1.0 and alpha == -1.0:
+          alpha = 1.0
+          op = '-='
+          flop += 1
+        elif d.beta == 1.0:
           op = '+='
-          flop = 1
+          flop = +1
         elif d.beta != 0.0:
           raise NotImplementedError
-        cpp( '{} {} {};'.format(self._formatTerm(1.0, d.result), op, self._formatTerm(d.alpha, d.term)) )
-        
-        if d.alpha == 0.0:
-          flop -= 1
-        elif d.alpha != 1.0:
-          flop += 1
+        cpp( '{} {} {};'.format(self._formatTerm(1.0, d.result), op, self._formatTerm(alpha, d.term)) )
 
         return flop
 

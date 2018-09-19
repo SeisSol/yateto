@@ -21,7 +21,8 @@ class Generic(object):
         cpp( '{} sum = {};'.format(self._arch.typename, initialValue) )
         with cpp.For('int {0} = {1}; {0} < {2}; ++{0}'.format(sumIndex, d.sumLoopRange.start, d.sumLoopRange.stop)):
           cpp( 'sum += {}[{}];'.format(d.term.name, d.term.memoryLayout.addressString(d.term.indices)) )
-        cpp( '{} = sum;'.format(target) )
+        mult = '{} * '.format(d.alpha) if d.alpha != 1.0 else ''
+        cpp( '{} = {}sum;'.format(target, mult) )
         
         return d.sumLoopRange.size()
 

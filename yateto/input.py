@@ -1,6 +1,6 @@
 import re
 import json
-from .tensor import Collection, Tensor
+from . import Collection, Tensor
 
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')

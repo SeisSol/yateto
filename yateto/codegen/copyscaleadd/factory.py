@@ -8,6 +8,7 @@ class Description(object):
     self.result = result
     self.term = term
     
+    assert self.alpha != 0.0, 'copyscaleadd does not support alpha=0.0 at the moment.'
     assert self.beta == 1.0 or self.beta == 0.0, 'copyscaleadd supports only beta=0.0 or beta=1.0 at the moment.'
     
     assert self.result.indices == self.term.indices

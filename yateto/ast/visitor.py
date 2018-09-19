@@ -108,6 +108,11 @@ class FindIndexPermutations(Visitor):
       return self.generic_visit(node)
     return self.allPermutations(node, True)
   
+  def visit_ScalarMultiplication(self, node):
+    if node.term().fixedIndexPermutation():
+      return self.generic_visit(node)
+    return self.allPermutations(node, True)
+  
   def visit_Product(self, node):
     return self.allPermutations(node, False)
     

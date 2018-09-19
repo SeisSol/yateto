@@ -42,6 +42,7 @@ class Kernel(object):
     ast2cf = AST2ControlFlow()
     ast2cf.visit(self.ast)
     self.cfg = ast2cf.cfg()
+    self.cfg = MergeScalarMultiplications().visit(self.cfg)
     self.cfg = FindLiving().visit(self.cfg)
     self.cfg = SubstituteForward().visit(self.cfg)
     self.cfg = SubstituteBackward().visit(self.cfg)
@@ -219,6 +220,8 @@ class Generator(object):
       cpp.includeSys('cstring')
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
+        header.includeSys('cmath')
+        header.includeSys('limits')
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace):

@@ -62,7 +62,7 @@ class Generic(object):
       result = TensorDescription(innerCname, CmemLayout, Ceqspp),
       transA = d.transA,
       transB = d.transB,
-      alpha = 1.0,
+      alpha = d.alpha,
       beta = 1.0 if d.add else 0.0,
       arch = self._arch
     )

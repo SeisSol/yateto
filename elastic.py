@@ -2,6 +2,7 @@
 
 from yateto import *
 from yateto.input import parseXMLMatrixFile
+from yateto.ast.cost import BoundingBoxCostEstimator
 from yateto.ast.visitor import *
 from yateto.ast.transformer import *
 from yateto.ast.node import Add
@@ -81,7 +82,6 @@ for i in range(maxDegree):
 
   derivatives.append(derivative)
   g.add('derivative[{}]'.format(i), derivative)
-  #~ g.add('derivative{}'.format(i), derivative)
   
   #~ derivative = DeduceIndices().visit(derivative)
   #~ derivative = EquivalentSparsityPattern().visit(derivative)
@@ -89,10 +89,13 @@ for i in range(maxDegree):
 
 X = Tensor('X', qShape)
 Y = Tensor('Y', qShape)
+dt = Scalar('dt')
+vt = Scalar('vt')
 g.add('test1', Q[qi('kp')] <= I[qi('kp')] + Q[qi('kp')])
 g.add('test2', Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + I[qi('kp')])
 g.add('test3', Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lp')] + db.kDivM[1][t('kl')] * Q[qi('lp')])
 g.add('test4', I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (X[qi('lq')] + Y[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (X[qi('lq')] + Y[qi('lq')]) * db.star[1]['qp'])
+g.add('test5', Q[qi('kp')] <= vt * db.kDivM[1][t('kl')] * (I[qi('lp')] + dt * (I[qi('lq')] * AplusT[0]['qp'])) - I[qi('kp')])
 
 g.generate('test/generated_code', 'seissol')
 exit()
@@ -137,16 +140,19 @@ exit()
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + I[qi('kp')]
 #~ test = Q[qi('kp')] <= db.kDivM[0][t('kl')] * I[qi('lp')] + db.kDivM[1][t('kl')] * Q[qi('lp')]
 #~ test = Q[qi('kp')] <= I[qi('kp')] + I[qi('kp')] + Q[qi('kp')] + db.kDivM[0][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')] + Q[qi('lq')]) * db.star[0]['qp'] + db.kDivM[1][t('kl')] * (Tensor('A', qShape)[qi('lq')] + Tensor('B', qShape)[qi('lq')]) * db.star[1]['qp']
-test = localFlux
+#~ test = localFlux
+#~ test = Q[qi('kp')] <= db.kDivM[1][t('kl')] * (I[qi('lp')] + I[qi('lq')] * AplusT[0]['qp']) + I[qi('kp')]
+
 PrettyPrinter().visit(test)
 
 test = DeduceIndices().visit(test)
 #~ unitTest = copy.deepcopy(test)
+PrettyPrinter().visit(test)
 
 test = EquivalentSparsityPattern().visit(test)
 #~ PrettyPrinter().visit(test)
 
-test = StrengthReduction().visit(test)
+test = StrengthReduction(BoundingBoxCostEstimator).visit(test)
 #~ PrettyPrinter().visit(test)
 
 test = FindContractions().visit(test)
@@ -163,8 +169,6 @@ test = ImplementContractions().visit(test)
 #~ PrettyPrinter().visit(test)
 
 PrettyPrinter().visit(test)
-
-exit()
 
 print('Initial CF')
 ast2cf = cfv.AST2ControlFlow()
@@ -186,7 +190,7 @@ cfv.PrettyPrinter().visit(cfg)
 
 print('Remove empty statements')
 cfg = cft.RemoveEmptyStatements().visit(cfg)
-cfv.PrettyPrinter().visit(cfg)
+cfv.PrettyPrinter(True).visit(cfg)
 
 print('Merge actions')
 cfg = cft.MergeActions().visit(cfg)
@@ -196,9 +200,9 @@ print('Reuse temporaries')
 cfg = cft.ReuseTemporaries().visit(cfg)
 cfv.PrettyPrinter().visit(cfg)
 
-print('Determine local initialization')
-cfg = cft.DetermineLocalInitialization().visit(cfg)
-cfv.PrettyPrinter(True).visit(cfg)
+#~ print('Determine local initialization')
+#~ cfg = cft.DetermineLocalInitialization().visit(cfg)
+#~ cfv.PrettyPrinter(True).visit(cfg)
 
 #~ cache = RoutineCache()
 #~ with Cpp() as cpp:

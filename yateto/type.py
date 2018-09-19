@@ -1,13 +1,29 @@
 import re
-from .ast.node import IndexedTensor, Indices
+from .ast.node import Node, IndexedTensor
 from numpy import ndarray, zeros, ones, array_equal
 from .memory import DenseMemoryLayout
 
-class Collection(object):
-  def update(self, collection):
-    self.__dict__.update(collection.__dict__)
+class AbstractType(object):
+  @classmethod
+  def isValidName(cls, name):
+    return re.match(cls.VALID_NAME, name) is not None
+  
+  def name(self):
+    return self._name
 
-class Tensor(object):
+class Scalar(AbstractType):
+  VALID_NAME = r'^[a-zA-Z]\w*$'
+  
+  def __init__(self, name):
+    if not self.isValidName(name):
+      raise ValueError('Scalar name invalid (must match regexp {}): {}'.format(self.VALID_NAME, name))
+
+    self._name = name
+  
+  def __str__(self):
+    return self._name
+
+class Tensor(AbstractType):
   BASE_NAME = r'[a-zA-Z]\w*'
   GROUP_INDEX = r'\[(0|[1-9]\d*)\]'
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDEX)
@@ -44,10 +60,6 @@ class Tensor(object):
       self._spp = ones(shape, dtype=bool, order=self.NUMPY_DEFAULT_ORDER)
     
     self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout.fromSpp(self._spp, alignStride=alignStride)
-  
-  @classmethod
-  def isValidName(cls, name):
-    return re.match(cls.VALID_NAME, name) is not None
 
   def __getitem__(self, indexNames):
     return IndexedTensor(self, indexNames)
@@ -57,9 +69,6 @@ class Tensor(object):
   
   def memoryLayout(self):
     return self._memoryLayout
-  
-  def name(self):
-    return self._name
   
   def baseName(self):
     return re.match(self.BASE_NAME, self._name).group(0)
@@ -87,3 +96,7 @@ class Tensor(object):
   
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)
+
+class Collection(object):
+  def update(self, collection):
+    self.__dict__.update(collection.__dict__)

@@ -50,10 +50,11 @@ class Expression(object):
     return '{}({})'.format(type(self.node).__name__, ', '.join([str(var) for var in self._variables]))
 
 class ProgramAction(object):
-  def __init__(self, result, term, add):
+  def __init__(self, result, term, add, scalar = None):
     self.result = result
     self.term = term
     self.add = add
+    self.scalar = scalar
 
   def isRHSExpression(self):
     return isinstance(self.term, Expression)
@@ -63,6 +64,9 @@ class ProgramAction(object):
   
   def isCompound(self):
     return self.add
+  
+  def hasTrivialScalar(self):
+    return self.scalar is None or self.scalar == 1.0
 
   def variables(self):
     V = self.term.variables()
@@ -71,7 +75,7 @@ class ProgramAction(object):
     return V
   
   def substituted(self, when, by, result = True, term = True):
-    return ProgramAction(self.result.substituted(when, by) if result else self.result, self.term.substituted(when, by) if term else self.term, self.add)
+    return ProgramAction(self.result.substituted(when, by) if result else self.result, self.term.substituted(when, by) if term else self.term, self.add, self.scalar)
 
 class ProgramPoint(object):
   def __init__(self, action):

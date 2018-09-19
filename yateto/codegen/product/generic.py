@@ -13,9 +13,11 @@ class Generic(object):
 
     class ProductBody(object):
       def __call__(s):
-        cpp( '{}[{}] {} {}[{}] * {}[{}];'.format(
+        mult = '{} * '.format(d.alpha) if d.alpha != 1.0 else ''
+        cpp( '{}[{}] {} {}{}[{}] * {}[{}];'.format(
             d.result.name, d.result.memoryLayout.addressString(d.result.indices),
             '+=' if d.add else '=',
+            mult,
             d.leftTerm.name, d.leftTerm.memoryLayout.addressString(d.leftTerm.indices),
             d.rightTerm.name, d.rightTerm.memoryLayout.addressString(d.rightTerm.indices)
           )

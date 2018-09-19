@@ -1,5 +1,22 @@
 from .graph import *
 
+class MergeScalarMultiplications(object):   
+  def visit(self, cfg):
+    n = len(cfg)-1
+    i = 0
+    while i < n:
+      ua = cfg[i].action
+      if ua.isRHSVariable() and not ua.isCompound() and ua.scalar is not None:
+        va = cfg[i-1].action
+        if va.isRHSExpression() and not va.isCompound() and ua.term == va.result:
+          va.scalar = ua.scalar
+          va.result = ua.result
+          del cfg[i]
+          i -= 1
+          n -= 1
+      i += 1
+    return cfg
+
 class FindLiving(object):   
   def visit(self, cfg):
     cfg[-1].living = set()
@@ -48,7 +65,7 @@ class RemoveEmptyStatements(object):
     i = 0
     while i < n:
       ua = cfg[i].action
-      if not ua.isCompound() and ua.isRHSVariable() and ua.result == ua.term:
+      if not ua.isCompound() and ua.isRHSVariable() and ua.result == ua.term and ua.hasTrivialScalar():
         del cfg[i]
         n -= 1
       else:
@@ -66,17 +83,19 @@ class MergeActions(object):
         V = ua.variables()
         for j in range(i+1,n):
           va = cfg[j].action
-          if va.isRHSVariable() and ua.result == va.term and va.result not in V:
+          if va.isRHSVariable() and ua.result == va.term and va.result not in V and (ua.hasTrivialScalar() or va.hasTrivialScalar()):
             found = j
             break
           elif ua.result in va.variables() or ua.result == va.result:
             break
           else:
-            V = V | va.variables()
+            V = V | va.variables() | {va.result}
         if found >= 0:
           va = cfg[j].action
           ua.result = va.result
           ua.add = va.add
+          if not va.hasTrivialScalar():
+            ua.scalar = va.scalar
           del cfg[j]
           n -= 1
       i += 1

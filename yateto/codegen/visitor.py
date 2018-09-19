@@ -1,7 +1,7 @@
 import collections
 from io import StringIO
 from ..memory import DenseMemoryLayout
-from ..controlflow.visitor import SortedGlobalsList
+from ..controlflow.visitor import ScalarsSet, SortedGlobalsList
 from ..controlflow.transformer import DetermineLocalInitialization
 from .code import Cpp
 from .factory import *
@@ -42,10 +42,11 @@ class KernelGenerator(object):
         else:
           resultNode = action.result.node
 
+        scalar = 1.0 if action.scalar is None else action.scalar
         if action.isRHSExpression():
-          hwFlops += factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, routineCache)
+          hwFlops += factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, scalar, routineCache)
         else:
-          hwFlops += factory.simple(self._name(action.result), resultNode, self._name(action.term), termNode, action.add, routineCache)
+          hwFlops += factory.simple(self._name(action.result), resultNode, self._name(action.term), termNode, action.add, scalar, routineCache)
     return hwFlops
 
 class OptimisedKernelGenerator(KernelGenerator):
@@ -67,14 +68,16 @@ class OptimisedKernelGenerator(KernelGenerator):
     return term.memoryLayout()
   
   class KernelOutline(object):
-    def __init__(self, nonZeroFlops, hwFlops, tensors, writable, function):
+    def __init__(self, nonZeroFlops, hwFlops, tensors, writable, scalars, function):
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
       self.tensors = tensors
       self.writable = writable
+      self.scalars = scalars
       self.function = function
   
   def generateKernelOutline(self, nonZeroFlops, cfg):
+    scalars = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     writable = dict()
@@ -99,13 +102,15 @@ class OptimisedKernelGenerator(KernelGenerator):
       factory = OptimisedKernelFactory(fcpp, self._arch)
       hwFlops = super().generate(fcpp, cfg, factory, self._routineCache)
       function = functionIO.getvalue()    
-    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, function)
+    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, scalars, function)
 
   def generate(self, cpp, header, name, kernelOutlines, familyStride=None):
-    tensors = dict()
+    tensors = collections.OrderedDict()
     writable = dict()
+    scalars = set()
     for ko in kernelOutlines:
       if ko:
+        scalars = scalars | ko.scalars
         for key,groups in ko.tensors.items():
           if key not in tensors:
             tensors[key] = groups
@@ -115,6 +120,8 @@ class OptimisedKernelGenerator(KernelGenerator):
               tensors[key] = tensors[key] | groups
             if ko.writable[key]:
               writable[key] = True
+
+    scalars = sorted(list(scalars), key=str)
 
     if familyStride is not None:
       executeName = lambda index: self.EXECUTE_NAME + str(index)
@@ -142,6 +149,9 @@ class OptimisedKernelGenerator(KernelGenerator):
           formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
         ))
         header.emptyline()
+        
+        for scalar in scalars:
+          header('{0} {1} = std::numeric_limits<{0}>::signaling_NaN();'.format(self._arch.typename, scalar))
         
         for baseName, groups in tensors.items():
           typ = self._arch.typename
@@ -201,6 +211,9 @@ class OptimisedKernelGenerator(KernelGenerator):
         continue
 
       with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
+        sclrs = sorted(list(kernelOutline.scalars), key=str)
+        for scalar in sclrs:
+          cpp('assert(!std::isnan({}));'.format(scalar))
         for baseName, groups in kernelOutline.tensors.items():
           if groups:
             for g in groups:
@@ -246,8 +259,13 @@ class UnitTestGenerator(KernelGenerator):
     return self._memoryLayout(term).requiredReals()
   
   def generate(self, cpp, testName, kernelClass, cfg, index=None):
+    scalars = ScalarsSet().visit(cfg)
+    scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
     with cpp.Function(self.CXXTEST_PREFIX + testName):
+      for i,scalar in enumerate(scalars):
+        cpp('{} {} = {};'.format(self._arch.typename, scalar, float(i+2)))
+        
       for var in variables:
         self._factory = UnitTestFactory(cpp, self._arch)
         self._factory.tensor(var.node.tensor, self._tensorName(var))
@@ -277,6 +295,8 @@ class UnitTestGenerator(KernelGenerator):
         cpp.emptyline()
 
       cpp( '{}::{} {};'.format(OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+      for scalar in scalars:
+        cpp( '{0}.{1} = {1};'.format(self.KERNEL_VAR, scalar) )
       for var in variables:
         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.node.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )

@@ -66,6 +66,21 @@ class DeduceIndices(Transformer):
     elif node.indices != node[0].indices:
       raise ValueError('Add: {} is not a equal to {}'.format(node.indices.__repr__(), node[0].indices.__repr__()))
     return node
+  
+  def _setSingleChildIndices(self, node, term):
+    if term.indices != node.indices:
+      if term.indices is None or (not term.fixedIndexPermutation() and term.indices <= node.indices and node.indices <= term.indices):
+        term.indices = node.indices
+      else:
+        raise ValueError('Index dimensions do not match: {} != {}'.format(node.indices.__repr__(), term.indices.__repr__()))
+  
+  def visit_ScalarMultiplication(self, node):
+    if node.indices is not None:
+      self._setSingleChildIndices(node, node.term())
+    self.visit(node.term())
+    if node.indices is None:
+      node.indices = node.term().indices
+    return node
 
   def visit_Assign(self, node):
     lhs = node[0]
@@ -76,10 +91,7 @@ class DeduceIndices(Transformer):
 
     node.indices = lhs.indices
 
-    if isinstance(rhs, Op):
-      rhs.indices = node.indices
-    elif rhs.indices != node.indices:
-      raise ValueError('Assign: Index dimensions do not match: {} != {}'.format(node.indices.__repr__(), rhs.indices.__repr__()))
+    self._setSingleChildIndices(node, rhs)
     self.visit(rhs)
     return node
 
@@ -140,6 +152,11 @@ class EquivalentSparsityPattern(Transformer):
       assert isinstance(child.eqspp(), ndarray)
       spp += child.eqspp()
     node.setEqspp(spp)
+    return node
+
+  def visit_ScalarMultiplication(self, node):
+    self.generic_visit(node)
+    node.setEqspp(node.term().eqspp())
     return node
   
   def visit_Assign(self, node):

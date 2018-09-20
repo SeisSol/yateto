@@ -24,6 +24,7 @@ class Generic(object):
         mult = '{} * '.format(d.alpha) if d.alpha != 1.0 else ''
         cpp( '{} = {}sum;'.format(target, mult) )
         
-        return d.sumLoopRange.size()
+        flop = 1 if d.alpha != 1.0 else 0
+        return d.sumLoopRange.size() + flop
 
     return forLoops(cpp, d.result.indices, d.loopRanges, IndexSumBody())

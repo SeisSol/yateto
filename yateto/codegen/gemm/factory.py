@@ -46,7 +46,7 @@ class Description(object):
 
 def generator(arch, descr):
   requiresTranspositions = descr.transA or descr.transB
-  simpleAlpha = descr.alpha in [-1.0, 1.0]
+  simpleAlpha = descr.alpha == 1.0
   simpleBeta = descr.beta in [0.0, 1.0]
   strideOneA = descr.leftTerm.memoryLayout.stridei(0) == 1
   strideOneB = descr.rightTerm.memoryLayout.stridei(0) == 1

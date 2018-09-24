@@ -51,9 +51,7 @@ class Tensor(AbstractType):
         for multiIndex, value in spp.items():
           self._spp[multiIndex] = value
       elif isinstance(spp, ndarray):
-        if spp.shape != self._shape:
-          raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
-        self._spp = spp.astype(bool, order=self.NUMPY_DEFAULT_ORDER)
+        self._setSparsityPattern(spp)
       else:
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')
     else:
@@ -63,6 +61,15 @@ class Tensor(AbstractType):
 
   def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._spp, alignStride=alignStride)
+
+  def _setSparsityPattern(self, spp):
+    if spp.shape != self._shape:
+      raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
+    self._spp = spp.astype(bool, order=self.NUMPY_DEFAULT_ORDER)
+
+  def updateSparsityPattern(self, spp):
+    self._setSparsityPattern(spp)
+    self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
 
   def __getitem__(self, indexNames):
     return IndexedTensor(self, indexNames)
@@ -103,3 +110,9 @@ class Tensor(AbstractType):
 class Collection(object):
   def update(self, collection):
     self.__dict__.update(collection.__dict__)
+
+  def __getitem__(self, key):
+    return self.__dict__[key]
+
+  def __contains__(self, key):
+    return key in self.__dict__

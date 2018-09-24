@@ -1,12 +1,15 @@
 import re
 import json
 from . import Collection, Tensor
+from .memory import CSCMemoryLayout
 
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')
 etreeSpec = importlib.util.find_spec('lxml.etree') if lxmlSpec else None
 if etreeSpec:
   etree = etreeSpec.loader.load_module()
+else:
+  etree = importlib.util.find_spec('xml.etree.ElementTree').loader.load_module()
 
 def __createCollection(matrices):
   maxIndex = dict()
@@ -54,9 +57,6 @@ def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
 def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False, alignStride=None):
-  if etreeSpec is None:
-    raise RuntimeError('LXML module was not found. parseXMLMatrixFile is unavailable.')
-
   tree = etree.parse(xmlFile)
   root = tree.getroot()
   
@@ -96,4 +96,59 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=False, alignStride=No
       matrices.update( __processMatrix(m['name'], m['rows'], m['columns'], entries, clones, transpose, alignStride) )
 
   return __createCollection(matrices)
-  
+
+def memoryLayoutFromFile(xmlFile, db, clones):
+  tree = etree.parse(xmlFile)
+  root = tree.getroot()
+  strtobool = ['yes', 'true', '1']
+  groups = dict()
+
+  for group in root.findall('group'):
+    groupName = group.get('name')
+    noMutualSparsityPattern = group.get('noMutualSparsityPattern', '').lower() in strtobool
+    groups[groupName] = list()
+    for matrix in group:
+      if matrix.tag == 'matrix':
+        matrixName = matrix.get('name')
+        if matrixName not in db:
+          raise ValueError('Unrecognized matrix name ' + matrixName)
+        if len(groups[groupName]) > 0:
+          lastMatrixInGroup = groups[groupName][-1]
+          if db[lastMatrixInGroup].shape() != db[matrixName].shape():
+            raise ValueError('Matrix {} cannot be in the same group as matrix {} due to different shapes.'.format(matrixName, lastMatrixInGroup))
+        groups[groupName].append( matrixName )
+      else:
+        __complain(group)
+    # equalize sparsity pattern
+    if not noMutualSparsityPattern:
+      spp = None
+      for matrix in groups[groupName]:
+        spp = spp + db[matrix].spp() if spp is not None else db[matrix].spp()
+      for matrix in groups[groupName]:
+        db[matrix].updateSparsityPattern(spp)
+
+  for matrix in root.findall('matrix'):
+    group = matrix.get('group')
+    name = matrix.get('name')
+    sparse = matrix.get('sparse', '').lower() in strtobool
+
+    if group in groups or name in clones or name in db:
+      blocks = []
+      for block in matrix:
+        raise NotImplementedError
+        if block.tag == 'block':
+          startrow = int(block.get('startrow'))
+          stoprow = int(block.get('stoprow'))
+          startcol = int(block.get('startcol'))
+          stopcol = int(block.get('stopcol'))
+          blksparse = (block.get('sparse') == None and sparse) or block.get('sparse', '').lower() in strtobool
+        else:
+          __complain(block)
+      names = groups[group] if group in groups else (clones[name] if name in clones else [name])
+      for n in names:
+        if sparse:
+          db[n].setMemoryLayout(CSCMemoryLayout)
+        else:
+          db[n].setMemoryLayout(DenseMemoryLayout, alignStride=db[n].memoryLayout().alignedStride())
+    else:
+      raise ValueError('Unrecognized matrix name ' + name)

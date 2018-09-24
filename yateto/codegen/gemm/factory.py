@@ -5,7 +5,7 @@ from .generic import Generic
 from .libxsmm import Libxsmm
 
 class Description(object):
-  def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta, arch):
+  def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta, arch, prefetchName = None):
     self.result = result
     self.leftTerm = leftTerm
     self.rightTerm = rightTerm
@@ -13,6 +13,7 @@ class Description(object):
     self.transB = transB
     self.alpha = alpha
     self.beta = beta
+    self.prefetchName = prefetchName
     
     self.isACsc = isinstance(self.leftTerm.memoryLayout, CSCMemoryLayout)
     self.isBCsc = isinstance(self.rightTerm.memoryLayout, CSCMemoryLayout)

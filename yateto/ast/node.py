@@ -2,8 +2,9 @@ import numpy as np
 import inspect
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
+from abc import ABC, abstractmethod
 
-class Node(object):
+class Node(ABC):
   def __init__(self):
     self.indices = None
     self._children = []
@@ -15,8 +16,9 @@ class Node(object):
   def shape(self):
     return self.indices.shape()
   
+  @abstractmethod
   def nonZeroFlops(self):
-    raise NotImplementedError
+    pass
 
   def __iter__(self):
     return iter(self._children)
@@ -39,15 +41,16 @@ class Node(object):
   def boundingBox(self):
     return BoundingBox.fromSpp(self._eqspp)
   
+  @abstractmethod
   def memoryLayout(self):
-    raise NotImplementedError
+    pass
   
   def fixedIndexPermutation(self):
     return True
-    
+
+  @abstractmethod
   def setIndexPermutation(self, indices):
-    if str(indices) != str(self.indices):
-      raise NotImplementedError
+    pass
 
   def _checkMultipleScalarMults(self):
     if isinstance(self, ScalarMultiplication):
@@ -111,6 +114,9 @@ class IndexedTensor(Node):
   def nonZeroFlops(self):
     return 0
   
+  def setIndexPermutation(self, indices):
+    assert str(indices) == str(self.indices)
+  
   def spp(self):
     return self.tensor.spp()
   
@@ -130,6 +136,7 @@ class Op(Node):
     super().__init__()
     self._children = list(args)
     self._memoryLayout = None
+    self.prefetch = None
   
   def memoryLayout(self):
     return self._memoryLayout
@@ -159,7 +166,8 @@ class Op(Node):
     raise NotImplementedError
 
 class Einsum(Op):
-  pass
+  def nonZeroFlops(self):
+    raise NotImplementedError
     
 class Add(Op):
   def computeSparsityPattern(self, *spps):

@@ -3,7 +3,7 @@ from ..common import *
 from .generic import Generic
 
 class Description(object):
-  def __init__(self, alpha, add: bool, result: IndexedTensorDescription, leftTerm: IndexedTensorDescription, rightTerm: IndexedTensorDescription, loopIndices, transA, transB):
+  def __init__(self, alpha, add: bool, result: IndexedTensorDescription, leftTerm: IndexedTensorDescription, rightTerm: IndexedTensorDescription, loopIndices, transA, transB, prefetchName):
     self.alpha = alpha
     self.add = add
     self.result = result
@@ -12,6 +12,7 @@ class Description(object):
     self.loopIndices = loopIndices
     self.transA = transA
     self.transB = transB
+    self.prefetchName = prefetchName
     
     rA = loopRanges(self.leftTerm, self.loopIndices)
     rB = loopRanges(self.rightTerm, self.loopIndices)

@@ -42,11 +42,13 @@ class Generic(object):
     outerAname = '_A' if hasOuterLoops else d.leftTerm.name
     outerBname = '_B' if hasOuterLoops else d.rightTerm.name
     outerCname = '_C' if hasOuterLoops else d.result.name
+    outerPrefetchName = '_Cprefetch' if hasOuterLoops and d.prefetchName is not None else d.prefetchName
     
     hasInnerLoops = len(d.innerLoopIndices) > 0
     innerAname = '_Ain' if hasInnerLoops else outerAname
     innerBname = '_Bin' if hasInnerLoops else outerBname
     innerCname = '_Cin' if hasInnerLoops else outerCname
+    innerPrefetchName = '_Cprefetchin' if hasInnerLoops and outerPrefetchName is not None else outerPrefetchName
     
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In)
@@ -64,7 +66,8 @@ class Generic(object):
       transB = d.transB,
       alpha = d.alpha,
       beta = 1.0 if d.add else 0.0,
-      arch = self._arch
+      arch = self._arch,
+      prefetchName = innerPrefetchName
     )
     
     if not d.add:
@@ -82,6 +85,8 @@ class Generic(object):
           self._pointer(cpp, innerAname, outerAname, d.leftTerm, d.innerLoopIndices)
           self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices)
           self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, const=False)
+          if outerPrefetchName is not None:
+            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices)
         generator = gemm.generator(self._arch, gemmDescr)
         return generator.generate(cpp, routineCache)
 
@@ -92,6 +97,8 @@ class Generic(object):
           self._pointer(cpp, outerAname, d.leftTerm.name, d.leftTerm, d.outerLoopIndices)
           self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices)
           self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices, const=False)
+          if d.prefetchName is not None:
+            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices)
         if d.assignLoopRanges is not None:
           gemmDescr.setBeta(0.0)
           flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody())

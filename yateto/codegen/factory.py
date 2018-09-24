@@ -25,7 +25,7 @@ class OptimisedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch):
     super().__init__(cpp, arch)
 
-  def create_LoopOverGEMM(self, node, result, resultName, argNames, add, scalar, routineCache):
+  def create_LoopOverGEMM(self, node, result, resultName, argNames, add, scalar, prefetchName, routineCache):
     assert len(argNames) == 2
     description = log.Description(
       alpha = scalar,
@@ -35,12 +35,13 @@ class OptimisedKernelFactory(KernelFactory):
       rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm()),
       loopIndices = node.loopIndices(),
       transA = node.transA(),
-      transB = node.transB()
+      transB = node.transB(),
+      prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_IndexSum(self, node, result, resultName, argNames, add, scalar, routineCache):
+  def create_IndexSum(self, node, result, resultName, argNames, add, scalar, prefetchName, routineCache):
     assert len(argNames) == 1
     description = indexsum.Description(
       alpha = scalar,
@@ -51,7 +52,7 @@ class OptimisedKernelFactory(KernelFactory):
     generator = indexsum.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_Product(self, node, result, resultName, argNames, add, scalar, routineCache):
+  def create_Product(self, node, result, resultName, argNames, add, scalar, prefetchName, routineCache):
     assert len(argNames) == 2
     description = product.Description(
       alpha = scalar,
@@ -81,7 +82,7 @@ class UnitTestFactory(KernelFactory):
     address = memLayout.addressString(indices)
     return '{}[{}]'.format(name, address)
   
-  def create_Einsum(self, node, resultNode, resultName, argNames, add, scalar, routineCache):
+  def create_Einsum(self, node, resultNode, resultName, argNames, add, scalar, prefetchName, routineCache):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
@@ -105,7 +106,7 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, g, ranges, EinsumBody())
   
-  def create_ScalarMultiplication(self, node, resultNode, resultName, argNames, add, scalar, routineCache):
+  def create_ScalarMultiplication(self, node, resultNode, resultName, argNames, add, scalar, prefetchName, routineCache):
     return self.simple(resultName, resultNode, argNames[0], node, add, scalar, routineCache)
 
   def simple(self, resultName, resultNode, termName, termNode, add, scalar, routineCache):

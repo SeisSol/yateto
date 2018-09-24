@@ -1,3 +1,4 @@
+import sys
 from numpy import ndarray, zeros, einsum
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern
 from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction
@@ -128,6 +129,27 @@ class SelectIndexPermutations(Transformer):
     choice = iter(variant._choices)
     for child in node:
       child.setIndexPermutation(next(choice))
+    super().generic_visit(node)
+    return node
+
+class AssignPrefetch(Transformer):
+  def __init__(self, prefetchCapabilities, prefetchTensors):
+    self._bestMatch = dict()
+    for tensor in prefetchTensors:
+      tsize = tensor.memoryLayout().requiredReals()
+      minDelta = sys.maxsize
+      match = None
+      for node, size in prefetchCapabilities.items():
+        delta = abs(size - tsize)
+        if delta < minDelta:
+          minDelta = delta
+          match = node
+      self._bestMatch[node] = tensor
+      del prefetchCapabilities[node]
+
+  def generic_visit(self, node):
+    if node in self._bestMatch:
+      node.prefetch = self._bestMatch[node]
     super().generic_visit(node)
     return node
 

@@ -1,9 +1,10 @@
 import itertools
 import re
 import os
+from yateto import Tensor
 from .ast.cost import BoundingBoxCostEstimator
 from .ast.node import Node
-from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors
+from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors, FindPrefetchCapabilities
 from .ast.transformer import *
 from .codegen.cache import *
 from .codegen.code import Cpp
@@ -15,9 +16,12 @@ class Kernel(object):
   BASE_NAME = r'[a-zA-Z]\w*'
   VALID_NAME = r'^{}$'.format(BASE_NAME)
 
-  def __init__(self, name, ast):
+  def __init__(self, name, ast, prefetch=None):
     self.name = name
     self.ast = ast
+    self._prefetch = None
+    if prefetch is not None:
+      self._prefetch = [prefetch] if isinstance(prefetch, Tensor) else prefetch
     self.cfg = None
 
   @classmethod
@@ -38,6 +42,9 @@ class Kernel(object):
     permutationVariants = FindIndexPermutations().visit(self.ast)
     self.ast = SelectIndexPermutations(permutationVariants).visit(self.ast)
     self.ast = ImplementContractions().visit(self.ast)
+    if self._prefetch is not None:
+      prefetchCapabilities = FindPrefetchCapabilities().visit(self.ast)
+      self.ast = AssignPrefetch(prefetchCapabilities, self._prefetch).visit(self.ast)
 
     ast2cf = AST2ControlFlow()
     ast2cf.visit(self.ast)
@@ -94,7 +101,7 @@ class KernelFamily(object):
       index += p*stride[i]
     return index
 
-  def add(self, name, ast):
+  def add(self, name, ast, prefetch=None):
     baseName = self.baseName(name)
     if not self.name:
       self.name = baseName
@@ -102,7 +109,7 @@ class KernelFamily(object):
     
     group = self.group(name)
     internalName = '_{}_{}'.format(baseName, group)
-    self._kernels[group] = Kernel(internalName, ast)
+    self._kernels[group] = Kernel(internalName, ast, prefetch)
   
   def prepareUntilUnitTest(self):
     for kernel in self._kernels.values():
@@ -141,19 +148,19 @@ class Generator(object):
     self._kernelFamilies = dict()
     self._arch = arch
   
-  def add(self, name: str, ast: Node):
+  def add(self, name: str, ast: Node, prefetch=None):
     if KernelFamily.isValidName(name):
       baseName = KernelFamily.baseName(name)
       if baseName not in self._kernelFamilies:
         self._kernelFamilies[baseName] = KernelFamily()
-      self._kernelFamilies[baseName].add(name, ast)
+      self._kernelFamilies[baseName].add(name, ast, prefetch)
     else:      
       if not Kernel.isValidName(name):
         raise ValueError('Kernel name invalid (must match regexp {}): {}'.format(Kernel.VALID_NAME, name))
-      kernel = Kernel(name, ast)
+      kernel = Kernel(name, ast, prefetch)
       self._kernels.append(kernel)
   
-  def addFamily(self, name: str, parameterSpace, astGenerator):
+  def addFamily(self, name: str, parameterSpace, astGenerator, prefetchGenerator=None):
     if name not in self._kernelFamilies:
       self._kernelFamilies[name] = KernelFamily()
     family = self._kernelFamilies[name]
@@ -166,7 +173,8 @@ class Generator(object):
     for p in parameterSpace:
       indexedName = '{}[{}]'.format(name, KernelFamily.linear(stride, p))
       ast = astGenerator(*p)
-      family.add(indexedName, ast)
+      prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
+      family.add(indexedName, ast, prefetch)
   
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]

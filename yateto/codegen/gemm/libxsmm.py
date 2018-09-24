@@ -48,7 +48,7 @@ class Libxsmm(object):
       'beta':         int(d.beta),
       'alignedA':     int(d.alignedA),
       'alignedC':     int(d.alignedC),
-      'prefetch':     'pfsigonly'
+      'prefetch':     'BL2viaC' if d.prefetchName is not None else 'pfsigonly'
     }
 
     spp = None
@@ -59,11 +59,12 @@ class Libxsmm(object):
     
     routineName = self.generateRoutineName(gemm, spp)
     
-    cpp( '{}({}, {}, {}, nullptr, nullptr, nullptr);'.format(
+    cpp( '{}({}, {}, {}, nullptr, {}, nullptr);'.format(
       routineName,
       self._pointer(d.leftTerm, (m.start, k.start)),
       self._pointer(d.rightTerm, (k.start, n.start)),
-      self._pointer(d.result, (m.start, n.start))
+      self._pointer(d.result, (m.start, n.start)),
+      d.prefetchName if d.prefetchName is not None else 'nullptr'
     ))
     
     routineCache.addRoutine(routineName, ExecuteLibxsmm(self._arch, gemm, spp))

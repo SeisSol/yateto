@@ -1,7 +1,7 @@
 import collections
 from io import StringIO
 from ..memory import DenseMemoryLayout
-from ..controlflow.visitor import ScalarsSet, SortedGlobalsList
+from ..controlflow.visitor import ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
 from .code import Cpp
 from .factory import *
@@ -10,7 +10,10 @@ SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
 MODIFIERS = '{} static'.format(CONSTEXPR)
 
-class KernelGenerator(object):  
+class KernelGenerator(object):
+  PREFETCHSTRUCT_NAME = 'Prefetch'
+  PREFETCHVAR_NAME = '_prefetch'
+
   def __init__(self, arch):
     self._arch = arch
 
@@ -44,7 +47,8 @@ class KernelGenerator(object):
 
         scalar = 1.0 if action.scalar is None else action.scalar
         if action.isRHSExpression():
-          hwFlops += factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, scalar, routineCache)
+          prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
+          hwFlops += factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, scalar, prefetchName, routineCache)
         else:
           hwFlops += factory.simple(self._name(action.result), resultNode, self._name(action.term), termNode, action.add, scalar, routineCache)
     return hwFlops
@@ -68,13 +72,27 @@ class OptimisedKernelGenerator(KernelGenerator):
     return term.memoryLayout()
   
   class KernelOutline(object):
-    def __init__(self, nonZeroFlops, hwFlops, tensors, writable, scalars, function):
+    def __init__(self, nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function):
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
       self.tensors = tensors
       self.writable = writable
+      self.prefetch = prefetch
       self.scalars = scalars
       self.function = function
+
+    @classmethod
+    def _addTensor(cls, tensor, tensors):
+      bn = tensor.baseName()
+      g = tensor.group()
+      if bn in tensors:
+        p = tensors[bn]
+        if p is not None and g is not None:
+          tensors[bn] = p | {g}
+        elif not (p is None and g is None):
+          raise ValueError('Grouped tensors ({}) and single tensors ({}) may not appear mixed in a kernel.'.format(node.name(), bn))
+      else:
+        tensors[bn] = {g} if g is not None else None
   
   def generateKernelOutline(self, nonZeroFlops, cfg):
     scalars = ScalarsSet().visit(cfg)
@@ -82,19 +100,18 @@ class OptimisedKernelGenerator(KernelGenerator):
     tensors = collections.OrderedDict()
     writable = dict()
     for var in variables:
+      self.KernelOutline._addTensor(var.node.tensor, tensors)
       bn = var.node.tensor.baseName()
-      g = var.node.tensor.group()
-      if bn in tensors:
-        p = tensors[bn]
-        if p is not None and g is not None:
-          tensors[bn] = p | {g}
-        elif not (p is None and g is None):
-          raise ValueError('Grouped tensors ({}) and single tensors ({}) may not appear mixed in a kernel.'.format(node.name(), bn))
+      if bn in writable:
         if var.writable:
           writable[bn] = True
       else:
-        tensors[bn] = {g} if g is not None else None
         writable[bn] = var.writable
+
+    prefetchTensors = SortedPrefetchList().visit(cfg)
+    prefetch = collections.OrderedDict()
+    for tensor in prefetchTensors:
+      self.KernelOutline._addTensor(tensor, prefetch)
 
     functionIO = StringIO()
     function = ''
@@ -102,24 +119,29 @@ class OptimisedKernelGenerator(KernelGenerator):
       factory = OptimisedKernelFactory(fcpp, self._arch)
       hwFlops = super().generate(fcpp, cfg, factory, self._routineCache)
       function = functionIO.getvalue()    
-    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, scalars, function)
+    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function)
+
+  @classmethod
+  def _addFromKO(cls, koEntries, entries):
+    for key, value in koEntries.items():
+      if key not in entries:
+        entries[key] = value
+      else:
+        if entries[key] is not None or value is not None:
+          entries[key] = entries[key] | value
+    
 
   def generate(self, cpp, header, name, kernelOutlines, familyStride=None):
     tensors = collections.OrderedDict()
+    prefetch = collections.OrderedDict()
     writable = dict()
     scalars = set()
     for ko in kernelOutlines:
       if ko:
         scalars = scalars | ko.scalars
-        for key,groups in ko.tensors.items():
-          if key not in tensors:
-            tensors[key] = groups
-            writable[key] = ko.writable[key]
-          else:
-            if tensors[key] is not None or groups is not None:
-              tensors[key] = tensors[key] | groups
-            if ko.writable[key]:
-              writable[key] = True
+        self._addFromKO(ko.tensors, tensors)
+        self._addFromKO(ko.writable, writable)
+        self._addFromKO(ko.prefetch, prefetch)
 
     scalars = sorted(list(scalars), key=str)
 
@@ -163,10 +185,22 @@ class OptimisedKernelGenerator(KernelGenerator):
           else:
             header('{}* {} = nullptr;'.format(typ, baseName))
         header.emptyline()
+
+        if len(prefetch) > 0:
+          with header.Struct(self.PREFETCHSTRUCT_NAME):
+            for baseName, groups in prefetch.items():
+              if groups:
+                size = max(groups)+1
+                header('{}* {}[{}];'.format(typ, baseName, size))
+              else:
+                header('{}* {};'.format(typ, baseName))
+          header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
+          header.emptyline()
+
         for index, kernelOutline in enumerate(kernelOutlines):
           if kernelOutline:
             header.functionDeclaration(executeName(index))
-        
+
         if familyStride is not None:
           header('typedef void ({}::* const {})(void);'.format(name, self.MEMBER_FUNCTION_PTR_NAME))
           header('{} {} {}[] = {};'.format(
@@ -220,6 +254,12 @@ class OptimisedKernelGenerator(KernelGenerator):
               cpp('assert({}[{}] != nullptr);'.format(baseName, g))
           else:
             cpp('assert({} != nullptr);'.format(baseName))
+        for baseName, groups in kernelOutline.prefetch.items():
+          if groups:
+            for g in groups:
+              cpp('assert({}.{}[{}] != nullptr);'.format(self.PREFETCHVAR_NAME, baseName, g))
+          else:
+            cpp('assert({}.{} != nullptr);'.format(self.PREFETCHVAR_NAME, baseName))
         cpp(kernelOutline.function)
 
 class UnitTestGenerator(KernelGenerator):

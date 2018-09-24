@@ -74,6 +74,14 @@ class SortedGlobalsList(object):
         V = V | pp.action.result.variables() | pp.action.variables()
     return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
 
+class SortedPrefetchList(object):
+  def visit(self, cfg):
+    V = set()
+    for pp in cfg:
+      if pp.action and pp.action.isRHSExpression() and pp.action.term.node.prefetch is not None:
+        V = V | {pp.action.term.node.prefetch}
+    return sorted([v for v in V], key=lambda x: x.name())
+
 class ScalarsSet(object):
   def visit(self, cfg):
     S = set()

@@ -1,4 +1,5 @@
 from numpy import arange, einsum, ndindex
+import collections
 import itertools
 import re
 import os.path
@@ -185,3 +186,16 @@ class PrintEquivalentSparsityPatterns(Visitor):
     fig.savefig(fileName, bbox_inches='tight')
     plt.close()
     self._prefix = oldPrefix
+
+
+class FindPrefetchCapabilities(Visitor):
+  def generic_visit(self, node):
+    sizes = collections.OrderedDict()
+    for child in node:
+      sizes.update( self.visit(child) )
+    return sizes
+
+  def visit_LoopOverGEMM(self, node):
+    sizes = self.generic_visit(node)
+    sizes[node] = node.memoryLayout().requiredReals()
+    return sizes

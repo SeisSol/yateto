@@ -311,8 +311,6 @@ class UnitTestGenerator(KernelGenerator):
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'
-  START_NAME = 'Start'
-  STOP_NAME = 'Stop'
   SIZE_NAME = 'Size'
   VALUES_BASENAME = 'Values'
   TENSOR_NAMESPACE = 'tensor'
@@ -330,18 +328,55 @@ class InitializerGenerator(object):
     
     def generate(cpp, group, memLayout):
       raise NotImplementedError
+    
+    def listToInitializerList(self, lst):
+      return '{{{}}}'.format(', '.join([str(l) for l in lst]))
+    
+    def formatArray(self, numberType, name, values, declarationOnly):
+      lhs = '{} {}[]'.format(numberType, name)
+      if declarationOnly:
+        return '{} {};'.format(CONSTEXPR, lhs)
+      return '{} {} = {};'.format(MODIFIERS, lhs, self.listToInitializerList(values))
   
   class DenseTensorView(TensorView):
+    START_NAME = 'Start'
+    STOP_NAME = 'Stop'
+
     def generate(self, cpp, memLayout, arch, group):
-      index = '[{}]'.format(group) if group is not None else ''
       cpp( 'return {}({}, {}, {}, {});'.format(
           self.typename(len(memLayout.shape()), arch),
           self.ARGUMENT_NAME,
-          InitializerGenerator.SHAPE_NAME + index,
-          InitializerGenerator.START_NAME + index,
-          InitializerGenerator.STOP_NAME + index
+          self.listToInitializerList(memLayout.shape()),
+          self.listToInitializerList([r.start for r in memLayout.bbox()]),
+          self.listToInitializerList([r.stop for r in memLayout.bbox()])
         )
       )
+    def arrays(self, cpp, memLayout, arch, namespace, group, numberType, declarationOnly):
+      index = str(group) if group is not None else ''
+      cpp(self.formatArray(numberType, namespace + self.START_NAME + index, [r.start for r in memLayout.bbox()], declarationOnly))
+      cpp(self.formatArray(numberType, namespace + self.STOP_NAME + index, [r.stop for r in memLayout.bbox()], declarationOnly))
+
+  class CSCMatrixView(TensorView):
+    ROWIND_NAME = 'RowInd'
+    COLPTR_NAME = 'ColPtr'
+    
+    def typename(self, dim, arch):
+      return '::{}::{}<{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename)
+
+    def generate(self, cpp, memLayout, arch, group):
+      index = str(group) if group is not None else ''
+      cpp( 'return {}({}, {}, {}, {});'.format(
+          self.typename(len(memLayout.shape()), arch),
+          self.ARGUMENT_NAME,
+          self.listToInitializerList(memLayout.shape()),
+          self.ROWIND_NAME + index,
+          self.COLPTR_NAME + index
+        )
+      )
+    def arrays(self, cpp, memLayout, arch, namespace, group, numberType, declarationOnly):
+      index = str(group) if group is not None else ''
+      cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
+      cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
 
   def __init__(self, arch, tensors):
     self._arch = arch
@@ -361,7 +396,8 @@ class InitializerGenerator(object):
   
   def _tensorViewGenerator(self, memoryLayout):
     memLayoutMap = {
-      'DenseMemoryLayout': self.DenseTensorView
+      'DenseMemoryLayout': self.DenseTensorView,
+      'CSCMemoryLayout': self.CSCMatrixView
     }
     return memLayoutMap[type(memoryLayout).__name__]()
   
@@ -392,38 +428,39 @@ class InitializerGenerator(object):
   def _init(self, cpp, baseName, name, group, declarationOnly):
     maxIndex = max(group.keys())
     
-    def arrays():
-      self._array(cpp, self._numberType, name + self.START_NAME, {k: [r.start for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex, declarationOnly)
-      self._array(cpp, self._numberType, name + self.STOP_NAME, {k: [r.stop for r in v.memoryLayout().bbox()] for k,v in group.items()}, maxIndex, declarationOnly)
-    
     if declarationOnly:
-      arrays()
-      if maxIndex is not None:
-        nValueArrays = 0
-        for k,v in group.items():
-          if v.values() is not None:
-            valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, k if k is not None else '')
-            cpp('{} {} {}[];'.format(CONSTEXPR, self._realType, valuesName))
-            nValueArrays += 1
-        if nValueArrays > 0:
-          cpp('{} {} {}{}[];'.format(CONSTEXPR, self._realPtrType, name, self.VALUES_BASENAME))
+      for k,v in group.items():
+        ml = v.memoryLayout()
+        tv = self._tensorViewGenerator(ml)
+        tv.arrays(cpp, ml, self._arch, name, k, self._numberType, True)
+      nValueArrays = 0
+      for k,v in group.items():
+        if v.values() is not None:
+          valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, k if k is not None else '')
+          cpp('{} {} {}[];'.format(CONSTEXPR, self._realType, valuesName))
+          nValueArrays += 1
+      if nValueArrays > 1:
+        cpp('{} {} {}{}[];'.format(CONSTEXPR, self._realPtrType, name, self.VALUES_BASENAME))
     else:
       with cpp.Struct('{0} : {1}::{0}'.format(baseName, self.TENSOR_NAMESPACE)):
-        arrays()
+        for k,v in group.items():
+          ml = v.memoryLayout()
+          tv = self._tensorViewGenerator(ml)
+          tv.arrays(cpp, ml, self._arch, name, k, self._numberType, False)
+
         valueNames = dict()
-        if maxIndex is not None:
-          for k,v in group.items():
-            values = v.values()
-            memLayout = v.memoryLayout()
-            if values is not None:
-              memory = ['0.']*memLayout.requiredReals()
-              for idx,x in values.items():
-                memory[memLayout.address(idx)] = x
-              name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
-              valueNames[k] = ['&{}[0]'.format(name)]
-              cpp('{} {} {}[] = {{{}}};'.format(MODIFIERS, self._realType, name, ', '.join(memory)))
-          if len(valueNames) > 0:
-            self._array(cpp, self._realPtrType, self.VALUES_BASENAME, valueNames, maxIndex, alwaysArray=False)
+        for k,v in group.items():
+          values = v.values()
+          memLayout = v.memoryLayout()
+          if values is not None:
+            memory = ['0.']*memLayout.requiredReals()
+            for idx,x in values.items():
+              memory[memLayout.address(idx)] = x
+            name = '{}{}'.format(self.VALUES_BASENAME, k if k is not None else '')
+            valueNames[k] = ['&{}[0]'.format(name)]
+            cpp('{} {} {}[] = {{{}}};'.format(MODIFIERS, self._realType, name, ', '.join(memory)))
+        if len(valueNames) > 1:
+          self._array(cpp, self._realPtrType, self.VALUES_BASENAME, valueNames, maxIndex, alwaysArray=False)
 
         viewArgs = self.TensorView.arguments(self._arch)
         if maxIndex is None:

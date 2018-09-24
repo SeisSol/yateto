@@ -1,4 +1,5 @@
-from ...ast.indices import BoundingBox
+from ...ast.indices import BoundingBox, Range
+from ...memory import CSCMemoryLayout
 from ..common import TensorDescription
 from .generic import Generic
 from .libxsmm import Libxsmm
@@ -13,6 +14,15 @@ class Description(object):
     self.alpha = alpha
     self.beta = beta
     
+    self.isACsc = isinstance(self.leftTerm.memoryLayout, CSCMemoryLayout)
+    self.isBCsc = isinstance(self.rightTerm.memoryLayout, CSCMemoryLayout)
+    
+    if (self.isACsc and transA) or (self.isBCsc and transB):
+      raise RuntimeError('GEMM: sparse transposition is currently not supported.')
+    
+    if self.isACsc and self.isBCsc:
+      raise RuntimeError('GEMM: sparse x sparse is currently not supported.')
+    
     bbA = BoundingBox.fromSpp(self.leftTerm.eqspp)
     bbB = BoundingBox.fromSpp(self.rightTerm.eqspp)
     bbC = BoundingBox.fromSpp(self.result.eqspp)
@@ -20,9 +30,21 @@ class Description(object):
     kA = 1 if not transA else 0
     kB = 0 if not transB else 1
     
-    k = bbA[kA] & bbB[kB]
-    m = bbA[1-kA]
-    n = bbB[1-kB]
+    if self.leftTerm.memoryLayout.maySubDimension(kA) and self.rightTerm.memoryLayout.maySubDimension(kB):
+      k = bbA[kA] & bbB[kB]
+    else:
+      k = Range(0, self.rightTerm.memoryLayout.shape()[kB])
+
+    if self.leftTerm.memoryLayout.maySubDimension(1-kA) and self.result.memoryLayout.maySubDimension(0):
+      m = bbA[1-kA]
+    else:
+      m = Range(0, self.leftTerm.memoryLayout.shape()[1-kA])
+
+    if self.rightTerm.memoryLayout.maySubDimension(1-kB) and self.result.memoryLayout.maySubDimension(1):
+      n = bbB[1-kB]
+    else:
+      n = Range(0, self.rightTerm.memoryLayout.shape()[1-kB])
+
     assert m in bbC[0]
     assert n in bbC[1]
 
@@ -48,11 +70,11 @@ def generator(arch, descr):
   requiresTranspositions = descr.transA or descr.transB
   simpleAlpha = descr.alpha in [-1.0, 1.0]
   simpleBeta = descr.beta in [0.0, 1.0]
-  strideOneA = descr.leftTerm.memoryLayout.stridei(0) == 1
-  strideOneB = descr.rightTerm.memoryLayout.stridei(0) == 1
+  AOk = descr.isACsc or descr.leftTerm.memoryLayout.stridei(0) == 1
+  BOk = descr.isBCsc or descr.leftTerm.memoryLayout.stridei(0) == 1
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
-  strideOne = strideOneA and strideOneB and strideOneC
-  if not requiresTranspositions and simpleAlpha and simpleBeta and strideOne:
+  memLayoutOk = AOk and BOk and strideOneC
+  if not requiresTranspositions and simpleAlpha and simpleBeta and memLayoutOk:
     return Libxsmm(arch, descr)
   return Generic(arch, descr)
 

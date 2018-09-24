@@ -113,6 +113,9 @@ class Range(object):
   
   def __str__(self):
     return 'Range({}, {})'.format(self.start, self.stop)
+  
+  def __iter__(self):
+    return iter(range(self.start, self.stop))
       
 class BoundingBox(object):
   def __init__(self, listOfRanges):

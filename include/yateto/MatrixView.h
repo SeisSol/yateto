@@ -111,6 +111,62 @@ namespace yateto {
     uint_t m_stop[Dim];
     uint_t m_stride[Dim];
   };
+
+  template<typename real_t, typename uint_t>
+  class CSCMatrixView : public TensorView<2, real_t, uint_t> {
+  public:
+    explicit CSCMatrixView(real_t* values, std::initializer_list<uint_t> shape, uint_t const* rowInd, uint_t const* colPtr)
+      : TensorView<2, real_t, uint_t>(shape), m_values(values), m_rowInd(rowInd), m_colPtr(colPtr) {
+    }
+
+    explicit CSCMatrixView(real_t* values, uint_t const shape[], uint_t const* rowInd, uint_t const* colPtr)
+      : TensorView<2, real_t, uint_t>(shape), m_values(values), m_rowInd(rowInd), m_colPtr(colPtr) {
+    }
+
+    uint_t size() const {
+      return m_colPtr[ this->shape(1) ];
+    }
+
+    void setZero() {
+      memset(m_values, 0, size() * sizeof(real_t));
+    }
+
+    real_t& operator[](uint_t entry[2]) {
+      assert(entry[1] >= 0 && entry[1] < this->shape(1));
+      uint_t addr = m_colPtr[ entry[1] ];
+      uint_t stop = m_colPtr[ entry[1]+1 ];
+      while (addr < stop) {
+        if (m_rowInd[addr] == entry[0]) {
+          break;
+        }
+        ++addr;
+      }
+      assert(addr != stop);
+
+      return m_values[addr];
+    }
+
+    template<class view_t>
+    void copyToView(view_t& other) {
+      assert(2 == other.dim());
+      assert(this->shape(0) == other.shape(0) && this->shape(1) == other.shape(1));
+
+      uint_t entry[2];
+      uint_t ncols = this->shape(1);
+      for (uint_t col = 0; col < ncols; ++col) {
+        entry[1] = col;
+        for (uint_t i = m_colPtr[col]; i < m_colPtr[col+1]; ++i) {
+          entry[0] = m_rowInd[i];
+          other[entry] = m_values[i];
+        }
+      }
+    }
+
+  protected:
+    real_t* m_values;
+    uint_t const* m_rowInd;
+    uint_t const* m_colPtr;
+  };
 }
 
 #endif

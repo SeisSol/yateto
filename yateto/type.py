@@ -29,7 +29,7 @@ class Tensor(AbstractType):
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDEX)
   NUMPY_DEFAULT_ORDER = 'F'
 
-  def __init__(self, name, shape, spp=None, memoryLayout=None, alignStride=False):
+  def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -59,7 +59,10 @@ class Tensor(AbstractType):
     else:
       self._spp = ones(shape, dtype=bool, order=self.NUMPY_DEFAULT_ORDER)
     
-    self._memoryLayout = memoryLayout if memoryLayout else DenseMemoryLayout.fromSpp(self._spp, alignStride=alignStride)
+    self.setMemoryLayout(memoryLayoutClass, alignStride)
+
+  def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
+    self._memoryLayout = memoryLayoutClass.fromSpp(self._spp, alignStride=alignStride)
 
   def __getitem__(self, indexNames):
     return IndexedTensor(self, indexNames)

@@ -49,4 +49,4 @@ class Generic(object):
             )
           )
 
-    return 2 * m.size() * n.size() * k.size()
+    return (2 + (1 if d.alpha != 0 else 0)) * m.size() * n.size() * k.size()

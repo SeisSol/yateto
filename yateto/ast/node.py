@@ -1,4 +1,5 @@
 import numpy as np
+import inspect
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 
@@ -123,7 +124,7 @@ class IndexedTensor(Node):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
 
 class Op(Node):
-  OPTIMIZE_EINSUM = True
+  OPTIMIZE_EINSUM = {'optimize': True } if 'optimize' in inspect.getargspec(np.einsum).args else {}
 
   def __init__(self, *args):
     super().__init__()
@@ -244,7 +245,7 @@ def _productContractionLoGSparsityPattern(node, *spps):
     return np.ones(node.indices.shape(), dtype=bool, order='F')
   # sparse case
   einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
-  return np.einsum(einsumDescription, spps[0], spps[1], optimize=Op.OPTIMIZE_EINSUM)
+  return np.einsum(einsumDescription, spps[0], spps[1], **Op.OPTIMIZE_EINSUM)
 
 class Product(BinOp):
   def __init__(self, lTerm, rTerm):
@@ -280,7 +281,7 @@ class IndexSum(UnaryOp):
       spps = [self.term().eqspp()]
     assert len(spps) == 1
     einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
-    return np.einsum(einsumDescription, spps[0], optimize=Op.OPTIMIZE_EINSUM)
+    return np.einsum(einsumDescription, spps[0], **Op.OPTIMIZE_EINSUM)
 
 class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):

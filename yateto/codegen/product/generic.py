@@ -22,6 +22,11 @@ class Generic(object):
             d.rightTerm.name, d.rightTerm.memoryLayout.addressString(d.rightTerm.indices)
           )
         )
-        return 2 if d.add else 1
+        flop = 1
+        if d.add:
+          flop += 1
+        if d.alpha not in [-1.0, 1.0]:
+          flop += 1
+        return flop
 
     return forLoops(cpp, d.result.indices, d.loopRanges, ProductBody())

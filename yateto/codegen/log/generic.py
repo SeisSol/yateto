@@ -8,7 +8,8 @@ class Generic(object):
     self._descr = descr
   
   def _pointer(self, cpp, targetName, baseName, term, loopIndices, const=True):
-    addressStr = term.memoryLayout.addressString(term.indices, term.indices & loopIndices)
+    indices = term.indices & loopIndices
+    addressStr = term.memoryLayout.addressString(term.indices, indices) if len(indices) > 0 else ''
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
     cpp('{} {}* {} = {}{};'.format(self._arch.typename, 'const' if const else '', targetName, baseName, addressStr))

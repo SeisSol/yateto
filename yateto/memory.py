@@ -227,9 +227,11 @@ class CSCMemoryLayout(MemoryLayout):
     for i,entry in enumerate(nonzeros):
       self._rowIndex[i] = entry[0]
       if entry[1] != lastCol:
-        self._colPtr[ entry[1] ] = i
+        for j in range(lastCol+1, entry[1]+1):
+          self._colPtr[ j ] = i
         lastCol = entry[1]
-    self._colPtr[-1] = len(nonzeros)
+    for j in range(lastCol+1, self._shape[1]+1):
+      self._colPtr[j] = len(nonzeros)
 
   def requiredReals(self):
     return len(self._rowIndex)
@@ -242,14 +244,14 @@ class CSCMemoryLayout(MemoryLayout):
   
   def address(self, entry):
     assert entry in self._bbox
-    
+
     start = self._colPtr[ entry[1] ]
     stop = self._colPtr[ entry[1]+1 ]
     subRowInd = self._rowIndex[start:stop]
-    
+ 
     find = np.where(subRowInd == entry[0])[0]
     assert len(find) == 1
-    
+
     return start + find[0]
   
   def subtensorOffset(self, topLeftEntry):

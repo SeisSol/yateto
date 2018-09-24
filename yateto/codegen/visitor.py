@@ -254,12 +254,6 @@ class OptimisedKernelGenerator(KernelGenerator):
               cpp('assert({}[{}] != nullptr);'.format(baseName, g))
           else:
             cpp('assert({} != nullptr);'.format(baseName))
-        for baseName, groups in kernelOutline.prefetch.items():
-          if groups:
-            for g in groups:
-              cpp('assert({}.{}[{}] != nullptr);'.format(self.PREFETCHVAR_NAME, baseName, g))
-          else:
-            cpp('assert({}.{} != nullptr);'.format(self.PREFETCHVAR_NAME, baseName))
         cpp(kernelOutline.function)
 
 class UnitTestGenerator(KernelGenerator):

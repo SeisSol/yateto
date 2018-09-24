@@ -104,6 +104,9 @@ class Range(object):
   
   def __and__(self, other):
     return Range(max(self.start, other.start), min(self.stop, other.stop))
+
+  def __or__(self, other):
+    return Range(min(self.start, other.start), max(self.stop, other.stop))
   
   def __contains__(self, other):
     return self.start <= other.start and self.stop >= other.stop

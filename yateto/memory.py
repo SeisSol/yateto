@@ -214,7 +214,7 @@ class CSCMemoryLayout(MemoryLayout):
     if len(self._shape) != 2:
       raise ValueError('CSCMemoryLayout may only be used for matrices.')
     
-    self._bbox = BoundingBox([Range(0, s) for s in self._shape])
+    self._bbox = BoundingBox.fromSpp(spp)
     
     nonzeros = spp.nonzero()
     nonzeros = sorted(zip(nonzeros[0], nonzeros[1]), key=lambda x: (x[1], x[0]))
@@ -235,6 +235,9 @@ class CSCMemoryLayout(MemoryLayout):
 
   def requiredReals(self):
     return len(self._rowIndex)
+
+  def bboxi(self, dim):
+    return self._bbox[dim]
   
   def rowIndex(self):
     return self._rowIndex

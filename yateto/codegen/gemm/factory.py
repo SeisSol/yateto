@@ -34,17 +34,17 @@ class Description(object):
     if self.leftTerm.memoryLayout.maySubDimension(kA) and self.rightTerm.memoryLayout.maySubDimension(kB):
       k = bbA[kA] & bbB[kB]
     else:
-      k = Range(0, self.rightTerm.memoryLayout.shape()[kB])
+      k = self.leftTerm.memoryLayout.bboxi(kA) | self.rightTerm.memoryLayout.bboxi(kB)
 
     if self.leftTerm.memoryLayout.maySubDimension(1-kA) and self.result.memoryLayout.maySubDimension(0):
       m = bbA[1-kA]
     else:
-      m = Range(0, self.leftTerm.memoryLayout.shape()[1-kA])
+      m = self.leftTerm.memoryLayout.bboxi(1-kA)
 
     if self.rightTerm.memoryLayout.maySubDimension(1-kB) and self.result.memoryLayout.maySubDimension(1):
       n = bbB[1-kB]
     else:
-      n = Range(0, self.rightTerm.memoryLayout.shape()[1-kB])
+      n = self.rightTerm.memoryLayout.bboxi(1-kB)
 
     assert m in bbC[0]
     assert n in bbC[1]

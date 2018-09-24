@@ -1,5 +1,5 @@
 import numpy as np
-import inspect
+import numpy.lib
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
@@ -130,7 +130,7 @@ class IndexedTensor(Node):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
 
 class Op(Node):
-  OPTIMIZE_EINSUM = {'optimize': True } if 'optimize' in inspect.getargspec(np.einsum).args else {}
+  OPTIMIZE_EINSUM = {'optimize': True } if np.lib.NumpyVersion(np.__version__) >= '1.12.0' else {}
 
   def __init__(self, *args):
     super().__init__()

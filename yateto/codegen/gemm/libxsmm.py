@@ -53,9 +53,9 @@ class Libxsmm(object):
 
     spp = None
     if d.isACsc:
-      spp = d.leftTerm.memoryLayout.entries(k)
+      spp = d.leftTerm.memoryLayout.entries(m, k)
     elif d.isBCsc:
-      spp = d.rightTerm.memoryLayout.entries(n)
+      spp = d.rightTerm.memoryLayout.entries(k, n)
     
     routineName = self.generateRoutineName(gemm, spp)
     

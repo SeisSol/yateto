@@ -26,10 +26,6 @@ class MemoryLayout(ABC):
 
   def mayFuse(self, positions):
     return len(positions) == 1
-
-  @abstractmethod
-  def maySubDimension(self, dim):
-    pass
   
   @classmethod
   @abstractmethod
@@ -150,9 +146,6 @@ class DenseMemoryLayout(MemoryLayout):
   def mayFuse(self, positions):
     return all( [self._stride[j] == self._shape[i]*self._stride[i] for i,j in zip(positions[:-1], positions[1:])] )
   
-  def maySubDimension(self, dim):
-    return True
-  
   def _subShape(self, positions):
     sub = 1
     for p in positions:
@@ -259,20 +252,18 @@ class CSCMemoryLayout(MemoryLayout):
   
   def subtensorOffset(self, topLeftEntry):
     assert topLeftEntry in self._bbox
-    assert topLeftEntry[0] == 0
+    assert topLeftEntry[0] <= self._bbox[0].start
     return self._colPtr[ topLeftEntry[1] ]
 
-  def entries(self, colRange):
+  def entries(self, rowRange, colRange):
+    assert self._bbox[0].start >= rowRange.start
     e = list()
     for col in colRange:
-      e.extend([(self._rowIndex[i], col) for i in range(self._colPtr[col], self._colPtr[col+1])])
+      e.extend([(self._rowIndex[i]-rowRange.start, col-colRange.start) for i in range(self._colPtr[col], self._colPtr[col+1])])
     return e
 
   def alignedStride(self):
     return False
-  
-  def maySubDimension(self, dim):
-    return dim == 1
 
   @classmethod
   def fromSpp(cls, spp, **kwargs):

@@ -31,20 +31,9 @@ class Description(object):
     kA = 1 if not transA else 0
     kB = 0 if not transB else 1
     
-    if self.leftTerm.memoryLayout.maySubDimension(kA) and self.rightTerm.memoryLayout.maySubDimension(kB):
-      k = bbA[kA] & bbB[kB]
-    else:
-      k = self.leftTerm.memoryLayout.bboxi(kA) | self.rightTerm.memoryLayout.bboxi(kB)
-
-    if self.leftTerm.memoryLayout.maySubDimension(1-kA) and self.result.memoryLayout.maySubDimension(0):
-      m = bbA[1-kA]
-    else:
-      m = self.leftTerm.memoryLayout.bboxi(1-kA)
-
-    if self.rightTerm.memoryLayout.maySubDimension(1-kB) and self.result.memoryLayout.maySubDimension(1):
-      n = bbB[1-kB]
-    else:
-      n = self.rightTerm.memoryLayout.bboxi(1-kB)
+    k = bbA[kA] & bbB[kB]
+    m = bbA[1-kA]
+    n = bbB[1-kB]
 
     assert m in bbC[0]
     assert n in bbC[1]
@@ -72,7 +61,7 @@ def generator(arch, descr):
   simpleAlpha = descr.alpha == 1.0
   simpleBeta = descr.beta in [0.0, 1.0]
   AOk = descr.isACsc or descr.leftTerm.memoryLayout.stridei(0) == 1
-  BOk = descr.isBCsc or descr.leftTerm.memoryLayout.stridei(0) == 1
+  BOk = descr.isBCsc or descr.rightTerm.memoryLayout.stridei(0) == 1
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
   memLayoutOk = AOk and BOk and strideOneC
   if not requiresTranspositions and simpleAlpha and simpleBeta and memLayoutOk:

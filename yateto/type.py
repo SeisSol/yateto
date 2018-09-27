@@ -25,8 +25,9 @@ class Scalar(AbstractType):
 
 class Tensor(AbstractType):
   BASE_NAME = r'[a-zA-Z]\w*'
-  GROUP_INDEX = r'\[(0|[1-9]\d*)\]'
-  VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDEX)
+  GROUP_INDEX = r'(0|[1-9]\d*)'
+  GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
+  VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
   NUMPY_DEFAULT_ORDER = 'F'
 
   def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False):
@@ -80,14 +81,22 @@ class Tensor(AbstractType):
   def memoryLayout(self):
     return self._memoryLayout
   
+  @classmethod
+  def getBaseName(cls, name):
+    return re.match(cls.BASE_NAME, name).group(0)
+  
   def baseName(self):
-    return re.match(self.BASE_NAME, self._name).group(0)
+    return self.getBaseName(self._name)
+
+  @classmethod
+  def getGroup(cls, name):
+    gis = re.search(cls.GROUP_INDICES, name)
+    if gis:
+      return tuple(int(gi) for gi in re.split(',', gis.group(1)))
+    return tuple()
 
   def group(self):
-    m = re.search(self.GROUP_INDEX, self._name)
-    if m:
-      return int(m.group(1))
-    return None
+    return self.getGroup(self._name)
   
   def spp(self):
     return self._spp
@@ -113,6 +122,27 @@ class Collection(object):
 
   def __getitem__(self, key):
     return self.__dict__[key]
+  
+  def __setitem__(self, key, value):
+    self.__dict__[key] = value
 
   def __contains__(self, key):
     return key in self.__dict__
+  
+  @classmethod
+  def group(cls, name):
+    group = Tensor.getGroup(name)
+    return group if len(group) != 1 else group[0]
+
+  def byName(self, name):
+    baseName = Tensor.getBaseName(name)
+    group = self.group(name)
+    return self[baseName][group] if group is not tuple() else self[baseName]
+
+  def containsName(self, name):
+    if not Tensor.isValidName(name):
+      raise ValueError('Invalid name: {}'.format(name))
+
+    baseName = Tensor.getBaseName(name)
+    group = self.group(name)
+    return baseName in self and (group is tuple() or group in self[baseName])

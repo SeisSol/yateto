@@ -58,7 +58,7 @@ class Kernel(object):
     self.cfg = ReuseTemporaries().visit(self.cfg)
     
 class KernelFamily(object):
-  GROUP_INDEX = r'\[(0|[1-9]\d*)\]'
+  GROUP_INDEX = r'\((0|[1-9]\d*)\)'
   VALID_NAME = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX)
 
   def __init__(self):
@@ -171,7 +171,7 @@ class Generator(object):
     stride = tuple(stride)
     family.setStride(stride)
     for p in parameterSpace:
-      indexedName = '{}[{}]'.format(name, KernelFamily.linear(stride, p))
+      indexedName = '{}({})'.format(name, KernelFamily.linear(stride, p))
       ast = astGenerator(*p)
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
       family.add(indexedName, ast, prefetch)
@@ -228,9 +228,10 @@ class Generator(object):
       cpp.includeSys('cstring')
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
-        header.includeSys('cmath')
-        header.includeSys('limits')
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
+          header.includeSys('cmath')
+          header.includeSys('limits')
+          header.include(fTensors.hName)
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace):
             with header.Namespace(namespace):

@@ -1,4 +1,5 @@
 import re
+import itertools
 import json
 from . import Collection, Tensor
 from .memory import CSCMemoryLayout
@@ -13,22 +14,19 @@ else:
 
 def __createCollection(matrices):
   maxIndex = dict()
-  legalName = re.compile('^([a-zA-Z0-9]+)(\[([0-9]+)\])?$')
-  for name, matrix in matrices.items():
-    match = legalName.match(name)
-    if match == None:
-      raise ValueError('Illegal matrix name', name, 'in', xmlFile)
-    if match.lastindex == 2:
-      baseName = match.group(1)
-      maxIndex[baseName] = max(maxIndex.get(baseName, 0), int(match.group(3)))
-  
   collection = Collection()
-  simpleKeys = matrices.keys() - maxIndex.keys()
-  for key in simpleKeys:
-    collection.__dict__[key] = matrices[key]
-  
-  for key, value in maxIndex.items():
-    collection.__dict__[key] = [ matrices.get('{}[{}]'.format(key, i), None) for i in range(value+1)]
+  for name, matrix in matrices.items():
+    if not Tensor.isValidName(name):
+      raise ValueError('Illegal matrix name', name, 'in', xmlFile)
+    baseName = Tensor.getBaseName(name)
+    group = Collection.group(name)
+    if group is tuple():
+      collection[baseName] = matrix
+    else:
+      if baseName in collection:
+        collection[baseName][group] = matrix
+      else:
+        collection[baseName] = {group: matrix}
 
   return collection
 
@@ -110,11 +108,11 @@ def memoryLayoutFromFile(xmlFile, db, clones):
     for matrix in group:
       if matrix.tag == 'matrix':
         matrixName = matrix.get('name')
-        if matrixName not in db:
+        if not db.containsName(matrixName):
           raise ValueError('Unrecognized matrix name ' + matrixName)
         if len(groups[groupName]) > 0:
           lastMatrixInGroup = groups[groupName][-1]
-          if db[lastMatrixInGroup].shape() != db[matrixName].shape():
+          if db.byName(lastMatrixInGroup).shape() != db.byName(matrixName).shape():
             raise ValueError('Matrix {} cannot be in the same group as matrix {} due to different shapes.'.format(matrixName, lastMatrixInGroup))
         groups[groupName].append( matrixName )
       else:
@@ -123,16 +121,16 @@ def memoryLayoutFromFile(xmlFile, db, clones):
     if not noMutualSparsityPattern:
       spp = None
       for matrix in groups[groupName]:
-        spp = spp + db[matrix].spp() if spp is not None else db[matrix].spp()
+        spp = spp + db.byName(matrix).spp() if spp is not None else db.byName(matrix).spp()
       for matrix in groups[groupName]:
-        db[matrix].updateSparsityPattern(spp)
+        db.byName(matrix).updateSparsityPattern(spp)
 
   for matrix in root.findall('matrix'):
     group = matrix.get('group')
     name = matrix.get('name')
     sparse = matrix.get('sparse', '').lower() in strtobool
 
-    if group in groups or name in clones or name in db:
+    if group in groups or name in clones or db.containsName(name):
       blocks = []
       for block in matrix:
         raise NotImplementedError
@@ -146,9 +144,10 @@ def memoryLayoutFromFile(xmlFile, db, clones):
           __complain(block)
       names = groups[group] if group in groups else (clones[name] if name in clones else [name])
       for n in names:
+        tensor = db.byName(n)
         if sparse:
-          db[n].setMemoryLayout(CSCMemoryLayout)
+          tensor.setMemoryLayout(CSCMemoryLayout)
         else:
-          db[n].setMemoryLayout(DenseMemoryLayout, alignStride=db[n].memoryLayout().alignedStride())
+          tensor.setMemoryLayout(DenseMemoryLayout, alignStride=tensor.memoryLayout().alignedStride())
     else:
       raise ValueError('Unrecognized matrix name ' + name)

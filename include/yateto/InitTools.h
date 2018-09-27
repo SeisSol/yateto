@@ -25,10 +25,10 @@ namespace yateto {
   }
 
   template<class T, typename float_t>
-  void copyFamilyToMemAndSetPtr(float_t*& mem, float_t* ptrs[], size_t alignment = 1) {
+  void copyFamilyToMemAndSetPtr(float_t*& mem, typename T::template Container<float_t const*>& container, size_t alignment = 1) {
     size_t n = sizeof(T::Size) / sizeof(T::Size[0]);
     for (size_t i = 0; i < n; ++i) {
-      ptrs[i] = mem;
+      container.data[i] = mem;
       mem = std::copy(T::Values[i], T::Values[i] + T::Size[i], mem);
       mem += (alignedUpper(reinterpret_cast<uintptr_t>(mem), alignment) - reinterpret_cast<uintptr_t>(mem)) / sizeof(float_t);
       assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);

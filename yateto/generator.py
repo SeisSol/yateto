@@ -21,7 +21,12 @@ class Kernel(object):
     self.ast = ast
     self._prefetch = None
     if prefetch is not None:
-      self._prefetch = [prefetch] if isinstance(prefetch, Tensor) else prefetch
+      if isinstance(prefetch, Tensor):
+        self._prefetch = [prefetch]
+      elif isinstance(prefetch, list) and all([isinstance(p, Tensor) for p in prefetch]):
+        self._prefetch = prefetch
+      else:
+        raise ValueError('Prefetch must either be a Tensor (without indices) or a list of Tensors.')
     self.cfg = None
 
   @classmethod

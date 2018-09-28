@@ -23,15 +23,26 @@ namespace yateto {
   constexpr size_t computeFamilySize(size_t alignedReals = 1, size_t n = numFamilyMembers<T>()) {
     return n == 0 ? 0 : alignedUpper(T::Size[n-1], alignedReals) + computeFamilySize<T>(alignedReals, n-1);
   }
+  
+  template<typename float_t>
+  void copyValuesToMem(float_t*& mem, float_t const* first, float_t const* last, size_t alignment) {
+    mem = std::copy(first, last, mem);
+    mem += (alignedUpper(reinterpret_cast<uintptr_t>(mem), alignment) - reinterpret_cast<uintptr_t>(mem)) / sizeof(float_t);
+    assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);
+  }
+  
+  template<class T, typename float_t>
+  void copyTensorToMemAndSetPtr(float_t*& mem, float_t*& ptr, size_t alignment = 1) {
+    ptr = mem;
+    copyValuesToMem(mem, T::Values, T::Values + T::Size, alignment);
+  }
 
   template<class T, typename float_t>
   void copyFamilyToMemAndSetPtr(float_t*& mem, typename T::template Container<float_t const*>& container, size_t alignment = 1) {
     size_t n = sizeof(T::Size) / sizeof(T::Size[0]);
     for (size_t i = 0; i < n; ++i) {
       container.data[i] = mem;
-      mem = std::copy(T::Values[i], T::Values[i] + T::Size[i], mem);
-      mem += (alignedUpper(reinterpret_cast<uintptr_t>(mem), alignment) - reinterpret_cast<uintptr_t>(mem)) / sizeof(float_t);
-      assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);
+      copyValuesToMem(mem, T::Values[i], T::Values[i] + T::Size[i], alignment);
     }
   }
 }

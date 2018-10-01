@@ -2,7 +2,7 @@ import re
 import itertools
 import json
 from . import Collection, Tensor
-from .memory import CSCMemoryLayout
+from .memory import CSCMemoryLayout, DenseMemoryLayout
 
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')

@@ -10,8 +10,9 @@ from .factory import *
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
+STATIC = 'static'
 INLINE = 'inline'
-MODIFIERS = '{} static'.format(CONSTEXPR)
+MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
 
 def groupSizeToStride(groupSize):
   if len(groupSize) == 0:
@@ -531,9 +532,14 @@ class InitializerGenerator(object):
         tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
       nValueArrays = 0
       for group,tensor in tensors.items():
-        if tensor.values() is not None:
+        values = tensor.values()
+        memLayout = tensor.memoryLayout()
+        if values is not None:
+          memory = ['0.']*memLayout.requiredReals()
+          for idx,x in values.items():
+            memory[memLayout.address(idx)] = x
           valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, index(group))
-          cpp('{} {} {}[];'.format(CONSTEXPR, self._realType, valuesName))
+          cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))
           nValueArrays += 1
       if nValueArrays > 1:
         cpp('{} {} {}{}[];'.format(CONSTEXPR, self._realPtrType, name, self.VALUES_BASENAME))
@@ -546,16 +552,11 @@ class InitializerGenerator(object):
 
         valueNames = dict()
         for group,tensor in tensors.items():
-          idx = str(address(group, stride)) if len(group) > 0 else ''
           values = tensor.values()
-          memLayout = tensor.memoryLayout()
           if values is not None:
-            memory = ['0.']*memLayout.requiredReals()
-            for idx,x in values.items():
-              memory[memLayout.address(idx)] = x
             name = '{}{}'.format(self.VALUES_BASENAME, index(group))
             valueNames[group] = ['&{}[0]'.format(name)]
-            cpp('{} {} {}[] = {{{}}};'.format(MODIFIERS, self._realType, name, ', '.join(memory)))
+            cpp('{} {} {}[];'.format(STATIC, self._realType, name))
         if len(valueNames) > 1:
           self._array(cpp, self._realPtrType, self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False)
 

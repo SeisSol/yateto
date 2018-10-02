@@ -13,6 +13,7 @@ CONSTEXPR = 'constexpr'
 STATIC = 'static'
 INLINE = 'inline'
 MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
+STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
 
 def groupSizeToStride(groupSize):
   if len(groupSize) == 0:
@@ -352,13 +353,15 @@ class UnitTestGenerator(KernelGenerator):
             start=', '.join(['0']*len(shape))
           )
         )
-        cpp( '{initNS}::{baseName}::view{groupTemplate}({name}).copyToView({viewName});'.format(
+        cpp( '{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
             initNS = InitializerGenerator.INIT_NAMESPACE,
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             groupTemplate=self._groupTemplate(var),
             baseName=var.node.tensor.baseName(),
             name=self._tensorName(var),
-            viewName=self._viewName(var)
+            viewName=self._viewName(var),
+            viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
+            createFun=InitializerGenerator.VIEW_FUN_NAME
           )
         )
         cpp.emptyline()
@@ -388,6 +391,9 @@ class InitializerGenerator(object):
   CONTAINER_DATA_NAME = 'data'
   TENSOR_NAMESPACE = 'tensor'
   INIT_NAMESPACE = 'init'
+  VIEW_STRUCT_NAME = 'view'
+  VIEW_FUN_NAME = 'create'
+  VIEW_TYPE_NAME = 'type'
   
   class TensorView(object):
     ARGUMENT_NAME = 'values'
@@ -560,17 +566,18 @@ class InitializerGenerator(object):
         if len(valueNames) > 1:
           self._array(cpp, self._realPtrType, self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False)
 
+        cpp.emptyline()
         viewArgs = self.TensorView.arguments(self._arch)
         if len(groupSize) == 0:
           ml = next(iter(tensors.values())).memoryLayout()
           tv = self._tensorViewGenerator(ml)
-          with cpp.Function('view', arguments=viewArgs, returnType='static {}'.format(tv.typename(len(ml.shape()), self._arch))):
-            tv.generate(cpp, ml, self._arch, None)
+          with cpp.Struct(self.VIEW_STRUCT_NAME):
+            cpp('typedef {} {};'.format(tv.typename(len(ml.shape()), self._arch), self.VIEW_TYPE_NAME))
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
+              tv.generate(cpp, ml, self._arch, None)
         else:
-          args = ndargs(len(groupSize))
           typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
-          cpp('template<{}> struct view_type {{}};'.format(typedArgs))
-          cpp('template<{}> static typename view_type<{}>::type view({});'.format(typedArgs, ','.join(args), viewArgs))
+          cpp('template<{}> struct {} {{}};'.format(typedArgs, self.VIEW_STRUCT_NAME))
 
       if len(groupSize) > 0:
         for group,tensor in tensors.items():
@@ -578,9 +585,11 @@ class InitializerGenerator(object):
           tv = self._tensorViewGenerator(ml)
           typename = tv.typename(len(ml.shape()), self._arch)
           special = ','.join(str(g) for g in group)
-          cpp( 'template<> struct {}::view_type<{}> {{ typedef {} type; }};'.format(baseName, special, typename) )
-          with cpp.Function('{}::view<{}>'.format(baseName, special), arguments=viewArgs, returnType='template<> inline {}'.format(typename)):
-            tv.generate(cpp, ml, self._arch, index(group))
+          cpp('template<>')
+          with cpp.Struct('{}::{}<{}>'.format(baseName, self.VIEW_STRUCT_NAME, special)):
+            cpp('typedef {} {};'.format(typename, self.VIEW_TYPE_NAME))
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
+              tv.generate(cpp, ml, self._arch, index(group))
   
   def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True):
     maxLen = max(map(len, content.values())) if len(content.values()) > 0 else 0

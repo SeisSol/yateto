@@ -98,6 +98,18 @@ namespace yateto {
       }
     }
 
+    DenseTensorView<Dim, real_t, uint_t> block(uint_t const origin[], uint_t const shape[]) {
+      uint_t start[Dim];
+      uint_t stop[Dim];
+      for (uint_t d = 0; d < Dim; ++d) {
+        start[d] = 0;
+        stop[d] = shape[d];
+        assert(origin[d] + stop[d] >= m_start[d] && origin[d] + stop[d] <= m_stop[d]);
+      }
+
+      return DenseTensorView<Dim, real_t, uint_t>(&operator[](origin), shape, start, stop);
+    }
+
   protected:
     void computeStride() {
       m_stride[0] = 1;

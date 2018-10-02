@@ -506,6 +506,8 @@ class InitializerGenerator(object):
               header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
               with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
                 header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+              with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
   
   def generateTensorsCpp(self, cpp):
     for baseName,tensors in self._collect.items():

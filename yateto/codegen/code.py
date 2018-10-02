@@ -127,8 +127,8 @@ class Cpp:
       return Block(self, 'namespace ' + name)
     return MultiBlock(self, ['namespace ' + space for space in spaces])
     
-  def Function(self, name, arguments = '', returnType = 'void'):
-    return Block(self, '{} {}({})'.format(returnType, name, arguments))
+  def Function(self, name, arguments = '', returnType = 'void', const = False):
+    return Block(self, '{} {}({}){}'.format(returnType, name, arguments, ' const' if const else ''))
     
   def functionDeclaration(self, name, arguments = '', returnType = 'void'):
     return self.__call__('{} {}({});'.format(returnType, name, arguments))

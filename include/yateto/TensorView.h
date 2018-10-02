@@ -2,6 +2,7 @@
 #define YATETO_MATRIXVIEW_H_
 
 #include <cassert>
+#include <cstring>
 #include <algorithm>
 
 namespace yateto {
@@ -55,6 +56,19 @@ namespace yateto {
     
     void setZero() {
       memset(m_values, 0, size() * sizeof(real_t));
+    }
+
+    template<typename... Head, typename Tail>
+    real_t& operator()(Head... head, Tail tail) {
+      int const d = sizeof...(head);
+      assert(tail >= m_start[d] && tail < m_stop[d]);
+      return m_values + (tail - m_start[d]) * m_stride[d] + operator()(tail...);
+    }
+
+    template<typename... Entry>
+    real_t& operator()(Entry... entry) {
+      static_assert(sizeof...(entry) == Dim, "Number of arguments to operator() does not match Tensor's dimension.");
+      return m_values[address(entry...)];
     }
 
     real_t& operator[](uint_t const entry[Dim]) {
@@ -118,6 +132,19 @@ namespace yateto {
       }
     }
 
+    template<typename Head>
+    uint_t address(Head head) {
+      assert(head >= m_start[Dim-1] && head < m_stop[Dim-1]);
+      return (head - m_start[Dim-1]) * m_stride[Dim-1];
+    }
+
+    template<typename Head, typename... Tail>
+    uint_t address(Head head, Tail... tail) {
+      uint_t const d = (Dim-1) - sizeof...(tail);
+      assert(head >= m_start[d] && head < m_stop[d]);
+      return (head - m_start[d]) * m_stride[d] + address(tail...);
+    }
+
     real_t* m_values;
     uint_t m_start[Dim];
     uint_t m_stop[Dim];
@@ -143,12 +170,12 @@ namespace yateto {
       memset(m_values, 0, size() * sizeof(real_t));
     }
 
-    real_t& operator[](uint_t entry[2]) {
-      assert(entry[1] >= 0 && entry[1] < this->shape(1));
-      uint_t addr = m_colPtr[ entry[1] ];
-      uint_t stop = m_colPtr[ entry[1]+1 ];
+    real_t& operator()(uint_t row, uint_t col) {
+      assert(col >= 0 && col < this->shape(1));
+      uint_t addr = m_colPtr[ col ];
+      uint_t stop = m_colPtr[ col+1 ];
       while (addr < stop) {
-        if (m_rowInd[addr] == entry[0]) {
+        if (m_rowInd[addr] == row) {
           break;
         }
         ++addr;
@@ -156,6 +183,10 @@ namespace yateto {
       assert(addr != stop);
 
       return m_values[addr];
+    }
+
+    real_t& operator[](uint_t entry[2]) {
+      return operator()(entry[0], entry[1]);
     }
 
     template<class view_t>

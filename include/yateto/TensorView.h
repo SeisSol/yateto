@@ -57,7 +57,7 @@ namespace yateto {
       memset(m_values, 0, size() * sizeof(real_t));
     }
 
-    real_t& operator[](uint_t entry[Dim]) {
+    real_t& operator[](uint_t const entry[Dim]) {
       uint_t addr = 0;
       for (uint_t d = 0; d < Dim; ++d) {
         assert(entry[d] >= m_start[d] && entry[d] < m_stop[d]);

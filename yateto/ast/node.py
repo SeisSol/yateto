@@ -193,6 +193,11 @@ class ScalarMultiplication(UnaryOp):
     super().__init__(term)
     self._isConstant = isinstance(scalar, float) or isinstance(scalar, int)
     self._scalar = float(scalar) if self._isConstant else scalar
+    if self.fixedIndexPermutation():
+      self.indices = term.indices
+
+  def fixedIndexPermutation(self):
+    return self.term().fixedIndexPermutation()
   
   def name(self):
     return str(self._scalar) if self._isConstant else self._scalar.name()

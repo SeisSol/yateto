@@ -74,11 +74,11 @@ class Node(ABC):
       return ScalarMultiplication(other, self)
     if isinstance(self, ScalarMultiplication):
       other._checkMultipleScalarMults()
-      self._children[0] = self.term() * other
+      self.setTerm(self.term() * other)
       return self
     elif isinstance(other, ScalarMultiplication):
       self._checkMultipleScalarMults()
-      other._children[0] = self * other.term()
+      other.setTerm(self * other.term())
       return other
     return self._binOp(other, Einsum)
   
@@ -193,12 +193,18 @@ class ScalarMultiplication(UnaryOp):
     super().__init__(term)
     self._isConstant = isinstance(scalar, float) or isinstance(scalar, int)
     self._scalar = float(scalar) if self._isConstant else scalar
-    if self.fixedIndexPermutation():
-      self.indices = term.indices
+    self.setTerm(term)
 
   def fixedIndexPermutation(self):
     return self.term().fixedIndexPermutation()
   
+  def setTerm(self, term):
+    self._children[0] = term
+    if self.fixedIndexPermutation():
+      self.indices = self.term().indices
+    else:
+      self.indices = None
+
   def name(self):
     return str(self._scalar) if self._isConstant else self._scalar.name()
   

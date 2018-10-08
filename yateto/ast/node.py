@@ -329,7 +329,10 @@ class LoopOverGEMM(BinOp):
     self._n = n
     self._k = k
     self._transA = aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
-    self._transB = bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
+    self._transB = not self.isGEMV() and bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
+
+  def isGEMV(self):
+    return len(self._n) == 0
 
   def nonZeroFlops(self):
     p = Product(self.leftTerm(), self.rightTerm())

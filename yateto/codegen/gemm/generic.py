@@ -9,7 +9,7 @@ class Generic(object):
     if transpose:
       stride = stride[::-1]
       offset2 = offset2[::-1]
-    offset = term.memoryLayout.address(offset2)
+    offset = term.memoryLayout.subtensorOffset(offset2)
     return (stride, offset)
     
   def generate(self, cpp, routineCache):
@@ -19,7 +19,7 @@ class Generic(object):
     Astride, Aoffset = self._strideOffset(d.leftTerm, (m.start, k.start), d.transA)
     Bstride, Boffset = self._strideOffset(d.rightTerm, (k.start, n.start), d.transB)
     Cstride, Coffset = self._strideOffset(d.result, (m.start, n.start), False)
-    
+
     CAddr = '{Cname}[{Coffset} + {Cstride[0]}*m + {Cstride[1]}*n]'.format(
 			Cname = d.result.name,
 			Coffset = Coffset,

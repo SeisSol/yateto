@@ -15,14 +15,16 @@ class Generic(object):
     cpp('{} {}* {} = {}{};'.format(self._arch.typename, 'const' if const else '', targetName, baseName, addressStr))
     
   def _memLayout(self, term, I, J):
-    if len(term.indices) > 2:
-      return term.memoryLayout.fusedSlice(term.indices, I, J)
-    return term.memoryLayout
+    assert len(I) > 0
+    if len(J) == 0:
+      ml = term.memoryLayout.vec(term.indices, I)
+      return ml.withDummyDimension()
+    elif len(term.indices) == 2:
+      return term.memoryLayout
+    return term.memoryLayout.unfold(term.indices, I, J)
 
   def _reduce(self, term, subset, memLayout):
-    if len(term.indices) > 2:
-      return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape(), order='F')
-    return term.eqspp
+    return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape(), order='F')
   
   def _defuse(self, fusedRange, term, I):
     if len(I) == 1:

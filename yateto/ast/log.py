@@ -67,7 +67,10 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   MC = CM & AM
   NC = CN & BN
   KC = AK & BK
-  
+
+  if NC == set():
+    NC = ['']
+
   minCost = LoGCost()
   minLog = None
   for m in MC:

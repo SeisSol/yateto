@@ -164,12 +164,27 @@ class DenseMemoryLayout(MemoryLayout):
     
   def _firstStride(self, positions):
     return self._stride[ positions[0] ]
-  
-  def fusedSlice(self, indices, I, J):
+
+  def vec(self, indices, I):
+    positionsI = indices.positions(I)
+    assert self.mayFuse( indices.positions(I) )
+
+    shape = (self._subShape(positionsI),)
+    bbox = BoundingBox([self._subRange(positionsI)])
+    stride = (self._firstStride(positionsI),)
+
+    return DenseMemoryLayout(shape, bbox, stride)
+
+  def withDummyDimension(self):
+    shape = self._shape + (1,)
+    bbox = BoundingBox(list(self._bbox) + [Range(0,1)])
+    return DenseMemoryLayout(shape, bbox)
+
+  def unfold(self, indices, I, J):
     positionsI = indices.positions(I)
     positionsJ = indices.positions(J)
     assert self.mayFuse( indices.positions(I) ) and self.mayFuse( indices.positions(J) )
-    
+
     if positionsI[0] > positionsJ[0]:
       positionsJ, positionsI = positionsI, positionsJ
 

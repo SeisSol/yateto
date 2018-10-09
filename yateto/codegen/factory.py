@@ -18,21 +18,25 @@ class KernelFactory(object):
   def generic_create(self, node, *args):
     raise NotImplementedError
 
-  def simple(self, resultName, result, termName, term, add, routineCache):
+  def simple(self, result, term, add, scalar, routineCache):
     raise NotImplementedError
+
+  def _indices(self, var):
+    shape = var.memoryLayout().shape()
+    return Indices(string.ascii_lowercase[:len(shape)], shape)
 
 class OptimisedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch):
     super().__init__(cpp, arch)
 
-  def create_LoopOverGEMM(self, node, result, resultName, argNames, add, scalar, prefetchName, routineCache):
-    assert len(argNames) == 2
+  def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+    assert len(arguments) == 2
     description = log.Description(
       alpha = scalar,
       add = add,
-      result = IndexedTensorDescription.fromNode(resultName, result),
-      leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
-      rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm()),
+      result = IndexedTensorDescription.fromNode(result, node),
+      leftTerm = IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()),
+      rightTerm = IndexedTensorDescription.fromNode(arguments[1], node.rightTerm()),
       loopIndices = node.loopIndices(),
       transA = node.transA(),
       transB = node.transB(),
@@ -41,63 +45,63 @@ class OptimisedKernelFactory(KernelFactory):
     generator = log.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_IndexSum(self, node, result, resultName, argNames, add, scalar, prefetchName, routineCache):
-    assert len(argNames) == 1
+  def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+    assert len(arguments) == 1
     description = indexsum.Description(
       alpha = scalar,
       add = add,
-      result = IndexedTensorDescription.fromNode(resultName, result),
-      term = IndexedTensorDescription.fromNode(argNames[0], node.term())
+      result = IndexedTensorDescription.fromNode(result, node),
+      term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     )
     generator = indexsum.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_Product(self, node, result, resultName, argNames, add, scalar, prefetchName, routineCache):
-    assert len(argNames) == 2
+  def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+    assert len(arguments) == 2
     description = product.Description(
       alpha = scalar,
       add = add,
-      result = IndexedTensorDescription.fromNode(resultName, result),
-      leftTerm = IndexedTensorDescription.fromNode(argNames[0], node.leftTerm()),
-      rightTerm = IndexedTensorDescription.fromNode(argNames[1], node.rightTerm())
+      result = IndexedTensorDescription.fromNode(result, node),
+      leftTerm = IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()),
+      rightTerm = IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())
     )
     generator = product.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def simple(self, resultName, result, termName, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache):
     description = copyscaleadd.Description(
       alpha = scalar,
       beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription.fromNode(resultName, result),
-      term = IndexedTensorDescription.fromNode(termName, term)
+      result = IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()),
+      term = IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())
     )
     generator = copyscaleadd.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
 
 class UnitTestFactory(KernelFactory):
-  def __init__(self, cpp, arch):
+  def __init__(self, cpp, arch, nameFun):
     super().__init__(cpp, arch)
+    self._name = nameFun
 
-  def _formatTerm(self, name, memLayout, indices):
-    address = memLayout.addressString(indices)
-    return '{}[{}]'.format(name, address)
+  def _formatTerm(self, var, indices):
+    address = var.memoryLayout().addressString(indices)
+    return '{}[{}]'.format(self._name(var), address)
   
-  def create_Einsum(self, node, resultNode, resultName, argNames, add, scalar, prefetchName, routineCache):
+  def create_Einsum(self, node, result, arguments, add, scalar, prefetchName, routineCache):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
     
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
     
-    resultML = DenseMemoryLayout(resultNode.shape())
-    resultTerm = self._formatTerm(resultName, resultML, node.indices)
-    terms = [self._formatTerm(argNames[i], DenseMemoryLayout(child.shape()), child.indices) for i,child in enumerate(node)]
+    resultTerm = self._formatTerm(result, node.indices)
+    terms = [self._formatTerm(arguments[i], child.indices) for i,child in enumerate(node)]
     
     if scalar and scalar != 1.0:
       terms.insert(0, str(scalar))
     
     if not add:
-      self._cpp.memset(resultName, resultML.requiredReals(), self._arch.typename)
+      self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), self._arch.typename)
     
     class EinsumBody(object):
       def __call__(s):
@@ -106,32 +110,31 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, g, ranges, EinsumBody())
   
-  def create_ScalarMultiplication(self, node, resultNode, resultName, argNames, add, scalar, prefetchName, routineCache):
-    return self.simple(resultName, resultNode, argNames[0], node, add, scalar, routineCache)
+  def create_ScalarMultiplication(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+    return self.simple(result, arguments[0], add, scalar, routineCache)
 
-  def simple(self, resultName, resultNode, termName, termNode, add, scalar, routineCache):
-    g = resultNode.indices
+  def simple(self, result, term, add, scalar, routineCache):
+    g = self._indices(result)
     
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
     
-    result = self._formatTerm(resultName, DenseMemoryLayout(resultNode.shape()), g)
-    term = self._formatTerm(termName, DenseMemoryLayout(termNode.shape()), g)
+    resultTerm = self._formatTerm(result, g)
+    termTerm = self._formatTerm(term, g)
 
     if scalar and scalar != 1.0:
-      term = '{} * {}'.format(scalar, term)
+      termTerm = '{} * {}'.format(scalar, termTerm)
     
     class AssignBody(object):
       def __call__(s):
-        self._cpp( '{} {} {};'.format(result, '+=' if add else '=', term) )
+        self._cpp( '{} {} {};'.format(resultTerm, '+=' if add else '=', termTerm) )
         return 1 if add else 0
 
     return forLoops(self._cpp, g, ranges, AssignBody())
 
-  def compare(self, refName, refML, targetName, targetML, epsMult = 10.0):
-    shape = refML.shape()
-    g = Indices(string.ascii_lowercase[:len(shape)], shape)
-    refTerm = self._formatTerm(refName, refML, g)
-    targetTerm = self._formatTerm(targetName, targetML, g)
+  def compare(self, ref, target, epsMult = 10.0):
+    g = self._indices(ref)
+    refTerm = self._formatTerm(ref, g)
+    targetTerm = self._formatTerm(target, g)
 
     class CompareBody(object):
       def __call__(s):
@@ -141,7 +144,7 @@ class UnitTestFactory(KernelFactory):
         self._cpp( 'refNorm += ref * ref;' )
         return 0
 
-    targetBBox = targetML.bbox()
+    targetBBox = target.memoryLayout().bbox()
     ranges = {idx: Range(targetBBox[i].start, min(targetBBox[i].stop, g.indexSize(idx))) for i,idx in enumerate(g)}
     self._cpp('double error = 0.0;')
     self._cpp('double refNorm = 0.0;')

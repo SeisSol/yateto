@@ -5,6 +5,7 @@ from io import StringIO
 from ..memory import DenseMemoryLayout
 from ..controlflow.visitor import ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
+from ..controlflow.graph import Variable
 from .code import Cpp
 from .factory import *
 
@@ -45,41 +46,21 @@ class KernelGenerator(object):
 
   def __init__(self, arch):
     self._arch = arch
-
-  def _name(self, var):
-    raise NotImplementedError
-
-  def _memoryLayout(self, term):
-    raise NotImplementedError
-
-  def _sizeFun(self, term):
-    return self._memoryLayout(term).requiredReals()
   
   def generate(self, cpp, cfg, factory, routineCache=None):
     hwFlops = 0
-    cfg = DetermineLocalInitialization().visit(cfg, self._sizeFun)
-    localNodes = dict()
+    cfg = DetermineLocalInitialization().visit(cfg)
     for pp in cfg:
       for name, size in pp.initLocal.items():
         cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
       action = pp.action
       if action:
-        if action.isRHSExpression() or action.term.isGlobal():
-          termNode = action.term.node
-        else:
-          termNode = localNodes[action.term]
-        if action.result.isLocal():
-          localNodes[action.result] = termNode
-          resultNode = termNode
-        else:
-          resultNode = action.result.node
-
         scalar = 1.0 if action.scalar is None else action.scalar
         if action.isRHSExpression():
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
-          hwFlops += factory.create(action.term.node, resultNode, self._name(action.result), [self._name(var) for var in action.term.variableList()], action.add, scalar, prefetchName, routineCache)
+          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache)
         else:
-          hwFlops += factory.simple(self._name(action.result), resultNode, self._name(action.term), termNode, action.add, scalar, routineCache)
+          hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
     return hwFlops
 
 class OptimisedKernelGenerator(KernelGenerator):
@@ -94,12 +75,6 @@ class OptimisedKernelGenerator(KernelGenerator):
   def __init__(self, arch, routineCache):
     super().__init__(arch)
     self._routineCache = routineCache
-
-  def _name(self, var):
-    return str(var)
-
-  def _memoryLayout(self, term):
-    return term.memoryLayout()
   
   class KernelOutline(object):
     def __init__(self, nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function):
@@ -129,8 +104,8 @@ class OptimisedKernelGenerator(KernelGenerator):
     tensors = collections.OrderedDict()
     writable = dict()
     for var in variables:
-      self.KernelOutline._addTensor(var.node.tensor, tensors)
-      bn = var.node.tensor.baseName()
+      self.KernelOutline._addTensor(var.tensor, tensors)
+      bn = var.tensor.baseName()
       if bn in writable:
         if var.writable:
           writable[bn] = True
@@ -293,25 +268,27 @@ class UnitTestGenerator(KernelGenerator):
   
   def __init__(self, arch):
     super().__init__(arch)
-  
-  def _tensorName(self, var):
+
+  @classmethod
+  def _tensorName(cls, var):
     if var.isLocal():
       return str(var)
-    baseName = var.node.tensor.baseName()
-    group = var.node.tensor.group()
+    baseName = var.tensor.baseName()
+    group = var.tensor.group()
     terms = [baseName] + [str(g) for g in group]
     return '_'.join(terms)
 
-  def _name(self, var):
+  @classmethod
+  def _name(cls, var):
     if var.isLocal():
       return str(var)
-    return '_ut_' + self._tensorName(var)
+    return '_ut_' + cls._tensorName(var)
 
   def _viewName(self, var):
     return '_view_' + self._name(var)
   
   def _groupStr(self, var):
-    group = var.node.tensor.group()
+    group = var.tensor.group()
     return ','.join([str(g) for g in group])
 
   def _groupTemplate(self, var):
@@ -321,12 +298,6 @@ class UnitTestGenerator(KernelGenerator):
   def _groupIndex(self, var):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
-
-  def _memoryLayout(self, term):
-    return DenseMemoryLayout(term.shape())
-
-  def _sizeFun(self, term):
-    return self._memoryLayout(term).requiredReals()
   
   def generate(self, cpp, testName, kernelClass, cfg, index=None):
     scalars = ScalarsSet().visit(cfg)
@@ -337,12 +308,12 @@ class UnitTestGenerator(KernelGenerator):
         cpp('{} {} = {};'.format(self._arch.typename, scalar, float(i+2)))
         
       for var in variables:
-        self._factory = UnitTestFactory(cpp, self._arch)
-        self._factory.tensor(var.node.tensor, self._tensorName(var))
+        self._factory = UnitTestFactory(cpp, self._arch, self._name)
+        self._factory.tensor(var.tensor, self._tensorName(var))
         
-        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._name(var), self._sizeFun(var.node), self._arch.alignment))
+        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._name(var), var.memoryLayout().requiredReals(), self._arch.alignment))
         
-        shape = var.node.shape()
+        shape = var.memoryLayout().shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             dim=len(shape),
@@ -357,7 +328,7 @@ class UnitTestGenerator(KernelGenerator):
             initNS = InitializerGenerator.INIT_NAMESPACE,
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             groupTemplate=self._groupTemplate(var),
-            baseName=var.node.tensor.baseName(),
+            baseName=var.tensor.baseName(),
             name=self._tensorName(var),
             viewName=self._viewName(var),
             viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
@@ -370,16 +341,16 @@ class UnitTestGenerator(KernelGenerator):
       for scalar in scalars:
         cpp( '{0}.{1} = {1};'.format(self.KERNEL_VAR, scalar) )
       for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.node.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
-      factory = UnitTestFactory(cpp, self._arch)
+      factory = UnitTestFactory(cpp, self._arch, self._name)
       super().generate(cpp, cfg, factory)
 
       for var in variables:
         if var.writable:
-          factory.compare(self._name(var), self._memoryLayout(var.node), self._tensorName(var), var.node.memoryLayout())
+          factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout()))
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'

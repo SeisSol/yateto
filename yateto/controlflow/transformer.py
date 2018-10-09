@@ -33,9 +33,11 @@ class SubstituteForward(object):
       if not ua.isCompound() and ua.isRHSVariable() and ua.term.writable and ua.result.isLocal() and ua.term not in v.living:
         when = ua.result
         by = ua.term
-        for j in range(i, n):
-          cfg[j].action = cfg[j].action.substituted(when, by)
-        cfg = FindLiving().visit(cfg)
+        maySubs = all([cfg[j].action.maySubstitute(when, by) for j in range(i, n)])
+        if maySubs:
+          for j in range(i, n):
+            cfg[j].action = cfg[j].action.substituted(when, by)
+          cfg = FindLiving().visit(cfg)
     return cfg
 
 class SubstituteBackward(object):
@@ -53,10 +55,12 @@ class SubstituteBackward(object):
             break
         if found >= 0:
           when = u.action.result
-          cfg[found].action = cfg[found].action.substituted(when, by, term=False)
-          for j in range(found+1,i+1):
-            cfg[j].action = cfg[j].action.substituted(when, by)
-          cfg = FindLiving().visit(cfg)
+          maySubs = cfg[found].action.maySubstitute(when, by, term=False) and all([cfg[j].action.maySubstitute(when, by) for j in range(found+1,i+1)])
+          if maySubs:
+            cfg[found].action = cfg[found].action.substituted(when, by, term=False)
+            for j in range(found+1,i+1):
+              cfg[j].action = cfg[j].action.substituted(when, by)
+            cfg = FindLiving().visit(cfg)
     return cfg
 
 class RemoveEmptyStatements(object):
@@ -91,13 +95,14 @@ class MergeActions(object):
           else:
             V = V | va.variables() | {va.result}
         if found >= 0:
-          va = cfg[j].action
-          ua.result = va.result
-          ua.add = va.add
-          if not va.hasTrivialScalar():
-            ua.scalar = va.scalar
-          del cfg[j]
-          n -= 1
+          va = cfg[found].action
+          if ua.maySubstitute(ua.result, va.result, term=False):
+            cfg[i].action = ua.substituted(ua.result, va.result, term=False)
+            cfg[i].action.add = va.add
+            if not va.hasTrivialScalar():
+              cfg[i].action.scalar = va.scalar
+            del cfg[found]
+            n -= 1
       i += 1
     return FindLiving().visit(cfg)
 
@@ -114,30 +119,37 @@ class ReuseTemporaries(object):
           freeLocals = usedLocals - u.living
           try:
             by = next(iter(freeLocals))
-            for j in range(i,n-1):
-              cfg[j].action = cfg[j].action.substituted(when, by)
-            cfg = FindLiving().visit(cfg)
+            maySubs = all(cfg[j].action.maySubstitute(when, by) for j in range(i,n-1))
+            if maySubs:
+              for j in range(i,n-1):
+                cfg[j].action = cfg[j].action.substituted(when, by)
+              cfg = FindLiving().visit(cfg)
           except StopIteration:
             pass
         usedLocals = usedLocals | u.action.result.variables()
     return cfg
 
 class DetermineLocalInitialization(object):
-  def visit(self, cfg, sizeFun):
+  def visit(self, cfg):
     lcls = dict()
     for pp in cfg:
       ua = pp.action
       if ua and not ua.isCompound() and ua.result.isLocal():
-        size = 0
-        if ua.isRHSExpression() or ua.term.isGlobal():
-          size = sizeFun(ua.term.node)
-        elif ua.term in lcls:
-          size = lcls[ua.term]
-        else:
-          raise RuntimeError('Control flow graph: Size of local variable is unclear.')
-        if ua.result in lcls:
-          size = max(size, lcls[ua.result])
-        lcls[ua.result] = size
+        #~ assert ua.result not in lcls
+        lcls[ua.result] = ua.result.memoryLayout().requiredReals()
+        #~ freeLocal = local.keys() - u.living
+        #size = 0
+        #~ if ua.result in local:
+          
+        #~ if ua.isRHSExpression() or ua.term.isGlobal():
+          #~ size = sizeFun(ua.term.node)
+        #~ elif ua.term in lcls:
+          #~ size = lcls[ua.term]
+        #~ else:
+          #~ raise RuntimeError('Control flow graph: Size of local variable is unclear.')
+        #~ if ua.result in lcls:
+          #~ size = max(size, lcls[ua.result])
+        #~ lcls[ua.result] = size
     for pp in cfg:
       pp.initLocal = dict()
       ua = pp.action

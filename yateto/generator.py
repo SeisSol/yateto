@@ -35,7 +35,7 @@ class Kernel(object):
   
   def prepareUntilUnitTest(self):
     self.ast = DeduceIndices().visit(self.ast)
-    ast2cf = AST2ControlFlow()
+    ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
     ast2cf.visit(self.ast)
     self.cfg = ast2cf.cfg()
   
@@ -60,7 +60,8 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
-    self.cfg = ReuseTemporaries().visit(self.cfg)
+    #~ self.cfg = ReuseTemporaries().visit(self.cfg)
+    #~ PrettyPrinter().visit(self.cfg)
     
 class KernelFamily(object):
   GROUP_INDEX = r'\((0|[1-9]\d*)\)'

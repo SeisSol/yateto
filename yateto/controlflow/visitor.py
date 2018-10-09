@@ -1,23 +1,28 @@
 from ..ast.visitor import Visitor
 from yateto import Scalar
 from .graph import *
+from ..memory import DenseMemoryLayout
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
   
-  def __init__(self):
+  def __init__(self, simpleMemoryLayout=False):
     self._tmp = 0
     self._cfg = []
     self._writable = set()
+    self._simpleMemoryLayout = simpleMemoryLayout
   
   def cfg(self):
     return self._cfg + [ProgramPoint(None)]
+
+  def _ml(self, node):
+    return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()
     
   def generic_visit(self, node):
     variables = [self.visit(child) for child in node]
     
-    result = self._nextTemporary()
-    action = ProgramAction(result, Expression(node, variables), False)
+    result = self._nextTemporary(node)
+    action = ProgramAction(result, Expression(node, self._ml(node), variables), False)
     self._addAction(action)
     
     return result
@@ -28,7 +33,7 @@ class AST2ControlFlow(Visitor):
 
     variables.sort(key=lambda var: int(not var.writable) + int(not var.isGlobal()))
 
-    tmp = self._nextTemporary()
+    tmp = self._nextTemporary(node)
     add = False
     for var in variables:
       action = ProgramAction(tmp, var, add)
@@ -40,7 +45,7 @@ class AST2ControlFlow(Visitor):
   def visit_ScalarMultiplication(self, node):
     variable = self.visit(node.term())
 
-    result = self._nextTemporary()
+    result = self._nextTemporary(node)
     action = ProgramAction(result, variable, False, node.scalar())
     self._addAction(action)
     
@@ -49,22 +54,22 @@ class AST2ControlFlow(Visitor):
   def visit_Assign(self, node):
     self._writable = self._writable | {node[0].name()}
     variables = [self.visit(child) for child in node]
-    
+
     action = ProgramAction(variables[0], variables[1], False)
     self._addAction(action)
     
     return variables[0]
   
   def visit_IndexedTensor(self, node):
-    return Variable(node.name(), node.name() in self._writable, node)
+    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor)
   
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
 
-  def _nextTemporary(self):
+  def _nextTemporary(self, node):
     name = '{}{}'.format(self.TEMPORARY_RESULT, self._tmp)
     self._tmp += 1
-    return Variable(name, True)
+    return Variable(name, True, self._ml(node), node.eqspp())
 
 class SortedGlobalsList(object):
   def visit(self, cfg):

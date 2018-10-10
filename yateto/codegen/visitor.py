@@ -58,7 +58,8 @@ class KernelGenerator(object):
     localPtrs = list()
     for pp in cfg:
       localPtrs.extend(pp.bufferMap.keys())
-    cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
+    if localPtrs:
+      cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
     for pp in cfg:
       for buf, size in pp.initBuffer.items():
         cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, self._bufferName(buf), size, self._arch.alignment))

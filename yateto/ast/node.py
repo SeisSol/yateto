@@ -46,10 +46,10 @@ class Node(ABC):
     pass
 
   def argumentsCompatible(self, layouts):
-    return False
+    return True
 
   def resultCompatible(self, layout):
-    return False
+    return True
 
   def fixedIndexPermutation(self):
     return True

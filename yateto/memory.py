@@ -40,8 +40,9 @@ class MemoryLayout(ABC):
   def __eq__(self, other):
     pass
 
-  def isCompatible(self, other):
-    return self == other
+  @abstractmethod
+  def isCompatible(self, spp):
+    pass
 
 class DenseMemoryLayout(MemoryLayout):
   ALIGNMENT_ARCH = None
@@ -216,8 +217,8 @@ class DenseMemoryLayout(MemoryLayout):
       stop -= B*s
     return ranges
 
-  def isCompatible(self, other):
-    return super().isCompatible(other) or (isinstance(other, type(self)) and self.bbox() in other.bbox())
+  def isCompatible(self, spp):
+    return BoundingBox.fromSpp(spp) in self.bbox()
 
   def __eq__(self, other):
     return self._stride == other._stride and self._bbox == other._bbox and self._stride == other._stride
@@ -296,6 +297,9 @@ class CSCMemoryLayout(MemoryLayout):
 
   def __contains__(self, entry):
     return entry in self._bbox
+
+  def isCompatible(self, spp):
+    return self.fromSpp(spp) == self
 
   def __eq__(self, other):
     return self._bbox == other._bbox and np.array_equal(self._rowIndex, other._rowIndex) and np.array_equal(self._colPtr, other._colPtr)

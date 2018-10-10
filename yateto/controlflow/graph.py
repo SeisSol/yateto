@@ -112,7 +112,7 @@ class ProgramAction(object):
 
     compatible = tsubs.resultCompatible(rsubs)
 
-    return (not term or tsubs) and (not result or rsubs) and compatible
+    return (not term or maySubsTerm) and (not result or maySubsResult) and compatible
 
   def substituted(self, when, by, result = True, term = True):
     rsubs = self.result.substituted(when, by) if result else self.result

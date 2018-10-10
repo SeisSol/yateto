@@ -123,5 +123,6 @@ class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
     self.living = None
-    self.initLocal = None
+    self.initBuffer = None
+    self.bufferMap = None
     

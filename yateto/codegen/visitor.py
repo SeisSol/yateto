@@ -43,16 +43,27 @@ def indexFun(stride):
 class KernelGenerator(object):
   PREFETCHSTRUCT_NAME = 'Prefetch'
   PREFETCHVAR_NAME = '_prefetch'
+  BUFFER_NAME = '_buffer'
 
   def __init__(self, arch):
     self._arch = arch
+
+  @classmethod
+  def _bufferName(cls, buf):
+    return cls.BUFFER_NAME + str(buf)
   
   def generate(self, cpp, cfg, factory, routineCache=None):
     hwFlops = 0
     cfg = DetermineLocalInitialization().visit(cfg)
+    localPtrs = list()
     for pp in cfg:
-      for name, size in pp.initLocal.items():
-        cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, name, size, self._arch.alignment))
+      localPtrs.extend(pp.bufferMap.keys())
+    cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
+    for pp in cfg:
+      for buf, size in pp.initBuffer.items():
+        cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, self._bufferName(buf), size, self._arch.alignment))
+      for local, buf in pp.bufferMap.items():
+        cpp('{} = {};'.format(local, self._bufferName(buf)))
       action = pp.action
       if action:
         scalar = 1.0 if action.scalar is None else action.scalar

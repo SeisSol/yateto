@@ -1,4 +1,5 @@
 from .graph import *
+from collections import deque
 
 class MergeScalarMultiplications(object):   
   def visit(self, cfg):
@@ -106,54 +107,43 @@ class MergeActions(object):
       i += 1
     return FindLiving().visit(cfg)
 
-class ReuseTemporaries(object):
-  def visit(self, cfg):
-    usedLocals = set()
-    n = len(cfg)
-    for i in range(n-1):
-      u = cfg[i]
-      v = cfg[i+1]
-      when = u.action.result
-      if not when.isGlobal():
-        if when not in u.living:
-          freeLocals = usedLocals - u.living
-          try:
-            by = next(iter(freeLocals))
-            maySubs = all(cfg[j].action.maySubstitute(when, by) for j in range(i,n-1))
-            if maySubs:
-              for j in range(i,n-1):
-                cfg[j].action = cfg[j].action.substituted(when, by)
-              cfg = FindLiving().visit(cfg)
-          except StopIteration:
-            pass
-        usedLocals = usedLocals | u.action.result.variables()
-    return cfg
-
 class DetermineLocalInitialization(object):
   def visit(self, cfg):
     lcls = dict()
+    numBuffers = 0
+    usedBuffers = dict()
+    freeBuffers = deque()
+    bufferSize = dict()
+
     for pp in cfg:
-      ua = pp.action
+      pp.initBuffer = dict()
+      pp.bufferMap = dict()
+
+    n = len(cfg)
+    for i in range(n-1):
+      ua = cfg[i].action
+      # assign buffer
       if ua and not ua.isCompound() and ua.result.isLocal():
-        #~ assert ua.result not in lcls
-        lcls[ua.result] = ua.result.memoryLayout().requiredReals()
-        #~ freeLocal = local.keys() - u.living
-        #size = 0
-        #~ if ua.result in local:
-          
-        #~ if ua.isRHSExpression() or ua.term.isGlobal():
-          #~ size = sizeFun(ua.term.node)
-        #~ elif ua.term in lcls:
-          #~ size = lcls[ua.term]
-        #~ else:
-          #~ raise RuntimeError('Control flow graph: Size of local variable is unclear.')
-        #~ if ua.result in lcls:
-          #~ size = max(size, lcls[ua.result])
-        #~ lcls[ua.result] = size
-    for pp in cfg:
-      pp.initLocal = dict()
-      ua = pp.action
-      if ua and not ua.isCompound() and ua.result.isLocal() and ua.result in lcls:
-        pp.initLocal[ua.result] = lcls[ua.result]
-        lcls.pop(ua.result)
+        if len(freeBuffers) > 0:
+          buf = freeBuffers.pop()
+        else:
+          buf = numBuffers
+          numBuffers += 1
+        cfg[i].bufferMap[ua.result] = buf
+        usedBuffers[ua.result] = buf
+
+        size = ua.result.memoryLayout().requiredReals()
+        if buf in bufferSize:
+          bufferSize[buf] = max(bufferSize[buf], size)
+        else:
+          bufferSize[buf] = size
+
+      # free buffers
+      free = cfg[i].living - cfg[i+1].living
+      for local in free:
+        if local in usedBuffers:
+          freeBuffers.appendleft(usedBuffers.pop(local))
+
+    if len(cfg) > 0:
+      cfg[0].initBuffer = bufferSize
     return cfg

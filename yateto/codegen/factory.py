@@ -1,4 +1,5 @@
 import string
+from numpy import count_nonzero
 from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
@@ -154,11 +155,19 @@ class UnitTestFactory(KernelFactory):
   def tensor(self, node, resultName, maxValue = 512):
     ml = node.memoryLayout()
     size = ml.requiredReals()
-    
-    memory = ['0.0']*size
-    nz = node.spp().nonzero()
-    for entry in zip(*nz):
-      addr = ml.address(entry)
-      memory[addr] = str(float(addr % maxValue)+1.0)
+
+    spp = node.spp()
+    isDense = count_nonzero(spp) == size
+    if isDense:
+      memory = list()
+    else:
+      memory = ['0.0']*size
+      nz = spp.nonzero()
+      for entry in zip(*nz):
+        addr = ml.address(entry)
+        memory[addr] = str(float(addr % maxValue)+1.0)
 
     self._cpp('{} {}[{}] __attribute__((aligned({}))) = {{{}}};'.format(self._arch.typename, resultName, size, self._arch.alignment, ', '.join(memory)))
+    if isDense:
+      with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
+        self._cpp('{}[i] = static_cast<{}>(i % {} + 1);'.format(resultName, self._arch.typename, maxValue))

@@ -18,9 +18,6 @@ class Description(object):
     self.isACsc = isinstance(self.leftTerm.memoryLayout, CSCMemoryLayout)
     self.isBCsc = isinstance(self.rightTerm.memoryLayout, CSCMemoryLayout)
     
-    if (self.isACsc and transA) or (self.isBCsc and transB):
-      raise RuntimeError('GEMM: sparse transposition is currently not supported.')
-    
     if self.isACsc and self.isBCsc:
       raise RuntimeError('GEMM: sparse x sparse is currently not supported.')
     

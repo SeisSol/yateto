@@ -123,14 +123,20 @@ class IndexedTensor(Node):
   def setIndexPermutation(self, indices):
     assert str(indices) == str(self.indices)
   
-  def spp(self):
-    return self.tensor.spp()
+  def spp(self, groupSpp=True):
+    return self.tensor.spp(groupSpp)
   
   def name(self):
     return self.tensor.name()
   
   def memoryLayout(self):
     return self.tensor.memoryLayout()
+
+  def __deepcopy__(self, memo):
+    it = IndexedTensor(self.tensor, str(self.indices))
+    if self._eqspp is not None:
+      it._eqspp = self._eqspp.copy()
+    return it
 
   def __str__(self):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
@@ -318,8 +324,7 @@ class Contraction(BinOp):
     self.setIndexPermutation(indices)
 
   def nonZeroFlops(self):
-    p = Product(self.leftTerm(), self.rightTerm())
-    return 2*p.nonZeroFlops() - np.count_nonzero( self.eqspp() )
+    raise NotImplementedError
   
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:

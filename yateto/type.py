@@ -57,19 +57,23 @@ class Tensor(AbstractType):
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')
     else:
       self._spp = ones(shape, dtype=bool, order=self.NUMPY_DEFAULT_ORDER)
+    self._groupSpp = self._spp
     
     self.setMemoryLayout(memoryLayoutClass, alignStride)
 
   def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
-    self._memoryLayout = memoryLayoutClass.fromSpp(self._spp, alignStride=alignStride)
+    self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp, alignStride=alignStride)
 
-  def _setSparsityPattern(self, spp):
+  def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
       raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
-    self._spp = spp.astype(bool, order=self.NUMPY_DEFAULT_ORDER)
+    spp = spp.astype(bool, order=self.NUMPY_DEFAULT_ORDER)
+    if setOnlyGroupSpp == False:
+      self._spp = spp
+    self._groupSpp = spp
 
-  def updateSparsityPattern(self, spp):
-    self._setSparsityPattern(spp)
+  def setGroupSpp(self, spp):
+    self._setSparsityPattern(spp, setOnlyGroupSpp=True)
     self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
 
   def __getitem__(self, indexNames):
@@ -98,8 +102,8 @@ class Tensor(AbstractType):
   def group(self):
     return self.getGroup(self._name)
   
-  def spp(self):
-    return self._spp
+  def spp(self, groupSpp=True):
+    return self._groupSpp if groupSpp else self._spp
   
   def values(self):
     return self._values

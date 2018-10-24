@@ -2,7 +2,7 @@ from ...ast.indices import BoundingBox, Range
 from ...memory import CSCMemoryLayout
 from ..common import TensorDescription
 from .generic import Generic
-from .libxsmm import Libxsmm
+from .gemmgen import GemmGen
 
 class Description(object):
   def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta, arch, prefetchName = None):
@@ -62,6 +62,18 @@ def generator(arch, descr):
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
   memLayoutOk = AOk and BOk and strideOneC
   if not requiresTranspositions and simpleAlpha and simpleBeta and memLayoutOk:
-    return Libxsmm(arch, descr)
+    if arch.name == 'armv8':
+      if descr.isACsc:
+        return Generic(arch, descr)
+      else:
+        mode = 'sparsemmgen'
+    elif arch.name == 'noarch':
+        return Generic(arch. descr)
+    else:
+      if not descr.isACsc and descr.isBCsc:
+        mode = 'sparsemmgen'
+      else:
+        mode = 'libxsmm'
+    return GemmGen(arch, descr, mode)
   return Generic(arch, descr)
 

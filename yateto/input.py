@@ -44,11 +44,12 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
       matrix[(row, col)] = entry[2]
 
   matrices = dict()
+  align = lambda name: True if isinstance(alignStride, set) and name in alignStride else alignStride
   if name in clones:
     for clone in clones[name]:
-      matrices[clone] = Tensor(clone, (rows, columns), matrix, alignStride=alignStride)
+      matrices[clone] = Tensor(clone, (rows, columns), matrix, alignStride=align(clone))
   else:
-    matrices[name] = Tensor(name, (rows, columns), matrix, alignStride=alignStride)
+    matrices[name] = Tensor(name, (rows, columns), matrix, alignStride=align(name))
   return matrices
 
 def __complain(child):

@@ -5,14 +5,16 @@ import tempfile
 from ..cache import RoutineGenerator
 
 LIBXSMM_GENERATOR = 'libxsmm_gemm_generator'
+SPARSEMMGEN_GENERATOR = 'sparsemmgen.py'
 
-class Libxsmm(object):
-  def __init__(self, arch, descr):
+class GemmGen(object):
+  def __init__(self, arch, descr, mode):
     self._arch = arch
     self._descr = descr
+    self._mode = mode
   
   def generateRoutineName(self, gemm, spp):
-    name = 'libxsmm'
+    name = self._mode
     if spp is not None:
       sha = hashlib.md5()
       sha.update(str(spp).encode())
@@ -52,10 +54,18 @@ class Libxsmm(object):
     }
 
     spp = None
+    sppRows = None
+    flops = 0
     if d.isACsc:
       spp = d.leftTerm.memoryLayout.entries(m, k)
+      sppRows = d.leftTerm.memoryLayout.shape()[0]
+      flops = 2 * len(spp) * n.size()
     elif d.isBCsc:
       spp = d.rightTerm.memoryLayout.entries(k, n)
+      sppRows = d.rightTerm.memoryLayout.shape()[0]
+      flops = 2 * m.size() * len(spp)
+    else:
+      flops = 2 * m.size() * n.size() * k.size()
     
     routineName = self.generateRoutineName(gemm, spp)
     
@@ -67,53 +77,80 @@ class Libxsmm(object):
       d.prefetchName if d.prefetchName is not None else 'nullptr'
     ))
     
-    routineCache.addRoutine(routineName, ExecuteLibxsmm(self._arch, gemm, spp))
+    routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._mode))
     
-    return 2 * m.size() * n.size() * k.size()
+    return flops
 
-class ExecuteLibxsmm(RoutineGenerator):  
-  def __init__(self, arch, gemmDescr, spp):
+class ExecuteGemmGen(RoutineGenerator):  
+  def __init__(self, arch, gemmDescr, spp, sppRows, mode):
     self._arch = arch
     self._gemmDescr = gemmDescr
     self._spp = spp
+    self._sppRows = sppRows
+    self._mode = mode
   
   def __eq__(self, other):
-    return self._arch == other._arch and self._gemmDescr == other._gemmDescr and numpy.array_equal(self._spp, other._spp)
+    return self._arch == other._arch and self._gemmDescr == other._gemmDescr and numpy.array_equal(self._spp, other._spp) and self._mode == other._mode
   
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):
       cpp('extern long long libxsmm_num_total_flops;')
+      cpp('extern long long sparsemmgen_num_total_flops;')
     with cpp.PPIf('defined( __SSE3__) || defined(__MIC__)'):
       cpp.includeSys('immintrin.h')
 
-  def _callLibxsmm(self, argList):
+  def _callGenerator(self, argList):
     try:
       subprocess.call([str(arg) for arg in argList])
     except OSError:
-      raise RuntimeError('Libxsmm executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(LIBXSMM_GENERATOR))
+      raise RuntimeError('{} executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(mode, LIBXSMM_GENERATOR if mode == 'libxsmm' else SPARSEMMGEN_GENERATOR))
   
   def __call__(self, routineName, fileName):
-    argList = [
-      LIBXSMM_GENERATOR,
-      'dense',
-      fileName,
-      routineName,
-      self._gemmDescr['M'],
-      self._gemmDescr['N'],
-      self._gemmDescr['K'],
-      self._gemmDescr['LDA'],
-      self._gemmDescr['LDB'],
-      self._gemmDescr['LDC'],
-      self._gemmDescr['alpha'],
-      self._gemmDescr['beta'],
-      self._gemmDescr['alignedA'],
-      self._gemmDescr['alignedC'],
-      self._arch.name,
-      self._gemmDescr['prefetch'],
-      self._arch.precision + 'P'
-    ]
+    if self._mode == 'libxsmm':
+      argList = [
+        LIBXSMM_GENERATOR,
+        'dense',
+        fileName,
+        routineName,
+        self._gemmDescr['M'],
+        self._gemmDescr['N'],
+        self._gemmDescr['K'],
+        self._gemmDescr['LDA'],
+        self._gemmDescr['LDB'],
+        self._gemmDescr['LDC'],
+        self._gemmDescr['alpha'],
+        self._gemmDescr['beta'],
+        self._gemmDescr['alignedA'],
+        self._gemmDescr['alignedC'],
+        self._arch.name,
+        self._gemmDescr['prefetch'],
+        self._arch.precision + 'P'
+      ]
+    else:
+      argList = [
+        SPARSEMMGEN_GENERATOR,
+        self._gemmDescr['M'],
+        self._gemmDescr['N'],
+        self._gemmDescr['K'],
+        self._gemmDescr['LDA'],
+        self._gemmDescr['LDB'],
+        self._gemmDescr['LDC'],
+        self._gemmDescr['beta'],
+        '--arch',
+        self._arch.name,
+        '--prefetching',
+        self._gemmDescr['prefetch'],
+        '--output_funcname',
+        routineName,
+        '--output_filename',
+        fileName,
+      ]
     if self._spp is not None:
-      shape = (self._gemmDescr['M'], self._gemmDescr['K']) if self._gemmDescr['LDA'] == 0 else (self._gemmDescr['K'], self._gemmDescr['N'])
+      cols = self._gemmDescr['K'] if self._gemmDescr['LDA'] == 0 else self._gemmDescr['N']
+      rows = self._gemmDescr['M'] if self._gemmDescr['LDA'] == 0 else self._gemmDescr['K']
+      if self._mode == 'sparsemmgen':
+        rows = self._sppRows
+      shape = (rows, cols)      
       with tempfile.NamedTemporaryFile() as temp:
         temp.write('%%MatrixMarket matrix coordinate real general\n'.encode())
         temp.write('%\n'.encode())
@@ -121,11 +158,14 @@ class ExecuteLibxsmm(RoutineGenerator):
         for r,c in self._spp:
           temp.write('{} {} 1.0\n'.format(r+1,c+1).encode())
         temp.flush()
-        argList[1] = 'sparse'
+        if self._mode == 'libxsmm':
+          argList[1] = 'sparse'
+        else:
+          argList.append('--mtx_filename')
         argList.append(temp.name)
-        self._callLibxsmm(argList)
+        self._callGenerator(argList)
     else:
-      self._callLibxsmm(argList)
+      self._callGenerator(argList)
 
     return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
   

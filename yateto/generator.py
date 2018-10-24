@@ -206,6 +206,7 @@ class Generator(object):
         cpp.include(fInit.hName)
         with cpp.PPIfndef('NDEBUG'):
           cpp('long long libxsmm_num_total_flops = 0;')
+          cpp('long long sparsemmgen_num_total_flops = 0;')
         with cpp.Namespace(namespace):
           with cpp.Namespace(self.TEST_NAMESPACE):
             cpp.classDeclaration(self.TEST_CLASS)

@@ -455,7 +455,7 @@ class InitializerGenerator(object):
         self._collect[baseName][group] = tensor
       else:
         assert self._collect[baseName][group] == tensor
-    maxIndex = {baseName: tuple(map(max, *groups.keys())) for baseName, groups in self._collect.items()}
+    maxIndex = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._collect.items()}
     self._groupSize = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndex.items()}
   
   def _tensorViewGenerator(self, memoryLayout):

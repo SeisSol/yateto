@@ -124,7 +124,7 @@ def memoryLayoutFromFile(xmlFile, db, clones):
       for matrix in groups[groupName]:
         spp = spp + db.byName(matrix).spp() if spp is not None else db.byName(matrix).spp()
       for matrix in groups[groupName]:
-        db.byName(matrix).updateSparsityPattern(spp)
+        db.byName(matrix).setGroupSpp(spp)
 
   for matrix in root.findall('matrix'):
     group = matrix.get('group')

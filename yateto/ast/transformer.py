@@ -162,8 +162,11 @@ class ImplementContractions(Transformer):
     return newNode
 
 class EquivalentSparsityPattern(Transformer):
+  def __init__(self, groupSpp=True):
+    self._groupSpp = groupSpp
+
   def visit_IndexedTensor(self, node):
-    node.setEqspp(node.spp().copy())
+    node.setEqspp(node.spp(self._groupSpp).copy())
     return node
 
   def visit_Add(self, node):
@@ -205,6 +208,15 @@ class EquivalentSparsityPattern(Transformer):
       
     # TODO: Backtracking of equivalent sparsity pattern to children?
 
+    return node
+
+class SetSparsityPattern(Transformer):
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+
+  def visit_IndexedTensor(self, node):
     return node
 
 class ComputeMemoryLayout(Transformer):

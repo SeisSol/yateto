@@ -1,3 +1,4 @@
+import copy
 import itertools
 import re
 import os
@@ -28,6 +29,7 @@ class Kernel(object):
       else:
         raise ValueError('Prefetch must either be a Tensor (without indices) or a list of Tensors.')
     self.cfg = None
+    self.nonZeroFlops = -1
 
   @classmethod
   def isValidName(cls, name):
@@ -41,6 +43,12 @@ class Kernel(object):
     self.cfg = FindLiving().visit(self.cfg)
   
   def prepareUntilCodeGen(self, costEstimator):
+    ast = copy.deepcopy(self.ast)
+    ast = EquivalentSparsityPattern(groupSpp=False).visit(ast)
+    ast = StrengthReduction(costEstimator).visit(ast)
+    ast = SetSparsityPattern().visit(ast)
+    self.nonZeroFlops = ComputeOptimalFlopCount().visit(ast)
+
     self.ast = EquivalentSparsityPattern().visit(self.ast)
     self.ast = StrengthReduction(costEstimator).visit(self.ast)
     self.ast = FindContractions().visit(self.ast)
@@ -242,14 +250,12 @@ class Generator(object):
           with cpp.Namespace(namespace):
             with header.Namespace(namespace):
               for kernel in self._kernels:
-                nonZeroFlops = ComputeOptimalFlopCount().visit(kernel.ast)
-                kernelOutline = optKernelGenerator.generateKernelOutline(nonZeroFlops, kernel.cfg)
+                kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg)
                 optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
               for family in self._kernelFamilies.values():
                 kernelOutlines = [None] * len(family)
                 for group, kernel in family.items():
-                  nonZeroFlops = ComputeOptimalFlopCount().visit(kernel.ast)
-                  kernelOutlines[group] = optKernelGenerator.generateKernelOutline(nonZeroFlops, kernel.cfg)
+                  kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg)
                 optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
 
     print('Calling external code generators...')

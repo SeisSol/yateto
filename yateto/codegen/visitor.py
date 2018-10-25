@@ -429,8 +429,8 @@ class InitializerGenerator(object):
           self.typename(len(memLayout.shape()), arch),
           self.ARGUMENT_NAME,
           self.listToInitializerList(memLayout.shape()),
-          self.ROWIND_NAME + index,
-          self.COLPTR_NAME + index
+          self.ROWIND_NAME + (index if index is not None else ''),
+          self.COLPTR_NAME + (index if index is not None else '')
         )
       )
     def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):

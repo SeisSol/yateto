@@ -5,7 +5,7 @@ from .generic import Generic
 from .gemmgen import GemmGen
 
 class Description(object):
-  def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta, arch, prefetchName = None):
+  def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta, arch, alignedStartA, alignedStartC, prefetchName = None):
     self.result = result
     self.leftTerm = leftTerm
     self.rightTerm = rightTerm
@@ -35,8 +35,8 @@ class Description(object):
     assert m in bbC[0]
     assert n in bbC[1]
 
-    self.alignedA = not transA and self.leftTerm.memoryLayout.alignedStride()
-    self.alignedC = self.result.memoryLayout.alignedStride()
+    self.alignedA = alignedStartA and not transA and self.leftTerm.memoryLayout.alignedStride()
+    self.alignedC = alignedStartC and self.result.memoryLayout.alignedStride()
     
     if self.alignedA and self.alignedC:
       m = m.aligned(arch)
@@ -68,7 +68,7 @@ def generator(arch, descr):
       else:
         mode = 'sparsemmgen'
     elif arch.name == 'noarch':
-        return Generic(arch. descr)
+        return Generic(arch, descr)
     else:
       if not descr.isACsc and descr.isBCsc:
         mode = 'sparsemmgen'

@@ -30,26 +30,27 @@ def __createCollection(matrices):
 
   return collection
 
-def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride):  
-  if transpose:
-    rows, columns = columns, rows
+def __transposeMatrix(matrix):
+  matrixT = dict()
+  for entry,value in matrix.items():
+    matrixT[(entry[1], entry[0])] = value
+  return matrixT
 
+def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride):
   matrix = dict()
   for entry in entries:
     row = int(entry[0])-1
     col = int(entry[1])-1
-    if transpose:
-      matrix[(col, row)] = entry[2]
-    else:
-      matrix[(row, col)] = entry[2]
+    matrix[(row, col)] = entry[2]
 
   matrices = dict()
-  align = lambda name: True if isinstance(alignStride, set) and name in alignStride else alignStride
-  if name in clones:
-    for clone in clones[name]:
-      matrices[clone] = Tensor(clone, (rows, columns), matrix, alignStride=align(clone))
-  else:
-    matrices[name] = Tensor(name, (rows, columns), matrix, alignStride=align(name))
+  align = lambda name: name in alignStride if isinstance(alignStride, set) else alignStride
+  trans = lambda name: name in transpose if isinstance(transpose, set) else transpose
+  names = clones[name] if name in clones else [name]
+  for name in names:
+    shape = (columns, rows) if trans(name) else (rows, columns)
+    mtx = __transposeMatrix(matrix) if trans(name) else matrix
+    matrices[name] = Tensor(name, shape, mtx, alignStride=align(name))
   return matrices
 
 def __complain(child):

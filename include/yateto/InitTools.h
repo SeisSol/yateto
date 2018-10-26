@@ -2,6 +2,7 @@
 #define YATETO_INITTOOLS_H_
 
 #include <algorithm>
+#include <cstdint>
 
 namespace yateto {
   template<class T>

@@ -70,7 +70,7 @@ def generator(arch, descr):
     elif arch.name == 'noarch':
         return Generic(arch, descr)
     else:
-      if not descr.isACsc and descr.isBCsc:
+      if not descr.isACsc and descr.isBCsc and arch.name == 'knl':
         mode = 'sparsemmgen'
       else:
         mode = 'libxsmm'

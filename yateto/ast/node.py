@@ -398,7 +398,8 @@ class LoopOverGEMM(BinOp):
       if len(fs) > 1:
         indexStr = re.sub(r'([{0}]{{{1},{1}}})'.format(fs, len(fs)), r'(\1)', indexStr)
       batchedIndices = batchedIndices - set(fs)
-    indexStr = re.sub(r'([{}])'.format(''.join(batchedIndices)), r'[\1]', indexStr)
+    if batchedIndices:
+      indexStr = re.sub(r'([{}])'.format(''.join(batchedIndices)), r'[\1]', indexStr)
     return '{}{}_{{{}}}'.format(name, '^T' if transpose else '', indexStr)
   
   def __str__(self):

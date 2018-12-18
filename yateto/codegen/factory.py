@@ -30,7 +30,7 @@ class OptimisedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch):
     super().__init__(cpp, arch)
 
-  def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+  def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = log.Description(
       alpha = scalar,
@@ -44,9 +44,9 @@ class OptimisedKernelFactory(KernelFactory):
       prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description)
-    return generator.generate(self._cpp, routineCache)
+    return generator.generate(self._cpp, routineCache, gemm_cfg)
   
-  def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+  def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
     description = indexsum.Description(
       alpha = scalar,
@@ -57,7 +57,7 @@ class OptimisedKernelFactory(KernelFactory):
     generator = indexsum.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
   
-  def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+  def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = product.Description(
       alpha = scalar,
@@ -88,7 +88,7 @@ class UnitTestFactory(KernelFactory):
     address = var.memoryLayout().addressString(indices)
     return '{}[{}]'.format(self._name(var), address)
   
-  def create_Einsum(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+  def create_Einsum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
@@ -111,7 +111,7 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, g, ranges, EinsumBody())
   
-  def create_ScalarMultiplication(self, node, result, arguments, add, scalar, prefetchName, routineCache):
+  def create_ScalarMultiplication(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     return self.simple(result, arguments[0], add, scalar, routineCache)
 
   def simple(self, result, term, add, scalar, routineCache):
@@ -171,3 +171,5 @@ class UnitTestFactory(KernelFactory):
     if isDense:
       with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
         self._cpp('{}[i] = static_cast<{}>(i % {} + 1);'.format(resultName, self._arch.typename, maxValue))
+
+

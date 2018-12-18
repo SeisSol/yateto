@@ -52,7 +52,7 @@ class KernelGenerator(object):
   def _bufferName(cls, buf):
     return cls.BUFFER_NAME + str(buf)
   
-  def generate(self, cpp, cfg, factory, routineCache=None):
+  def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
     hwFlops = 0
     cfg = DetermineLocalInitialization().visit(cfg)
     localPtrs = list()
@@ -70,7 +70,7 @@ class KernelGenerator(object):
         scalar = 1.0 if action.scalar is None else action.scalar
         if action.isRHSExpression():
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
-          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache)
+          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
     return hwFlops
@@ -110,7 +110,7 @@ class OptimisedKernelGenerator(KernelGenerator):
       else:
         tensors[bn] = {g}
   
-  def generateKernelOutline(self, nonZeroFlops, cfg):
+  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg):
     scalars = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
@@ -133,7 +133,7 @@ class OptimisedKernelGenerator(KernelGenerator):
     function = ''
     with Cpp(functionIO) as fcpp:
       factory = OptimisedKernelFactory(fcpp, self._arch)
-      hwFlops = super().generate(fcpp, cfg, factory, self._routineCache)
+      hwFlops = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       function = functionIO.getvalue()    
     return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function)
 
@@ -311,7 +311,7 @@ class UnitTestGenerator(KernelGenerator):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
   
-  def generate(self, cpp, testName, kernelClass, cfg, index=None):
+  def generate(self, cpp, testName, kernelClass, cfg, gemm_cfg, index=None):
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
@@ -354,11 +354,12 @@ class UnitTestGenerator(KernelGenerator):
         cpp( '{0}.{1} = {1};'.format(self.KERNEL_VAR, scalar) )
       for var in variables:
         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
+
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
       factory = UnitTestFactory(cpp, self._arch, self._name)
-      super().generate(cpp, cfg, factory)
+      super().generate(cpp, cfg, factory, None, gemm_cfg)
 
       for var in variables:
         if var.writable:
@@ -607,3 +608,5 @@ class InitializerGenerator(object):
         initStr = '{{{}}}'.format(initStr)
       
       cpp('{} static {} {}{}{} = {};'.format(CONSTEXPR, typ, name, groupIndices, arrayIndices, initStr))
+
+

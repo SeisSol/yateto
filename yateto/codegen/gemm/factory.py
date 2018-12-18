@@ -53,7 +53,7 @@ class Description(object):
   def setBeta(self, beta):
     self.beta = beta
 
-def generator(arch, descr):
+def generator(arch, descr, gemm_cfg):
   requiresTranspositions = descr.transA or descr.transB
   simpleAlpha = descr.alpha == 1.0
   simpleBeta = descr.beta in [0.0, 1.0]
@@ -62,18 +62,9 @@ def generator(arch, descr):
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
   memLayoutOk = AOk and BOk and strideOneC
   if not requiresTranspositions and simpleAlpha and simpleBeta and memLayoutOk:
-    if arch.name == 'armv8':
-      if descr.isACsc:
-        return Generic(arch, descr)
-      else:
-        mode = 'sparsemmgen'
-    elif arch.name == 'noarch':
-        return Generic(arch, descr)
+    if descr.isBCsc:
+      return GemmGen(arch, descr, gemm_cfg.getSparseGemmTool())
     else:
-      if not descr.isACsc and descr.isBCsc and arch.name == 'knl':
-        mode = 'sparsemmgen'
-      else:
-        mode = 'libxsmm'
-    return GemmGen(arch, descr, mode)
+      return GemmGen(arch, descr, gemm_cfg.getDenseGemmTool())
   return Generic(arch, descr)
 

@@ -12,6 +12,9 @@ from .codegen.code import Cpp
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
+from .gemm_configuration import GemmTool, BLASlike
+from typing import List
+from io import StringIO
 
 class Kernel(object):
   BASE_NAME = r'[a-zA-Z]\w*'
@@ -193,7 +196,7 @@ class Generator(object):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
 
-  def generate(self, outputDir: str, namespace = 'yateto', costEstimator = BoundingBoxCostEstimator):
+  def generate(self, outputDir: str, namespace = 'yateto', gemm_cfg: List[GemmTool] = [], costEstimator = BoundingBoxCostEstimator):
     print('Deducing indices...')
     for kernel in self._kernels:
       kernel.prepareUntilUnitTest()
@@ -221,10 +224,10 @@ class Generator(object):
         with cpp.Class('{}::{}::{} : public CxxTest::TestSuite'.format(namespace, self.TEST_NAMESPACE, self.TEST_CLASS)):
           cpp.label('public')
           for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.name, kernel.name, kernel.cfg)
+            UnitTestGenerator(self._arch).generate(cpp, kernel.name, kernel.name, kernel.cfg, gemm_cfg)
           for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-              UnitTestGenerator(self._arch).generate(cpp, kernel.name, family.name, kernel.cfg, group)
+              UnitTestGenerator(self._arch).generate(cpp, kernel.name, family.name, kernel.cfg, gemm_cfg, group)
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
@@ -237,7 +240,10 @@ class Generator(object):
     print('Generating kernels...')
     cache = RoutineCache()
     optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
-    with Cpp(fKernels.cpp) as cpp:
+
+    kernelSource = StringIO()
+    kernelSourceContent = ''
+    with Cpp(kernelSource) as cpp:      
       cpp.includeSys('cassert')
       cpp.includeSys('cstring')
       cpp.include(fRoutines.hName)
@@ -250,13 +256,22 @@ class Generator(object):
           with cpp.Namespace(namespace):
             with header.Namespace(namespace):
               for kernel in self._kernels:
-                kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg)
+                kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
                 optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
               for family in self._kernelFamilies.values():
                 kernelOutlines = [None] * len(family)
                 for group, kernel in family.items():
-                  kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg)
+                  kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
                 optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
+      kernelSourceContent = kernelSource.getvalue()
+
+    with Cpp(fKernels.cpp) as cpp:
+      for gemm_tool in gemm_cfg.selected:
+        for inc in gemm_tool.includes:
+          cpp.include(inc)
+        if isinstance(gemm_tool, BLASlike):
+          cpp(gemm_tool.c_code_init)
+      cpp.out.write(kernelSourceContent)      
 
     print('Calling external code generators...')
     with Cpp(fRoutines.h) as header:
@@ -290,3 +305,4 @@ class Generator(object):
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
+

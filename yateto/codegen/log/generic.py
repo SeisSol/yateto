@@ -36,7 +36,7 @@ class Generic(object):
       return  {next(iter(I)): fusedRange}
     return term.memoryLayout.defuse(fusedRange, term.indices, I)
 
-  def generate(self, cpp, routineCache):
+  def generate(self, cpp, routineCache, gemm_cfg):
     d = self._descr
     
     A = d.leftTerm.indices - d.loopIndices
@@ -99,7 +99,7 @@ class Generic(object):
           self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, const=False)
           if outerPrefetchName is not None:
             self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices)
-        generator = gemm.generator(self._arch, gemmDescr)
+        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg)
         return generator.generate(cpp, routineCache)
 
     class InnerLoopBody(object):
@@ -120,3 +120,4 @@ class Generic(object):
         return flops
 
     return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody())
+

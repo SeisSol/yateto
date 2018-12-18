@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.lib
+import re
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
@@ -390,13 +391,19 @@ class LoopOverGEMM(BinOp):
     return layout.mayFuse(m) and layout.mayFuse(n)
 
   @staticmethod
-  def indexString(name, subset, indices, transpose=False):
-    indexStr = ''.join([i if i in subset else ':' for i in indices])
-    matrixStr = '{}_{}'.format(name, indexStr)
-    return '({})\''.format(matrixStr) if transpose else matrixStr
+  def indexString(name, fused, indices, transpose=False):
+    indexStr = str(indices)
+    batchedIndices = set(indices)
+    for fs in fused:
+      if len(fs) > 1:
+        indexStr = re.sub(r'([{0}]{{{1},{1}}})'.format(fs, len(fs)), r'(\1)', indexStr)
+      batchedIndices = batchedIndices - set(fs)
+    if batchedIndices:
+      indexStr = re.sub(r'([{}])'.format(''.join(batchedIndices)), r'[\1]', indexStr)
+    return '{}{}_{{{}}}'.format(name, '^T' if transpose else '', indexStr)
   
   def __str__(self):
-    Astr = self.indexString('A', self._m + self._k, self.leftTerm().indices, self._transA)
-    Bstr = self.indexString('B', self._k + self._n, self.rightTerm().indices, self._transB)
-    Cstr = self.indexString('C', self._m + self._n, self.indices)
+    Astr = self.indexString('A', [self._m, self._k], self.leftTerm().indices, self._transA)
+    Bstr = self.indexString('B', [self._k, self._n], self.rightTerm().indices, self._transB)
+    Cstr = self.indexString('C', [self._m, self._n], self.indices)
     return '{} [{}]: {} = {} {}'.format(type(self).__name__, self.indices, Cstr, Astr, Bstr)

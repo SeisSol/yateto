@@ -45,8 +45,8 @@ libxsmm = CodeGenerator('libxsmm',
                          True,
                          False)
 
-pspam = CodeGenerator('sparsemmgen',
-                      'sparsemmgen.py',
+pspamm = CodeGenerator('pspamm',
+                      'pspamm.py',
                        [],
                        True,
                        True)
@@ -71,8 +71,8 @@ class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
     defaults = {
-      'knl' : [libxsmm, pspam, mkl, blis],
-      'armv8' : [pspam, openblas, blis]
+      'knl' : [libxsmm, pspamm, mkl, blis],
+      'armv8' : [pspamm, openblas, blis]
     }
 
     if arch.name in defaults:

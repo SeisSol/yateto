@@ -98,7 +98,7 @@ class GemmGen(object):
 
       routineName = self.generateRoutineName(gemm, spp)
 
-      if self._mode == 'sparsemmgen':
+      if self._mode == 'pspamm':
         cpp( '{}({}, {}, {}, {}, {}, {});'.format(
           routineName,
           self._pointer(d.leftTerm, (m.start, k.start)),
@@ -136,7 +136,7 @@ class ExecuteGemmGen(RoutineGenerator):
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):
       cpp('extern long long libxsmm_num_total_flops;')
-      cpp('extern long long sparsemmgen_num_total_flops;')
+      cpp('extern long long pspamm_num_total_flops;')
     with cpp.PPIf('defined( __SSE3__) || defined(__MIC__)'):
       cpp.includeSys('immintrin.h')
 
@@ -147,7 +147,7 @@ class ExecuteGemmGen(RoutineGenerator):
       raise RuntimeError('GEMM code generator executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(self._cmd))
   
   def __call__(self, routineName, fileName):
-    if self._mode == 'sparsemmgen':
+    if self._mode == 'pspamm':
       argList = [
         self._cmd,
         self._gemmDescr['M'],
@@ -190,7 +190,7 @@ class ExecuteGemmGen(RoutineGenerator):
     if self._spp is not None:
       cols = self._gemmDescr['K'] if self._gemmDescr['LDA'] == 0 else self._gemmDescr['N']
       rows = self._gemmDescr['M'] if self._gemmDescr['LDA'] == 0 else self._gemmDescr['K']
-      if self._mode == 'sparsemmgen':
+      if self._mode == 'pspamm':
         rows = self._sppRows
       shape = (rows, cols)      
       with tempfile.NamedTemporaryFile() as temp:
@@ -202,14 +202,14 @@ class ExecuteGemmGen(RoutineGenerator):
         temp.flush()
         if self._mode == 'libxsmm':
           argList[1] = 'sparse'
-        if self._mode == 'sparsemmgen':
+        if self._mode == 'pspamm':
           argList.append('--mtx_filename')
         argList.append(temp.name)
         self._callGenerator(argList)
     else:
       self._callGenerator(argList)
 
-    if self._mode == 'sparsemmgen':
+    if self._mode == 'pspamm':
       return 'void {name}(const {type}* A, const {type}* B, {type}* C, {type} alpha, {type} beta, const {type}* prefetch);'.format(name=routineName, type=self._arch.typename)
     return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
   

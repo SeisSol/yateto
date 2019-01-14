@@ -71,6 +71,8 @@ class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
     defaults = {
+      'snb' : [libxsmm, mkl, blis],
+      'hsw' : [libxsmm, mkl, blis],
       'knl' : [libxsmm, pspamm, mkl, blis],
       'armv8' : [pspamm, openblas, blis]
     }

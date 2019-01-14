@@ -58,6 +58,12 @@ namespace yateto {
       memset(m_values, 0, size() * sizeof(real_t));
     }
 
+    template<typename... Entry>
+    real_t& operator()(Entry... entry) {
+      static_assert(sizeof...(entry) == Dim, "Number of arguments to operator() does not match Tensor's dimension.");
+      return m_values[address(entry...)];
+    }
+
     real_t& operator[](uint_t const entry[Dim]) {
       uint_t addr = 0;
       for (uint_t d = 0; d < Dim; ++d) {

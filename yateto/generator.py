@@ -12,7 +12,7 @@ from .codegen.code import Cpp
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
-from .gemm_configuration import GemmTool, BLASlike
+from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike
 from typing import List
 from io import StringIO
 
@@ -196,7 +196,14 @@ class Generator(object):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
 
-  def generate(self, outputDir: str, namespace = 'yateto', gemm_cfg: List[GemmTool] = [], costEstimator = BoundingBoxCostEstimator):
+  def generate( self,
+                outputDir: str,
+                namespace = 'yateto',
+                gemm_cfg: GeneratorCollection = None,
+                costEstimator = BoundingBoxCostEstimator):
+    if not gemm_cfg:
+      gemm_cfg = DefaultGeneratorCollection(self._arch)
+
     print('Deducing indices...')
     for kernel in self._kernels:
       kernel.prepareUntilUnitTest()

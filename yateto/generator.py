@@ -43,7 +43,7 @@ class Kernel(object):
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
     ast2cf.visit(self.ast)
     self.cfg = ast2cf.cfg()
-    self.cfg = FindLiving().visit(self.cfg)
+    self.cfg = LivenessAnalysis().visit(self.cfg)
   
   def prepareUntilCodeGen(self, costEstimator):
     ast = copy.deepcopy(self.ast)
@@ -67,7 +67,7 @@ class Kernel(object):
     ast2cf.visit(self.ast)
     self.cfg = ast2cf.cfg()
     self.cfg = MergeScalarMultiplications().visit(self.cfg)
-    self.cfg = FindLiving().visit(self.cfg)
+    self.cfg = LivenessAnalysis().visit(self.cfg)
     self.cfg = SubstituteForward().visit(self.cfg)
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)

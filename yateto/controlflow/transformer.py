@@ -18,11 +18,11 @@ class MergeScalarMultiplications(object):
       i += 1
     return cfg
 
-class FindLiving(object):   
+class LivenessAnalysis(object):
   def visit(self, cfg):
-    cfg[-1].living = set()
+    cfg[-1].live = set()
     for i in reversed(range(len(cfg)-1)):
-      cfg[i].living = (cfg[i+1].living - {cfg[i].action.result}) | cfg[i].action.variables()
+      cfg[i].live = (cfg[i+1].live - {cfg[i].action.result}) | cfg[i].action.variables()
     return cfg
 
 class SubstituteForward(object):
@@ -31,14 +31,14 @@ class SubstituteForward(object):
     for i in range(n):
       ua = cfg[i].action
       v = cfg[i+1]
-      if not ua.isCompound() and ua.isRHSVariable() and ua.term.writable and ua.result.isLocal() and ua.term not in v.living:
+      if not ua.isCompound() and ua.isRHSVariable() and ua.term.writable and ua.result.isLocal() and ua.term not in v.live:
         when = ua.result
         by = ua.term
         maySubs = all([cfg[j].action.maySubstitute(when, by) for j in range(i, n)])
         if maySubs:
           for j in range(i, n):
             cfg[j].action = cfg[j].action.substituted(when, by)
-          cfg = FindLiving().visit(cfg)
+          cfg = LivenessAnalysis().visit(cfg)
     return cfg
 
 class SubstituteBackward(object):
@@ -51,7 +51,7 @@ class SubstituteBackward(object):
         found = -1
         for j in range(i):
           u = cfg[j]
-          if by not in u.living and not u.action.isCompound() and u.action.result == va.term:
+          if by not in u.live and not u.action.isCompound() and u.action.result == va.term:
             found = j
             break
         if found >= 0:
@@ -61,7 +61,7 @@ class SubstituteBackward(object):
             cfg[found].action = cfg[found].action.substituted(when, by, term=False)
             for j in range(found+1,i+1):
               cfg[j].action = cfg[j].action.substituted(when, by)
-            cfg = FindLiving().visit(cfg)
+            cfg = LivenessAnalysis().visit(cfg)
     return cfg
 
 class RemoveEmptyStatements(object):
@@ -105,7 +105,7 @@ class MergeActions(object):
             del cfg[found]
             n -= 1
       i += 1
-    return FindLiving().visit(cfg)
+    return LivenessAnalysis().visit(cfg)
 
 class DetermineLocalInitialization(object):
   def visit(self, cfg):
@@ -139,7 +139,7 @@ class DetermineLocalInitialization(object):
           bufferSize[buf] = size
 
       # free buffers
-      free = cfg[i].living - cfg[i+1].living
+      free = cfg[i].live - cfg[i+1].live
       for local in free:
         if local in usedBuffers:
           freeBuffers.appendleft(usedBuffers.pop(local))

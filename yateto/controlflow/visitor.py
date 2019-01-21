@@ -103,8 +103,8 @@ class PrettyPrinter(object):
   def visit(self, cfg):
     for pp in cfg:
       if self._printPPState:
-        if pp.living:
-          print('L =', pp.living)
+        if pp.live:
+          print('L =', pp.live)
         if pp.initLocal:
           print('Init =', pp.initLocal)
       if pp.action:

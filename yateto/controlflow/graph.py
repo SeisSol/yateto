@@ -125,7 +125,7 @@ class ProgramAction(object):
 class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
-    self.living = None
+    self.live = None
     self.initBuffer = None
     self.bufferMap = None
     

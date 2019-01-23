@@ -21,7 +21,7 @@ try:
 except:
   raise RuntimeError('Could not find example ' + cmdLineArgs.example_script)
 
-targetFlopsPerSec = 20.0e9
+targetFlopsPerSec = 40.0e9
 
 outDir = cmdLineArgs.example_script + '/generated_code'
 try:

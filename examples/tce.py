@@ -10,15 +10,22 @@ def add(g):
   D = Tensor('D', (N, N, N, N))
   S = Tensor('S', (N, N, N, N))
 
-  V = 16
+  O = 8
+  V = 24
+  N = O + V
+  A2 = Tensor('A2', (N, N, N, N))
   C1 = Tensor('C1', (N, V))
   C2 = Tensor('C2', (N, V))
   C3 = Tensor('C3', (N, V))
   C4 = Tensor('C4', (N, V))
+  C4T = Tensor('C4T', (V, N))
   B2 = Tensor('T', (V, V, V, V))
 
   kernel = S['abij'] <= A['acik'] * B['befl'] * C['dfjk'] * D['cdel']
   g.add('tce1', kernel)
 
-  kernel = B2['abcd'] <= C1['sd'] * C2['rc'] * C3['qb'] * C4['pa'] * A['pqrs']
+  kernel = B2['abcd'] <= C1['sd'] * C2['rc'] * C3['qb'] * C4['pa'] * A2['pqrs']
   g.add('tce2', kernel)
+
+  kernel = B2['abcd'] <= C1['sd'] * C2['rc'] * C3['qb'] * C4T['ap'] * A2['pqrs']
+  g.add('tce2_trans', kernel)

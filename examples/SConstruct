@@ -4,7 +4,7 @@ import arch
 vars = Variables()
 vars.AddVariables(
   EnumVariable( 'example', 'Example that should be compiled', 'minimal',
-                allowed_values=('hosvd', 'minimal', 'stock', 'tce')),
+                allowed_values=('hosvd', 'matmul', 'minimal', 'stock', 'tce')),
   EnumVariable( 'compileMode', 'Mode of the compilation', 'release',
                 allowed_values=('debug', 'release')),
   EnumVariable( 'arch',

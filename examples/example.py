@@ -68,6 +68,7 @@ with Cpp(os.path.join(cmdLineArgs.example_script, 'performance.cpp')) as cpp:
       cpp('fillWithStuff({0}, tensor::{1}::size({2}));'.format(formatArrayName(tensor), tensor[0], formatGroup(tensor)))
     cpp('Stopwatch _sw;');
     cpp('double _time, _flops;')
+    cpp('printf("kernel,repetitions,time,numflop,gflops\\n");')
     for kernel in g.kernels():
       cpp('_reps = _fixedReps;')
       with cpp.If('_reps < 0'):
@@ -82,5 +83,5 @@ with Cpp(os.path.join(cmdLineArgs.example_script, 'performance.cpp')) as cpp:
         cpp('{}.execute();'.format(kobj))
       cpp('_time = _sw.stop();')
       cpp('_flops = static_cast<double>(kernel::{0}::HardwareFlops) * _reps / _time / 1.0e9;'.format(kernel.name))
-      cpp('printf("Kernel {0}\\nRepetitions: %u\\nTime [s]: %lf\\n#flops: %u\\nGFLOPS: %lf\\n\\n", _reps, _time, kernel::{0}::HardwareFlops, _flops);'.format(kernel.name))
+      cpp('printf("{0},%u,%lf,%u,%lf\\n", _reps, _time, kernel::{0}::HardwareFlops, _flops);'.format(kernel.name))
     cpp('return 0;')

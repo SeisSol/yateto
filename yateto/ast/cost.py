@@ -1,10 +1,11 @@
-from functools import reduce
 from numpy import count_nonzero
 from .indices import BoundingBox
 
 class CostEstimator(object):
   def estimate(self, node):
-    childCost = reduce(lambda x, y: x + y, [0] + [self.estimate(child) for child in node])
+    childCost = 0
+    for child in node:
+      childCost = childCost + self.estimate(child)
     method = 'estimate_' + node.__class__.__name__
     estimator = getattr(self, method, self.generic_estimate)
     return childCost + estimator(node)

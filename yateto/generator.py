@@ -175,7 +175,10 @@ class Generator(object):
         raise ValueError('Kernel name invalid (must match regexp {}): {}'.format(Kernel.VALID_NAME, name))
       kernel = Kernel(name, ast, prefetch)
       self._kernels.append(kernel)
-  
+
+  def kernels(self):
+    return [kernel for kernel in self._kernels] + [kernel for family in self._kernelFamilies.values() for kernel in family.values()]
+
   def addFamily(self, name: str, parameterSpace, astGenerator, prefetchGenerator=None):
     if name not in self._kernelFamilies:
       self._kernelFamilies[name] = KernelFamily()

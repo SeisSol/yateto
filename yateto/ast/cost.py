@@ -1,11 +1,13 @@
+from functools import reduce
 from numpy import count_nonzero
 from .indices import BoundingBox
 
 class CostEstimator(object):
   def estimate(self, node):
+    childCost = reduce(lambda x, y: x + y, [0] + [self.estimate(child) for child in node])
     method = 'estimate_' + node.__class__.__name__
     estimator = getattr(self, method, self.generic_estimate)
-    return estimator(node)
+    return childCost + estimator(node)
   
   def generic_estimate(self, node):
     raise NotImplementedError
@@ -54,8 +56,6 @@ class BoundingBoxCostEstimator(CachedCostEstimator):
     return 0
   
   def estimate_Product(self, node):
-    childCost = self.estimate(node.leftTerm()) + self.estimate(node.rightTerm())
-    
     lbb = self._cache[node.leftTerm()]
     rbb = self._cache[node.rightTerm()]
     lind = node.leftTerm().indices
@@ -75,15 +75,14 @@ class BoundingBoxCostEstimator(CachedCostEstimator):
     bb = BoundingBox(ranges)
     self._cache[node] = bb
 
-    return childCost + bb.size()
+    return bb.size()
   
   def estimate_IndexSum(self, node):
-    childCost = self.estimate(node.term())
     tbb = self._cache[node.term()]
     pos = node.term().indices.find(str(node.sumIndex()))
     bb = BoundingBox([r for i,r in enumerate(tbb) if i != pos])
     self._cache[node] = bb
-    return childCost + tbb.size() - bb.size()
+    return tbb.size() - bb.size()
 
 class ExactCost(CachedCostEstimator):
   def __init__(self):
@@ -99,14 +98,12 @@ class ExactCost(CachedCostEstimator):
     return 0
   
   def estimate_Product(self, node):
-    childCost = self.estimate(node.leftTerm()) + self.estimate(node.rightTerm())
     spp = node.computeSparsityPattern(self._cache[node.leftTerm()], self._cache[node.rightTerm()])
     self._cache[node] = spp
-    return childCost + count_nonzero( spp )
+    return count_nonzero( spp )
   
   def estimate_IndexSum(self, node):
-    childCost = self.estimate(node.term())
     termSpp = self._cache[node.term()]
     spp = node.computeSparsityPattern(termSpp)
     self._cache[node] = spp    
-    return childCost + count_nonzero( termSpp ) - count_nonzero( spp )
+    return count_nonzero( termSpp ) - count_nonzero( spp )

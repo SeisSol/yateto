@@ -30,13 +30,13 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   
   if Aperm is not None:
     L = copy.copy(L)
-    L.setIndexPermutation(Aperm)
+    L.setIndexPermutation(Aperm, permuteEqspp=False)
   if Bperm is not None:
     R = copy.copy(R)
-    R.setIndexPermutation(Bperm)
+    R.setIndexPermutation(Bperm, permuteEqspp=False)
   if Cperm is not None:
     I = copy.copy(contraction)
-    I.setIndexPermutation(Cperm)
+    I.setIndexPermutation(Cperm, permuteEqspp=False)
 
   A = L.indices.tostring()
   B = R.indices.tostring()
@@ -81,6 +81,5 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
         if cost < minCost:
           minCost = cost
           minLog = log
-  minLog.setEqspp( I.eqspp() )
-  minLog.computeMemoryLayout()
+  minLog.setMemoryLayout( I.memoryLayout() )
   return minLog

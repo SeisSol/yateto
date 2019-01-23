@@ -56,7 +56,7 @@ class Node(ABC):
     return True
 
   @abstractmethod
-  def setIndexPermutation(self, indices):
+  def setIndexPermutation(self, indices, permuteEqspp=True):
     pass
 
   def _checkMultipleScalarMults(self):
@@ -121,7 +121,7 @@ class IndexedTensor(Node):
   def nonZeroFlops(self):
     return 0
   
-  def setIndexPermutation(self, indices):
+  def setIndexPermutation(self, indices, permuteEqspp=True):
     assert str(indices) == str(self.indices)
   
   def spp(self, groupSpp=True):
@@ -154,20 +154,26 @@ class Op(Node):
   def memoryLayout(self):
     return self._memoryLayout
 
+  def setMemoryLayout(self, memLayout):
+    self._memoryLayout = memLayout
+
   def computeMemoryLayout(self):
     alignStride = any([child.memoryLayout().alignedStride() for child in self])
     self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride)
 
   def fixedIndexPermutation(self):
     return False
-  
-  def setIndexPermutation(self, indices):
+
+  def setIndexPermutation(self, indices, permuteEqspp=True):
     if str(indices) == str(self.indices):
       return
 
     p = tuple([self.indices.find(idx) for idx in indices])
     if self._eqspp is not None:
-      self._eqspp = self._eqspp.transpose(p).copy(order='F')
+      if permuteEqspp:
+        self._eqspp = self._eqspp.transpose(p).copy(order='F')
+      else:
+        self._eqspp = None
     if self._memoryLayout is not None:
       self._memoryLayout = self._memoryLayout.permuted(p)
     self.indices = self.indices.permuted(indices)

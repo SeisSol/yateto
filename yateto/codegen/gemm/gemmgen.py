@@ -34,23 +34,9 @@ class GemmGen(object):
     ldB = 0 if d.isBCsc else d.rightTerm.memoryLayout.stridei(1)
     ldC = d.result.memoryLayout.stridei(1)
     
-    assert (m,k) in d.leftTerm.memoryLayout
-    assert (k,n) in d.rightTerm.memoryLayout
+    assert (d.transA and (k,m) in d.leftTerm.memoryLayout) or (not d.transA and (m,k) in d.leftTerm.memoryLayout)
+    assert (d.transB and (n,k) in d.rightTerm.memoryLayout) or (not d.transB and (k,n) in d.rightTerm.memoryLayout)
     assert (m,n) in d.result.memoryLayout
-    
-    gemm = {
-      'M':            m.size(),
-      'N':            n.size(),
-      'K':            k.size(),
-      'LDA':          ldA,
-      'LDB':          ldB,
-      'LDC':          ldC,
-      'alpha':        int(d.alpha),
-      'beta':         int(d.beta),
-      'alignedA':     int(d.alignedA),
-      'alignedC':     int(d.alignedC),
-      'prefetch':     'BL2viaC' if d.prefetchName is not None else 'pfsigonly'
-    }
 
     spp = None
     sppRows = None
@@ -67,34 +53,28 @@ class GemmGen(object):
       flops = 2 * m.size() * n.size() * k.size()
     
     if isinstance(self._gemm_cfg, BLASlike):
-      replace_dict = {
-        '$M': gemm['M'],
-        '$N': gemm['N'],
-        '$K': gemm['K'],
-        '$LDA': gemm['LDA'],
-        '$LDB': gemm['LDB'],
-        '$LDC': gemm['LDC'],
-        '$ALPHA': gemm['alpha'],
-        '$BETA': gemm['beta'],
-        '$A': self._pointer(d.leftTerm, (m.start, k.start)),
-        '$B': self._pointer(d.rightTerm, (k.start, n.start)),
-        '$C': self._pointer(d.result, (m.start, n.start))
+      cpp(  self._gemm_cfg.call(  d.transA, \
+                                  d.transB, \
+                                  m.size(), n.size(), k.size(), \
+                                  d.alpha, self._pointer(d.leftTerm, (m.start, k.start)), ldA, \
+                                  self._pointer(d.rightTerm, (k.start, n.start)), ldB, \
+                                  d.beta, self._pointer(d.result, (m.start, n.start)), ldC
+                                ))
+
+    else:
+      gemm = {
+        'M':            m.size(),
+        'N':            n.size(),
+        'K':            k.size(),
+        'LDA':          ldA,
+        'LDB':          ldB,
+        'LDC':          ldC,
+        'alpha':        int(d.alpha),
+        'beta':         int(d.beta),
+        'alignedA':     int(d.alignedA),
+        'alignedC':     int(d.alignedC),
+        'prefetch':     'BL2viaC' if d.prefetchName is not None else 'pfsigonly'
       }
-
-      func_prep = self._gemm_cfg.c_code_prep
-      func_call = self._gemm_cfg.operation_name
-      func_tail = "(" + ", ".join(self._gemm_cfg.parameters) + ")"
-
-      for key in replace_dict:
-        func_prep = func_prep.replace(key, str(replace_dict[key]))
-        func_tail = func_tail.replace(key, str(replace_dict[key]))
-      
-      cpp(func_prep)
-      cpp(func_call + func_tail + ";")
-
-
-    else: 
-
 
       routineName = self.generateRoutineName(gemm, spp)
 

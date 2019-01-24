@@ -54,17 +54,13 @@ class Description(object):
     self.beta = beta
 
 def generator(arch, descr, gemm_cfg):
-  requiresTranspositions = descr.transA or descr.transB
-  simpleAlpha = descr.alpha == 1.0
-  simpleBeta = descr.beta in [0.0, 1.0]
   AOk = descr.isACsc or descr.leftTerm.memoryLayout.stridei(0) == 1
   BOk = descr.isBCsc or descr.rightTerm.memoryLayout.stridei(0) == 1
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
   memLayoutOk = AOk and BOk and strideOneC
-  if not requiresTranspositions and simpleAlpha and simpleBeta and memLayoutOk:
-    if descr.isBCsc:
-      return GemmGen(arch, descr, gemm_cfg.getSparseGemmTool())
-    else:
-      return GemmGen(arch, descr, gemm_cfg.getDenseGemmTool())
+  if memLayoutOk:
+    gemmTool = gemm_cfg.getGemmTool(descr.isACsc, descr.isBCsc, descr.transA, descr.transB, descr.alpha, descr.beta)
+    if gemmTool:
+      return GemmGen(arch, descr, gemmTool)
   return Generic(arch, descr)
 

@@ -51,10 +51,15 @@ if env['compileMode'] == 'release':
 else:
   optFlags = ['-O0']
 
+# Link to BLAS
+if env['example'] in ['hosvd', 'matmul', 'stock', 'tce']:
+  env.Append(LINKFLAGS=['-lmkl_intel_lp64', '-lmkl_sequential', '-lmkl_core', '-lpthread', '-ldl'])
+  env.Append(CPPPATH=['${MKLROOT}/include'])
+
 env.Append( CXXFLAGS  = optFlags,
             LINKFLAGS = optFlags )
 
-genCodeDir = env['example'] + '/generated_code'
+genCodeDir = env['example']
 addOutDir = lambda it: [os.path.join(genCodeDir, i) for i in it]
 
 sources = addOutDir(['kernel.cpp', 'init.cpp', 'tensor.cpp'])
@@ -76,11 +81,3 @@ env.Program(os.path.join(env['example'], 'performance'), objects + objectsNoRedZ
 if env['unitTests']:
   env.Tool('cxxtest')
   env.CxxTest(os.path.join(env['example'], 'unit_tests'), headersUnitTests + objects + objectsNoRedZone)
-
-#~ env.Append(CPPDEFINES=['CXXTEST_HAVE_EH', 'CXXTEST_ABORT_TEST_ON_FAIL'])
-#~ env['CXXTEST'] = '/home/uphoff/SeisSol/submodules/cxxtest'
-#~ env.Tool('cxxtest')
-
-#~ sourceFiles.append(os.path.join('generated_code', 'KernelTest.t.h'))
-
-#~ env.CxxTest(target='generated_kernels_test_suite', source=sourceFiles)

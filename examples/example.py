@@ -23,7 +23,7 @@ except:
 
 targetFlopsPerSec = 40.0e9
 
-outDir = cmdLineArgs.example_script + '/generated_code'
+outDir = cmdLineArgs.example_script
 try:
   os.makedirs(outDir)
 except OSError as e:
@@ -50,12 +50,12 @@ tensors = set((tensor.baseName(), tensor.group()) for tensor in tensors)
 formatArrayName = lambda tensor: '{0}__{1}'.format(tensor[0], '_'.join([str(g) for g in tensor[1]]))
 formatGroup = lambda tensor: ','.join([str(g) for g in tensor[1]])
 
-with Cpp(os.path.join(cmdLineArgs.example_script, 'performance.cpp')) as cpp:
+with Cpp(os.path.join(outDir, 'performance.cpp')) as cpp:
   cpp.includeSys('cstdlib')
   cpp.includeSys('cstdio')
   cpp.includeSys('cmath')
-  cpp.include('generated_code/kernel.h')
-  cpp.include('generated_code/tensor.h')
+  cpp.include('kernel.h')
+  cpp.include('tensor.h')
   cpp.include('Stopwatch.h')
   cpp.include('Util.h')
   cpp('using namespace yateto;')

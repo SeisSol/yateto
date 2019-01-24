@@ -1,75 +1,109 @@
 from typing import List
-from abc import ABC
+from abc import ABC, abstractmethod
 
 class GemmTool(ABC):
-  def __init__(self, operation_name: str, includes: List[str] = [], supportsDense: bool = True, supportsSparse: bool = False):
+  def __init__(self, operation_name: str, includes: List[str] = []):
     self.operation_name = operation_name
     self.includes = includes
-    self.supportsDense = supportsDense
-    self.supportsSparse = supportsSparse
+  
+  @abstractmethod
+  def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
+    pass
 
 class BLASlike(GemmTool):
-  def __init__(self, operation_name: str, includes: List[str], parameters: List[str], supportsDense: bool = True, supportsSparse: bool = False, c_code_prep: str = "", c_code_init: str=""):
-    super().__init__(operation_name, includes, supportsDense, supportsSparse)
-    self.parameters = parameters
-    self.c_code_prep = c_code_prep
+  def __init__(self, operation_name: str, includes: List[str], c_code_init: str = ''):
+    super().__init__(operation_name, includes)
     self.c_code_init = c_code_init
 
+  def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
+    return (not sparseA and not sparseB)
+
+  def bool2Trans(self, trans):
+    return 'Cblas{}Trans'.format('' if trans else 'No')
+
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+    parameters = [
+      'CblasColMajor',
+      self.bool2Trans(transA),
+      self.bool2Trans(transB),
+      M, N, K,
+      alpha, A, ldA,
+      B, ldB,
+      beta, C, ldC]
+    return '{}({});'.format(self.operation_name, ', '.join(str(p) for p in parameters))
+
+class MKL(BLASlike):
+  def __init__(self):
+    super().__init__('cblas_dgemm', ['mkl_cblas.h'])
+
+class OpenBLAS(BLASlike):
+  def __init__(self):
+    super().__init__('cblas_dgemm', ['cblas.h'])
+
+class BLIS(BLASlike):
+  def __init__(self):
+    super().__init__('bli_dgemm', ['blis.h'], 'double _blis_alpha; double _blis_beta;')
+
+  def bool2Trans(self, trans):
+    return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_'),
+
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+    init = '_blis_alpha = {}; _blis_beta = {};'.format(alpha, beta)
+    parameters = [
+      self.bool2Trans(transA),
+      self.bool2Trans(transB),
+      M, N, K,
+      '&_blas_alpha', 'const_cast<double*>({})'.format(A), 1, ldA,
+      'const_cast<double*>({})'.format(B), 1, ldB,
+      '&_blas_beta', C, 1, ldC]
+    return '{} {}({});'.format(init, self.operation_name, ', '.join(str(p) for p in parameters))
+
 class CodeGenerator(GemmTool):
-  def __init__(self, operation_name: str, cmd: str, includes: List[str], supportsDense: bool, supportsSparse: bool):
-    super().__init__(operation_name, includes, supportsDense, supportsSparse)
+  def __init__(self, operation_name: str, includes: List[str], cmd: str):
+    super().__init__(operation_name, includes)
     self.cmd = cmd
+
+  @abstractmethod
+  def _sparse(self, sparseA, sparseB):
+    pass
+
+  def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
+    return self._sparse(sparseA, sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0]
+
+class LIBXSMM(CodeGenerator):
+  def __init__(self):
+    super().__init__('libxsmm', [], 'libxsmm_gemm_generator')
+
+  def _sparse(self, sparseA, sparseB):
+    return not (sparseA and sparseB)
+
+class PSpaMM(CodeGenerator):
+  def __init__(self):
+    super().__init__('pspamm', [], 'pspamm.py')
+
+  def _sparse(self, sparseA, sparseB):
+    return not sparseA
 
 class GeneratorCollection(object):
   def __init__(self, gemmTools: List[GemmTool]):
     self.gemmTools = gemmTools
-    self.selected = set([])
+    self.selected = set()
 
-  def getSparseGemmTool(self):
+  def getGemmTool(self, sparseA, sparseB, transA, transB, alpha, beta):
     for i in range(len(self.gemmTools)):
-      if self.gemmTools[i].supportsSparse:
+      if self.gemmTools[i].supported(sparseA, sparseB, transA, transB, alpha, beta):
         self.selected.add(self.gemmTools[i])
         return self.gemmTools[i]
-    raise Exception("Yateto attempts to utilize sparse matrix multiplication but no such BLASlike or CodeGenerator is provided")
-  
-  def getDenseGemmTool(self):
-    for i in range(len(self.gemmTools)):
-      if self.gemmTools[i].supportsDense:
-        self.selected.add(self.gemmTools[i])
-        return self.gemmTools[i]
-    raise Exception("Yateto attempts to utilize dense matrix multiplication but no such BLASlike or CodeGenerator is provided")
-
-libxsmm = CodeGenerator('libxsmm', 
-                        'libxsmm_gemm_generator',
-                         [],
-                         True,
-                         False)
-
-pspamm = CodeGenerator('pspamm',
-                      'pspamm.py',
-                       [],
-                       True,
-                       True)
-
-mkl = BLASlike('cblas_dgemm',
-              ['mkl_cblas.h'],
-              ['CblasColMajor', 'CblasNoTrans', 'CblasNoTrans', '$M', '$N', '$K', '$ALPHA', '$A', '$LDA', '$B', '$LDB', '$BETA', '$C', '$LDC'])
-
-openblas = BLASlike('cblas_dgemm',
-                   ['cblas.h'],
-                   ['CblasColMajor', 'CblasNoTrans', 'CblasNoTrans', '$M', '$N', '$K', '$ALPHA', '$A', '$LDA', '$B', '$LDB', '$BETA', '$C', '$LDC'])
-
-blis = BLASlike('bli_dgemm',
-               ['blis.h'],
-               ['BLIS_NO_TRANSPOSE', 'BLIS_NO_TRANSPOSE', '$M', '$N', '$K', '&alpha', 'const_cast <double*>($A)', '1', '$LDA', 'const_cast <double*>($B)', '1', '$LDB', '&beta', '$C', '1', '$LDC'],
-                True,
-                False,
-                'alpha = $ALPHA; beta = $BETA;',
-                'double alpha; double beta;')
+    return None
 
 class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
+    libxsmm = LIBXSMM()
+    pspamm = PSpaMM()
+    mkl = MKL()
+    blis = BLIS()
+    openblas = OpenBLAS()
     defaults = {
       'snb' : [libxsmm, mkl, blis],
       'hsw' : [libxsmm, mkl, blis],
@@ -80,4 +114,4 @@ class DefaultGeneratorCollection(GeneratorCollection):
     if arch.name in defaults:
       self.gemmTools = defaults[arch.name]
     else:
-      raise Exception("Architecture not supported.")
+      raise Exception("Default generator collection for architecture {} is missing.".format(arch))

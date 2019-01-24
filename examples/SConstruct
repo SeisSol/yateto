@@ -53,8 +53,11 @@ else:
 
 # Link to BLAS
 if env['example'] in ['hosvd', 'matmul', 'stock', 'tce']:
-  env.Append(LINKFLAGS=['-lmkl_intel_lp64', '-lmkl_sequential', '-lmkl_core', '-lpthread', '-ldl'])
-  env.Append(CPPPATH=['${MKLROOT}/include'])
+  env.Append(LIBS=['mkl_intel_lp64', 'mkl_sequential', 'mkl_core'])
+  mklroot = env['ENV']['MKLROOT']
+  if mklroot:
+    env.Append(LIBPATH=os.path.join(mklroot, 'lib'))
+    env.Append(CPPATH=os.path.join(mklroot, 'include'))
 
 env.Append( CXXFLAGS  = optFlags,
             LINKFLAGS = optFlags )

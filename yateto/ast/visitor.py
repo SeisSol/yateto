@@ -1,4 +1,4 @@
-from numpy import arange, einsum, ndindex
+from numpy import ndindex
 import collections
 import itertools
 import re

@@ -1,9 +1,8 @@
-import numpy as np
-import numpy.lib
 import re
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
+from .. import aspp
 
 class Node(ABC):
   def __init__(self):
@@ -143,8 +142,6 @@ class IndexedTensor(Node):
     return '{}[{}]'.format(self.tensor.name(), str(self.indices))
 
 class Op(Node):
-  OPTIMIZE_EINSUM = {'optimize': True } if np.lib.NumpyVersion(np.__version__) >= '1.12.0' else {}
-
   def __init__(self, *args):
     super().__init__()
     self._children = list(args)
@@ -171,7 +168,7 @@ class Op(Node):
     p = tuple([self.indices.find(idx) for idx in indices])
     if self._eqspp is not None:
       if permuteEqspp:
-        self._eqspp = self._eqspp.transpose(p).copy(order='F')
+        self._eqspp = self._eqspp.transposed(p)
       else:
         self._eqspp = None
     if self._memoryLayout is not None:
@@ -194,14 +191,14 @@ class Add(Op):
       spps = [node.eqspp() for node in self]
     spp = spps[0]
     for i in range(1, len(spps)):
-      spp = np.add(spp, spps[i])
+      spp = aspp.add(spp, spps[i])
     return spp
   
   def nonZeroFlops(self):
     nzFlops = 0
     for child in self:
-      nzFlops += np.count_nonzero( child.eqspp() )
-    return nzFlops - np.count_nonzero( self.eqspp() )
+      nzFlops += child.eqspp().count_nonzero()
+    return nzFlops - self.eqspp().count_nonzero()
 
 class UnaryOp(Op):
   def term(self):
@@ -239,7 +236,7 @@ class ScalarMultiplication(UnaryOp):
   def nonZeroFlops(self):
     if self._isConstant and self._scalar in [-1.0, 1.0]:
       return 0
-    return np.count_nonzero( self.eqspp() )
+    return self.eqspp().count_nonzero()
   
   def __str__(self):
     return '{}: {}'.format(super().__str__(), str(self._scalar))
@@ -276,14 +273,10 @@ class Assign(BinOp):
 
 def _productContractionLoGSparsityPattern(node, *spps):
   if len(spps) == 0:
-    spps = [node.leftTerm().eqspp(), node.rightTerm().eqspp()]
+    spps = (node.leftTerm().eqspp(), node.rightTerm().eqspp())
   assert len(spps) == 2
-  # dense case
-  if all([np.count_nonzero(spps[i]) == spps[i].size for i in range(2)]):
-    return np.ones(node.indices.shape(), dtype=bool, order='F')
-  # sparse case
   einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
-  return np.einsum(einsumDescription, spps[0], spps[1], **Op.OPTIMIZE_EINSUM)
+  return aspp.einsum(einsumDescription, spps[0], spps[1])
 
 class Product(BinOp):
   def __init__(self, lTerm, rTerm):
@@ -294,7 +287,7 @@ class Product(BinOp):
     self.indices = lTerm.indices.merged(rTerm.indices - K)
   
   def nonZeroFlops(self):
-    return np.count_nonzero( self.eqspp() )
+    return self.eqspp().count_nonzero()
   
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
@@ -309,17 +302,17 @@ class IndexSum(UnaryOp):
     self._sumIndex = term.indices.extract(sumIndex)
   
   def nonZeroFlops(self):
-    return np.count_nonzero( self.term().eqspp() ) - np.count_nonzero( self.eqspp() )
+    return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
   
   def sumIndex(self):
     return self._sumIndex
   
   def computeSparsityPattern(self, *spps):
+    axis = tuple(self.term().indices.positions(self.term().indices - self.indices))
     if len(spps) == 0:
-      spps = [self.term().eqspp()]
+      return self.term().eqspp().sum(axis)
     assert len(spps) == 1
-    einsumDescription = '{}->{}'.format(self.term().indices.tostring(), self.indices.tostring())
-    return np.einsum(einsumDescription, spps[0], **Op.OPTIMIZE_EINSUM)
+    return spps[0].sum(axis)
 
 class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):
@@ -355,7 +348,7 @@ class LoopOverGEMM(BinOp):
   def nonZeroFlops(self):
     p = Product(self.leftTerm(), self.rightTerm())
     p.setEqspp( p.computeSparsityPattern() )
-    return 2*p.nonZeroFlops() - np.count_nonzero( self.eqspp() )
+    return 2*p.nonZeroFlops() - self.eqspp().count_nonzero()
   
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:

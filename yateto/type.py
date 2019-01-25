@@ -1,7 +1,8 @@
 import re
 from .ast.node import Node, IndexedTensor
-from numpy import ndarray, zeros, ones, array_equal
+from numpy import ndarray, zeros
 from .memory import DenseMemoryLayout
+from . import aspp
 
 class AbstractType(object):
   @classmethod
@@ -28,7 +29,6 @@ class Tensor(AbstractType):
   GROUP_INDEX = r'(0|[1-9]\d*)'
   GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
-  NUMPY_DEFAULT_ORDER = 'F'
 
   def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False):
     if not isinstance(shape, tuple):
@@ -48,15 +48,16 @@ class Tensor(AbstractType):
       if isinstance(spp, dict):
         if not isinstance(next(iter(spp.values())), bool):
           self._values = spp
-        self._spp = zeros(shape, dtype=bool, order=self.NUMPY_DEFAULT_ORDER)
+        npspp = zeros(shape, dtype=bool, order=aspp.general.NUMPY_DEFAULT_ORDER)
         for multiIndex, value in spp.items():
-          self._spp[multiIndex] = value
+          npspp[multiIndex] = value
+        self._spp = aspp.general(npspp)
       elif isinstance(spp, ndarray):
         self._setSparsityPattern(spp)
       else:
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')
     else:
-      self._spp = ones(shape, dtype=bool, order=self.NUMPY_DEFAULT_ORDER)
+      self._spp = aspp.dense(shape)
     self._groupSpp = self._spp
     
     self.setMemoryLayout(memoryLayoutClass, alignStride)
@@ -67,7 +68,7 @@ class Tensor(AbstractType):
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
       raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
-    spp = spp.astype(bool, order=self.NUMPY_DEFAULT_ORDER)
+    spp = aspp.general(spp)
     if setOnlyGroupSpp == False:
       self._spp = spp
     self._groupSpp = spp
@@ -111,7 +112,7 @@ class Tensor(AbstractType):
   def __eq__(self, other):
     equal = self._name == other._name
     if equal:
-      assert self._shape == other._shape and array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
+      assert self._shape == other._shape and aspp.array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
     return equal
   
   def __hash__(self):

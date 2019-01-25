@@ -1,11 +1,11 @@
 import sys
-from numpy import ndarray, zeros, einsum
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern
 from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction
 from .indices import Indices
 from .log import LoG
 from . import opt
 from .cost import ShapeCostEstimator
+from .. import aspp
 
 # Similar as ast.NodeTransformer
 class Transformer(Visitor): 
@@ -171,12 +171,7 @@ class EquivalentSparsityPattern(Transformer):
 
   def visit_Add(self, node):
     self.generic_visit(node)
-    
-    spp = zeros(node.indices.shape(), dtype=bool)
-    for child in node:
-      assert isinstance(child.eqspp(), ndarray)
-      spp += child.eqspp()
-    node.setEqspp(spp)
+    node.setEqspp( node.computeSparsityPattern() )
     return node
 
   def visit_ScalarMultiplication(self, node):
@@ -186,7 +181,7 @@ class EquivalentSparsityPattern(Transformer):
   
   def visit_Assign(self, node):
     self.generic_visit(node)
-    assert isinstance(node[1].eqspp(), ndarray)
+    assert isinstance(node[1].eqspp(), aspp.ASpp)
     node.setEqspp(node[1].eqspp())
     return node
   

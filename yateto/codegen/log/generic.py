@@ -29,7 +29,7 @@ class Generic(object):
     return term.memoryLayout.unfold(term.indices, I, J)
 
   def _reduce(self, term, subset, memLayout):
-    return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape(), order='F')
+    return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape())
   
   def _defuse(self, fusedRange, term, I):
     if len(I) == 1:

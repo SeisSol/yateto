@@ -1,4 +1,3 @@
-from numpy import count_nonzero
 from .indices import BoundingBox
 
 class CostEstimator(object):
@@ -101,10 +100,10 @@ class ExactCost(CachedCostEstimator):
   def estimate_Product(self, node):
     spp = node.computeSparsityPattern(self._cache[node.leftTerm()], self._cache[node.rightTerm()])
     self._cache[node] = spp
-    return count_nonzero( spp )
+    return spp.count_nonzero()
   
   def estimate_IndexSum(self, node):
     termSpp = self._cache[node.term()]
     spp = node.computeSparsityPattern(termSpp)
     self._cache[node] = spp    
-    return count_nonzero( termSpp ) - count_nonzero( spp )
+    return termSpp.count_nonzero() - spp.count_nonzero()

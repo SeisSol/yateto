@@ -1,5 +1,4 @@
 import string
-from numpy import count_nonzero
 from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
@@ -157,7 +156,7 @@ class UnitTestFactory(KernelFactory):
     size = ml.requiredReals()
 
     spp = node.spp()
-    isDense = count_nonzero(spp) == size
+    isDense = spp.count_nonzero() == size
     if isDense:
       memory = list()
     else:

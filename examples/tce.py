@@ -3,16 +3,15 @@
 from yateto import *
 
 def add(g):
-  N = 8
+  N = 64
   A = Tensor('A', (N, N, N, N))
   B = Tensor('B', (N, N, N, N))
   C = Tensor('C', (N, N, N, N))
   D = Tensor('D', (N, N, N, N))
   S = Tensor('S', (N, N, N, N))
 
-  O = 8
-  V = 24
-  N = O + V
+  V = 140
+  N = 150
   A2 = Tensor('A2', (N, N, N, N))
   C1 = Tensor('C1', (N, V))
   C2 = Tensor('C2', (N, V))

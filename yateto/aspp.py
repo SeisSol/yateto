@@ -175,5 +175,9 @@ def einsum(description, a1, a2):
   return cls.einsum(description, a1, a2)
 
 def array_equal(a1, a2):
-  cls, a1, a2 = dispatch(a1, a2)
-  return cls.array_equal(a1, a2)
+  if a1 == None and a2 == None:
+    return True
+  if isinstance(a1, ASpp) and isinstance(a2, ASpp):
+    cls, a1, a2 = dispatch(a1, a2)
+    return cls.array_equal(a1, a2)
+  return False

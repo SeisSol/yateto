@@ -96,7 +96,7 @@ class GemmGen(object):
           self._pointer(d.result, (m.start, n.start)),
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
-    
+
       routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._gemm_cfg))
     
     return flops
@@ -111,7 +111,9 @@ class ExecuteGemmGen(RoutineGenerator):
     self._cmd = gemm_cfg.cmd
   
   def __eq__(self, other):
-    return self._arch == other._arch and self._gemmDescr == other._gemmDescr and aspp.array_equal(self._spp, other._spp)
+    return self._arch == other._arch and \
+           self._gemmDescr == other._gemmDescr and \
+           aspp.array_equal(self._spp, other._spp)
   
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):

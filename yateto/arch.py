@@ -59,7 +59,13 @@ class Architecture(object):
     self.enablePrefetch = enablePrefetch
     
     self.uintTypename = 'unsigned'
-    
+    self.ulongTypename = 'unsigned long'
+
+    self._tmpStackLimit = 524288
+
+  def setTmpStackLimit(self, tmpStackLimit):
+    self._tmpStackLimit = tmpStackLimit
+
   def alignedLower(self, index):
     return index - index % self.alignedReals
 
@@ -74,6 +80,9 @@ class Architecture(object):
   
   def formatConstant(self, constant):
     return str(constant) + ('f' if self.precision == 'S' else '')
+
+  def onHeap(self, numReals):
+    return (numReals * self.bytesPerReal) > self._tmpStackLimit
 
 def getArchitectureIdentifiedBy(ident):
   precision = ident[0].upper()

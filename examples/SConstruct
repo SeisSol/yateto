@@ -33,7 +33,6 @@ if unknownVariables:
 
 # c++ standard
 env.Append(CXXFLAGS=['-std=c++11'])
-env.Append(LINKFLAGS=['-qopenmp'])
 
 # include directories
 env.Append( CPPPATH=['#/../include/', env['example'], 'common'] )

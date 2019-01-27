@@ -34,7 +34,8 @@ arch = useArchitectureIdentifiedBy(cmdLineArgs.arch)
 
 g = Generator(arch)
 example.add(g)
-g.generate(outDir)
+gemm_cfg = example.gemm_cfg() if hasattr(example, 'gemm_cfg') else None
+g.generate(outDir, gemm_cfg=gemm_cfg)
 
 tensors = []
 for kernel in g.kernels():
@@ -61,9 +62,14 @@ with Cpp(os.path.join(outDir, 'performance.cpp')) as cpp:
   cpp('using namespace yateto;')
   with cpp.Function('main', arguments='int argc, char** argv', returnType='int'):
     cpp('int _fixedReps = (argc >= 2) ? atoi(argv[1]) : -1;')
-    cpp('int _reps;')
+    cpp('int _reps, _error;')
     for tensor in tensors:
-      cpp('real {0}[tensor::{1}::size({2})] __attribute__((aligned(ALIGNMENT)));'.format(formatArrayName(tensor), tensor[0], formatGroup(tensor)))
+      arrayName = formatArrayName(tensor)
+      cpp('real* {};'.format(arrayName))
+      cpp('_error = posix_memalign(reinterpret_cast<void**>(&{0}), ALIGNMENT, tensor::{1}::size({2})*sizeof(real));'.format(
+            arrayName,
+            tensor[0],
+            formatGroup(tensor)))
     for tensor in tensors:
       cpp('fillWithStuff({0}, tensor::{1}::size({2}));'.format(formatArrayName(tensor), tensor[0], formatGroup(tensor)))
     cpp('Stopwatch _sw;');
@@ -83,5 +89,7 @@ with Cpp(os.path.join(outDir, 'performance.cpp')) as cpp:
         cpp('{}.execute();'.format(kobj))
       cpp('_time = _sw.stop();')
       cpp('_flops = static_cast<double>(kernel::{0}::HardwareFlops) * _reps / _time / 1.0e9;'.format(kernel.name))
-      cpp('printf("{0},%u,%lf,%u,%lf\\n", _reps, _time, kernel::{0}::HardwareFlops, _flops);'.format(kernel.name))
+      cpp('printf("{0},%u,%lf,%lu,%lf\\n", _reps, _time, kernel::{0}::HardwareFlops, _flops);'.format(kernel.name))
+    for tensor in tensors:
+      cpp('free({});'.format(formatArrayName(tensor)))
     cpp('return 0;')

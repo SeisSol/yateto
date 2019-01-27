@@ -256,6 +256,7 @@ class Generator(object):
     with Cpp(kernelSource) as cpp:      
       cpp.includeSys('cassert')
       cpp.includeSys('cstring')
+      cpp.includeSys('cstdlib')
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):

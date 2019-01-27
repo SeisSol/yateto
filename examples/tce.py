@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
 from yateto import *
+from yateto.gemm_configuration import *
+
+def gemm_cfg():
+  return GeneratorCollection([MKL()])
 
 def add(g):
   N = 64

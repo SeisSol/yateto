@@ -44,6 +44,7 @@ class KernelGenerator(object):
   PREFETCHSTRUCT_NAME = 'Prefetch'
   PREFETCHVAR_NAME = '_prefetch'
   BUFFER_NAME = '_buffer'
+  ERROR_NAME = '_error'
 
   def __init__(self, arch):
     self._arch = arch
@@ -60,9 +61,23 @@ class KernelGenerator(object):
       localPtrs.extend(pp.bufferMap.keys())
     if localPtrs:
       cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
+    freeList = list()
     for pp in cfg:
       for buf, size in pp.initBuffer.items():
-        cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, self._bufferName(buf), size, self._arch.alignment))
+        bufname = self._bufferName(buf)
+        if self._arch.onHeap(size):
+          if len(freeList) == 0:
+            cpp('int {};'.format(self.ERROR_NAME))
+          cpp('{}* {};'.format(self._arch.typename, bufname))
+          cpp('{} = posix_memalign(reinterpret_cast<void**>(&{}), {}, {}*sizeof({}));'.format(
+            self.ERROR_NAME,
+            bufname,
+            self._arch.alignment,
+            size,
+            self._arch.typename))
+          freeList.append(bufname)
+        else:
+          cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, bufname, size, self._arch.alignment))
       for local, buf in pp.bufferMap.items():
         cpp('{} = {};'.format(local, self._bufferName(buf)))
       action = pp.action
@@ -73,6 +88,8 @@ class KernelGenerator(object):
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
+    for free in freeList:
+      cpp('free({});'.format(free))
     return hwFlops
 
 class OptimisedKernelGenerator(KernelGenerator):
@@ -173,14 +190,14 @@ class OptimisedKernelGenerator(KernelGenerator):
       with header.Struct(name):
         header('{} {} const {}{} = {};'.format(
           MODIFIERS,
-          self._arch.uintTypename,
+          self._arch.ulongTypename,
           self.NONZEROFLOPS_NAME,
           brackets,
           formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
         ))
         header('{} {} const {}{} = {};'.format(
           MODIFIERS,
-          self._arch.uintTypename,
+          self._arch.ulongTypename,
           self.HARDWAREFLOPS_NAME,
           brackets,
           formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
@@ -237,14 +254,14 @@ class OptimisedKernelGenerator(KernelGenerator):
           flopFuns = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
           for flopFun in flopFuns:
             funName = flopFun[:1].lower() + flopFun[1:]
-            with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.uintTypename)):
+            with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
               header('return {}[{}];'.format(flopFun, indexF))
 
     flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
     for fc in flopCounters:
       cpp('{} {} const {}::{}::{}{};'.format(
         CONSTEXPR,
-        self._arch.uintTypename,
+        self._arch.ulongTypename,
         self.NAMESPACE,
         name,
         fc,

@@ -46,7 +46,8 @@ class Block:
     self.foot = foot
     
   def __enter__(self):
-    self.writer(self.argument + ' {')
+    space = ' ' if self.argument else ''
+    self.writer(self.argument + space + '{')
     self.writer.indent += 1
 
   def __exit__(self, type, value, traceback):
@@ -126,6 +127,9 @@ class Cpp:
     if len(spaces) == 1:
       return Block(self, 'namespace ' + name)
     return MultiBlock(self, ['namespace ' + space for space in spaces])
+
+  def AnonymousScope(self):
+    return Block(self, '')
     
   def Function(self, name, arguments = '', returnType = 'void', const = False):
     return Block(self, '{} {}({}){}'.format(returnType, name, arguments, ' const' if const else ''))

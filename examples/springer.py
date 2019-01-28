@@ -7,6 +7,9 @@ import re
 def gemm_cfg():
   return GeneratorCollection([MKL()])
 
+def cold():
+  return True
+
 _bench_no = 0
 def add_tensor(name, ind, size):
   shape = tuple(size[k] for k in ind)

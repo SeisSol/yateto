@@ -64,7 +64,7 @@ env.Append( CXXFLAGS  = optFlags,
 genCodeDir = env['example']
 addOutDir = lambda it: [os.path.join(genCodeDir, i) for i in it]
 
-sources = addOutDir(['kernel.cpp', 'init.cpp', 'tensor.cpp'])
+sources = addOutDir(['kernel.cpp', 'init.cpp', 'tensor.cpp', 'trashTheCache.cpp'])
 sourcesNoRedZone = addOutDir(['subroutine.cpp'])
 headers = addOutDir(['kernel.h', 'init.h', 'tensor.h', 'subroutine.h'])
 headersUnitTests = addOutDir(['KernelTest.t.h'])

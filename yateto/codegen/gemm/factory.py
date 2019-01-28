@@ -59,7 +59,12 @@ def generator(arch, descr, gemm_cfg):
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
   memLayoutOk = AOk and BOk and strideOneC
   if memLayoutOk:
-    gemmTool = gemm_cfg.getGemmTool(descr.isACsc, descr.isBCsc, descr.transA, descr.transB, descr.alpha, descr.beta)
+    m, n, k = descr.mnk()
+    gemmTool = gemm_cfg.getGemmTool(
+      m.size(), n.size(), k.size(),
+      descr.isACsc, descr.isBCsc,
+      descr.transA, descr.transB,
+      descr.alpha, descr.beta)
     if gemmTool:
       return GemmGen(arch, descr, gemmTool)
   return Generic(arch, descr)

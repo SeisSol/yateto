@@ -5,7 +5,11 @@ class GemmTool(ABC):
   def __init__(self, operation_name: str, includes: List[str] = []):
     self.operation_name = operation_name
     self.includes = includes
-  
+
+  @abstractmethod
+  def isGoodIdea(self, m, n, k):
+    pass
+
   @abstractmethod
   def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
     pass
@@ -14,6 +18,9 @@ class BLASlike(GemmTool):
   def __init__(self, operation_name: str, includes: List[str], c_code_init: str = ''):
     super().__init__(operation_name, includes)
     self.c_code_init = c_code_init
+
+  def isGoodIdea(self, m, n, k):
+    return True
 
   def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
     return (not sparseA and not sparseB)
@@ -59,27 +66,31 @@ class BLIS(BLASlike):
     return '{} {}({});'.format(init, self.operation_name, ', '.join(str(p) for p in parameters))
 
 class CodeGenerator(GemmTool):
-  def __init__(self, operation_name: str, includes: List[str], cmd: str):
+  def __init__(self, operation_name: str, includes: List[str], cmd: str, threshold: int):
     super().__init__(operation_name, includes)
     self.cmd = cmd
+    self._threshold = threshold
 
   @abstractmethod
   def _sparse(self, sparseA, sparseB):
     pass
 
+  def isGoodIdea(self, m, n, k):
+    return (m*n*k)**(1./3.) <= self._threshold
+
   def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
     return self._sparse(sparseA, sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0]
 
 class LIBXSMM(CodeGenerator):
-  def __init__(self):
-    super().__init__('libxsmm', [], 'libxsmm_gemm_generator')
+  def __init__(self, threshold: int = 128):
+    super().__init__('libxsmm', [], 'libxsmm_gemm_generator', threshold)
 
   def _sparse(self, sparseA, sparseB):
     return not (sparseA and sparseB)
 
 class PSpaMM(CodeGenerator):
-  def __init__(self):
-    super().__init__('pspamm', [], 'pspamm.py')
+  def __init__(self, threshold: int = 128):
+    super().__init__('pspamm', [], 'pspamm.py', threshold)
 
   def _sparse(self, sparseA, sparseB):
     return not sparseA
@@ -89,12 +100,23 @@ class GeneratorCollection(object):
     self.gemmTools = gemmTools
     self.selected = set()
 
-  def getGemmTool(self, sparseA, sparseB, transA, transB, alpha, beta):
-    for i in range(len(self.gemmTools)):
-      if self.gemmTools[i].supported(sparseA, sparseB, transA, transB, alpha, beta):
-        self.selected.add(self.gemmTools[i])
-        return self.gemmTools[i]
-    return None
+  def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    tools = dict()
+    for gemmTool in reversed(self.gemmTools):
+      if gemmTool.supported(sparseA, sparseB, transA, transB, alpha, beta):
+        tools[gemmTool.isGoodIdea(m, n, k)] = gemmTool
+
+    select = None
+    if True in tools:
+      select = tools[True]
+    elif False in tools:
+      select = tools[False]
+    print(tools, select)
+
+    if select:
+      self.selected.add(select)
+
+    return select
 
 class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):

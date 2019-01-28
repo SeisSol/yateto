@@ -111,7 +111,6 @@ class GeneratorCollection(object):
       select = tools[True]
     elif False in tools:
       select = tools[False]
-    print(tools, select)
 
     if select:
       self.selected.add(select)

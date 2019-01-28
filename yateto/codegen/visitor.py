@@ -44,7 +44,6 @@ class KernelGenerator(object):
   PREFETCHSTRUCT_NAME = 'Prefetch'
   PREFETCHVAR_NAME = '_prefetch'
   BUFFER_NAME = '_buffer'
-  ERROR_NAME = '_error'
 
   def __init__(self, arch):
     self._arch = arch
@@ -61,23 +60,10 @@ class KernelGenerator(object):
       localPtrs.extend(pp.bufferMap.keys())
     if localPtrs:
       cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
-    freeList = list()
     for pp in cfg:
       for buf, size in pp.initBuffer.items():
         bufname = self._bufferName(buf)
-        if self._arch.onHeap(size):
-          if len(freeList) == 0:
-            cpp('int {};'.format(self.ERROR_NAME))
-          cpp('{}* {};'.format(self._arch.typename, bufname))
-          cpp('{} = posix_memalign(reinterpret_cast<void**>(&{}), {}, {}*sizeof({}));'.format(
-            self.ERROR_NAME,
-            bufname,
-            self._arch.alignment,
-            size,
-            self._arch.typename))
-          freeList.append(bufname)
-        else:
-          cpp('{} {}[{}] __attribute__((aligned({})));'.format(self._arch.typename, bufname, size, self._arch.alignment))
+        factory.temporary(bufname, size)
       for local, buf in pp.bufferMap.items():
         cpp('{} = {};'.format(local, self._bufferName(buf)))
       action = pp.action
@@ -88,8 +74,6 @@ class KernelGenerator(object):
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
-    for free in freeList:
-      cpp('free({});'.format(free))
     return hwFlops
 
 class OptimisedKernelGenerator(KernelGenerator):
@@ -151,6 +135,7 @@ class OptimisedKernelGenerator(KernelGenerator):
     with Cpp(functionIO) as fcpp:
       factory = OptimisedKernelFactory(fcpp, self._arch)
       hwFlops = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
+      factory.freeTmp()
       function = functionIO.getvalue()    
     return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function)
 
@@ -333,14 +318,15 @@ class UnitTestGenerator(KernelGenerator):
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
     with cpp.Function(self.CXXTEST_PREFIX + testName):
+      factory = UnitTestFactory(cpp, self._arch, self._name)
+
       for i,scalar in enumerate(scalars):
         cpp('{} {} = {};'.format(self._arch.typename, scalar, float(i+2)))
         
       for var in variables:
-        self._factory = UnitTestFactory(cpp, self._arch, self._name)
-        self._factory.tensor(var.tensor, self._tensorName(var))
+        factory.tensor(var.tensor, self._tensorName(var))
         
-        cpp('{} {}[{}] __attribute__((aligned({}))) = {{}};'.format(self._arch.typename, self._name(var), var.memoryLayout().requiredReals(), self._arch.alignment))
+        factory.temporary(self._name(var), var.memoryLayout().requiredReals())
         
         shape = var.memoryLayout().shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
@@ -375,12 +361,13 @@ class UnitTestGenerator(KernelGenerator):
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
-      factory = UnitTestFactory(cpp, self._arch, self._name)
       super().generate(cpp, cfg, factory, None, gemm_cfg)
 
       for var in variables:
         if var.writable:
           factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout()))
+
+      factory.freeTmp()
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'

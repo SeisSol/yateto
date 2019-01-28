@@ -6,9 +6,12 @@ from .common import forLoops, TensorDescription, IndexedTensorDescription
 from . import copyscaleadd, indexsum, log, product
 
 class KernelFactory(object):
+  ERROR_NAME = '_error'
+
   def __init__(self, cpp, arch):
     self._cpp = cpp
     self._arch = arch
+    self._freeList = list()
     
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
@@ -20,6 +23,29 @@ class KernelFactory(object):
 
   def simple(self, result, term, add, scalar, routineCache):
     raise NotImplementedError
+
+  def temporary(self, bufname, size, memory=list()):
+    if self._arch.onHeap(size):
+      if memory:
+        raise NotImplementedError('Direct temporary initialization is not supported for heap-allocated memory.')
+      if len(self._freeList) == 0:
+        self._cpp('int {};'.format(self.ERROR_NAME))
+      self._cpp('{}* {};'.format(self._arch.typename, bufname))
+      self._cpp('{} = posix_memalign(reinterpret_cast<void**>(&{}), {}, {}*sizeof({}));'.format(
+                  self.ERROR_NAME,
+                  bufname,
+                  self._arch.alignment,
+                  size,
+                  self._arch.typename))
+      self._freeList.append(bufname)
+    else:
+      ini = ' = {{{}}}'.format(', '.join(memory)) if memory else ''
+      self._cpp('{} {}[{}] __attribute__((aligned({}))){};'.format(self._arch.typename, bufname, size, self._arch.alignment, ini))
+
+  def freeTmp(self):
+    for free in self._freeList:
+      self._cpp('free({});'.format(free))
+    self._freeList = []
 
   def _indices(self, var):
     shape = var.memoryLayout().shape()
@@ -166,7 +192,7 @@ class UnitTestFactory(KernelFactory):
         addr = ml.address(entry)
         memory[addr] = str(float(addr % maxValue)+1.0)
 
-    self._cpp('{} {}[{}] __attribute__((aligned({}))) = {{{}}};'.format(self._arch.typename, resultName, size, self._arch.alignment, ', '.join(memory)))
+    self.temporary(resultName, size, memory)
     if isDense:
       with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
         self._cpp('{}[i] = static_cast<{}>(i % {} + 1);'.format(resultName, self._arch.typename, maxValue))

@@ -15,14 +15,14 @@ def add_tensor(name, ind, size):
 def add_bench(g, descr, sizes):
   global _bench_no
 
-  Aind, Bind, Cind = descr.split('-')
+  Cind, Aind, Bind = descr.split('-')
   size = {k: int(s) for k,s in re.findall(r'([a-z]):([0-9]+)', sizes)}
 
   A = add_tensor('A', Aind, size)
   B = add_tensor('B', Bind, size)
   C = add_tensor('C', Cind, size)
 
-  g.add('bench_' + descr.replace('-','_'), C[Cind] <= A[Aind] * B[Bind])
+  g.add(descr.replace('-','_'), C[Cind] <= A[Aind] * B[Bind])
   _bench_no = _bench_no + 1
 
 def add(g):

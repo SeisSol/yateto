@@ -3,7 +3,6 @@ import subprocess
 import tempfile
 from ..cache import RoutineGenerator
 from ...gemm_configuration import BLASlike, CodeGenerator
-from ... import aspp
 
 class GemmGen(object):
   def __init__(self, arch, descr, gemm_cfg):
@@ -113,7 +112,7 @@ class ExecuteGemmGen(RoutineGenerator):
   def __eq__(self, other):
     return self._arch == other._arch and \
            self._gemmDescr == other._gemmDescr and \
-           aspp.array_equal(self._spp, other._spp)
+           self._spp == other._spp
   
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):

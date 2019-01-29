@@ -3,6 +3,7 @@ import itertools
 import json
 from . import Collection, Tensor
 from .memory import CSCMemoryLayout, DenseMemoryLayout
+from . import aspp
 
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')
@@ -123,7 +124,7 @@ def memoryLayoutFromFile(xmlFile, db, clones):
     if not noMutualSparsityPattern:
       spp = None
       for matrix in groups[groupName]:
-        spp = spp + db.byName(matrix).spp() if spp is not None else db.byName(matrix).spp()
+        spp = aspp.add(spp, db.byName(matrix).spp()) if spp is not None else db.byName(matrix).spp()
       for matrix in groups[groupName]:
         db.byName(matrix).setGroupSpp(spp)
 

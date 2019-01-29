@@ -525,7 +525,7 @@ class InitializerGenerator(object):
         ml = tensor.memoryLayout()
         tv = self._tensorViewGenerator(ml)
         tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
-      nValueArrays = 0
+      valueNames = dict()
       for group,tensor in tensors.items():
         values = tensor.values()
         memLayout = tensor.memoryLayout()
@@ -534,10 +534,10 @@ class InitializerGenerator(object):
           for idx,x in values.items():
             memory[memLayout.address(idx)] = x
           valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, index(group))
+          valueNames[group] = ['&{}[0]'.format(valuesName)]
           cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))
-          nValueArrays += 1
-      if nValueArrays > 1:
-        cpp('{} {} {}{}[];'.format(CONSTEXPR, self._realPtrType, name, self.VALUES_BASENAME))
+      if len(valueNames) > 1:
+        self._array(cpp, self._realPtrType, name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
     else:
       with cpp.Struct('{0} : {1}::{0}'.format(baseName, self.TENSOR_NAMESPACE)):
         for group,tensor in tensors.items():
@@ -545,15 +545,15 @@ class InitializerGenerator(object):
           tv = self._tensorViewGenerator(ml)
           tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, False)
 
-        valueNames = dict()
+        nValueArrays = 0
         for group,tensor in tensors.items():
           values = tensor.values()
           if values is not None:
             name = '{}{}'.format(self.VALUES_BASENAME, index(group))
-            valueNames[group] = ['&{}[0]'.format(name)]
             cpp('{} {} {}[];'.format(STATIC, self._realType, name))
-        if len(valueNames) > 1:
-          self._array(cpp, self._realPtrType, self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False)
+            nValueArrays += 1
+        if nValueArrays > 1:
+          cpp('{} {} {}[];'.format(STATIC, self._realPtrType, self.VALUES_BASENAME))
 
         cpp.emptyline()
         viewArgs = self.TensorView.arguments(self._arch)
@@ -580,7 +580,9 @@ class InitializerGenerator(object):
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, index(group))
   
-  def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True):
+  def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True, constexpr=True, static=True):
+    cexpr = CONSTEXPR + ' ' if constexpr else ''
+    stat = STATIC + ' ' if static else ''
     maxLen = max(map(len, content.values())) if len(content.values()) > 0 else 0
 
     isGroup = len(groupSize) > 0
@@ -590,7 +592,7 @@ class InitializerGenerator(object):
     arrayIndices = '[{}]'.format(maxLen) if isArray else ''
     
     if declarationOnly:
-      cpp('{} {} {}{}{};'.format(CONSTEXPR, typ, name, groupIndices, arrayIndices))
+      cpp('{}{} {}{}{};'.format(cexpr, typ, name, groupIndices, arrayIndices))
     else:
       formatArray = lambda L: ', '.join([str(x) for x in L])
       if isGroup:
@@ -610,6 +612,6 @@ class InitializerGenerator(object):
       if isGroup:
         initStr = '{{{}}}'.format(initStr)
       
-      cpp('{} static {} {}{}{} = {};'.format(CONSTEXPR, typ, name, groupIndices, arrayIndices, initStr))
+      cpp('{}{}{} {}{}{} = {};'.format(cexpr, stat, typ, name, groupIndices, arrayIndices, initStr))
 
 

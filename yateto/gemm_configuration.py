@@ -40,16 +40,17 @@ class BLASlike(GemmTool):
     return '{}({});'.format(self.operation_name, ', '.join(str(p) for p in parameters))
 
 class MKL(BLASlike):
-  def __init__(self):
-    super().__init__('cblas_dgemm', ['mkl_cblas.h'])
+  def __init__(self, arch):
+    super().__init__('cblas_{}gemm'.format(arch.precision.lower()), ['mkl_cblas.h'])
 
 class OpenBLAS(BLASlike):
-  def __init__(self):
-    super().__init__('cblas_dgemm', ['cblas.h'])
+  def __init__(self, arch):
+    super().__init__('cblas_{}gemm'.format(arch.precision.lower()), ['cblas.h'])
 
 class BLIS(BLASlike):
-  def __init__(self):
-    super().__init__('bli_dgemm', ['blis.h'], 'double _blis_alpha; double _blis_beta;')
+  def __init__(self, arch):
+    super().__init__('bli_{}gemm'.format(arch.precision.lower()), ['blis.h'], '{0} _blis_alpha; {0} _blis_beta;'.format(arch.typename))
+    self._typename = arch.typename
 
   def bool2Trans(self, trans):
     return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_'),
@@ -60,8 +61,8 @@ class BLIS(BLASlike):
       self.bool2Trans(transA),
       self.bool2Trans(transB),
       M, N, K,
-      '&_blas_alpha', 'const_cast<double*>({})'.format(A), 1, ldA,
-      'const_cast<double*>({})'.format(B), 1, ldB,
+      '&_blas_alpha', 'const_cast<{}*>({})'.format(self._typename, A), 1, ldA,
+      'const_cast<{}*>({})'.format(self._typename, B), 1, ldB,
       '&_blas_beta', C, 1, ldC]
     return '{} {}({});'.format(init, self.operation_name, ', '.join(str(p) for p in parameters))
 
@@ -122,9 +123,9 @@ class DefaultGeneratorCollection(GeneratorCollection):
     super().__init__([])
     libxsmm = LIBXSMM()
     pspamm = PSpaMM()
-    mkl = MKL()
-    blis = BLIS()
-    openblas = OpenBLAS()
+    mkl = MKL(arch)
+    blis = BLIS(arch)
+    openblas = OpenBLAS(arch)
     defaults = {
       'snb' : [libxsmm, mkl, blis],
       'hsw' : [libxsmm, mkl, blis],

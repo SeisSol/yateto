@@ -4,8 +4,8 @@ from yateto import *
 from yateto.gemm_configuration import *
 import re
 
-def gemm_cfg():
-  return GeneratorCollection([MKL()])
+def gemm_cfg(arch):
+  return GeneratorCollection([MKL(arch)])
 
 def cold():
   return True

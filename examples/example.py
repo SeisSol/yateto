@@ -34,7 +34,7 @@ arch = useArchitectureIdentifiedBy(cmdLineArgs.arch)
 
 g = Generator(arch)
 example.add(g)
-gemm_cfg = example.gemm_cfg() if hasattr(example, 'gemm_cfg') else None
+gemm_cfg = example.gemm_cfg(arch) if hasattr(example, 'gemm_cfg') else None
 g.generate(outDir, gemm_cfg=gemm_cfg)
 
 for kernel in g.kernels():

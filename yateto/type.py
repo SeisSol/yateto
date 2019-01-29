@@ -52,7 +52,7 @@ class Tensor(AbstractType):
         for multiIndex, value in spp.items():
           npspp[multiIndex] = value
         self._spp = aspp.general(npspp)
-      elif isinstance(spp, ndarray):
+      elif isinstance(spp, ndarray) or isinstance(spp, aspp.ASpp):
         self._setSparsityPattern(spp)
       else:
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')
@@ -68,7 +68,7 @@ class Tensor(AbstractType):
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
       raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
-    spp = aspp.general(spp)
+    spp = aspp.general(spp) if not isinstance(spp, aspp.ASpp) else spp
     if setOnlyGroupSpp == False:
       self._spp = spp
     self._groupSpp = spp

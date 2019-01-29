@@ -314,11 +314,9 @@ class IndexSum(UnaryOp):
     return self._sumIndex
   
   def computeSparsityPattern(self, *spps):
-    axis = tuple(self.term().indices.positions(self.term().indices - self.indices))
-    if len(spps) == 0:
-      return self.term().eqspp().sum(axis)
-    assert len(spps) == 1
-    return spps[0].sum(axis)
+    assert len(spps) <= 1
+    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    return spp.indexSum(self.term().indices, self.indices)
 
 class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):

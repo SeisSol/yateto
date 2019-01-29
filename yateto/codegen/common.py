@@ -53,8 +53,7 @@ def boundingBoxFromLoopRanges(indices, loopRanges):
   return BoundingBox([loopRanges[index] for index in indices])
 
 def reduceSpp(spp, sourceIndices, targetIndices):
-  axis = tuple(sourceIndices.positions(sourceIndices - targetIndices))
-  return spp.sum(axis)
+  return spp.indexSum(sourceIndices, targetIndices)
 
 def initializeWithZero(cpp, arch, result: TensorDescription, writeBB):
   addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))

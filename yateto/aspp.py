@@ -10,6 +10,9 @@ class ASpp(ABC):
     for s in shape:
       self.size *= s
 
+  def identity(self):
+    return self
+
   @abstractmethod
   def count_nonzero(self):
     pass
@@ -39,7 +42,7 @@ class ASpp(ABC):
     pass
 
   @abstractmethod
-  def sum(self, axis):
+  def indexSum(self, sourceIndices, targetIndices):
     pass
 
 class dense(ASpp):
@@ -66,8 +69,8 @@ class dense(ASpp):
   def transposed(self, perm):
     return type(self)(tuple(self.shape[p] for p in perm))
 
-  def sum(self, axis):
-    return type(self)(tuple(s for i,s in enumerate(self.shape) if i not in axis))
+  def indexSum(self, sourceIndices, targetIndices):
+    return type(self)(tuple(self.shape[sourceIndices.find(targetIndex)] for targetIndex in targetIndices))
 
   @staticmethod
   def add(a1, a2):
@@ -95,7 +98,7 @@ class dense(ASpp):
     return a1.shape == a2.shape
 
   def as_general(self):
-    return general(np.ones(shape, dtype=bool, order=general.NUMPY_DEFAULT_ORDER))
+    return general(np.ones(self.shape, dtype=bool, order=general.NUMPY_DEFAULT_ORDER))
 
 class general(ASpp):
   NUMPY_DEFAULT_ORDER = 'F'
@@ -144,16 +147,16 @@ class general(ASpp):
   def transposed(self, perm):
     return type(self)(self.pattern.transpose(perm).copy(order=self.NUMPY_DEFAULT_ORDER))
 
-  def sum(self, axis):
-    return np.sum(self.pattern, axis)
+  def indexSum(self, sourceIndices, targetIndices):
+    return general(np.einsum('{}->{}'.format(sourceIndices, targetIndices), self.pattern))
 
   @staticmethod
   def add(a1, a2):
-    return np.add(a1.pattern, a2.pattern)
+    return general(np.add(a1.pattern, a2.pattern))
 
   @staticmethod
   def einsum(description, a1, a2):
-    return np.einsum(description, a1.pattern, a2.pattern)
+    return general(np.einsum(description, a1.pattern, a2.pattern))
 
   @staticmethod
   def array_equal(a1, a2):
@@ -166,15 +169,12 @@ _binary_op = {
   (general, general): general
 }
 
-def identity(obj):
-  return obj
-
 def dispatch(a1, a2):
   cls = _binary_op[(a1.__class__, a2.__class__)]
   castMethod = 'as_' + cls.__name__
-  c1 = getattr(a1, castMethod, identity)
-  c2 = getattr(a2, castMethod, identity)
-  return cls, c1(a1), c2(a2)
+  c1 = getattr(a1, castMethod, a1.identity)
+  c2 = getattr(a2, castMethod, a2.identity)
+  return cls, c1(), c2()
 
 def add(a1, a2):
   cls, a1, a2 = dispatch(a1, a2)

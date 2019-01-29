@@ -186,6 +186,10 @@ class EquivalentSparsityPattern(Transformer):
     return node
   
   def getEqspp(self, terms, targetIndices):
+    # Shortcut if all terms have dense eqspps
+    if all([term.eqspp().is_dense() for term in terms]):
+      return aspp.dense(targetIndices.shape())
+
     minTree = opt.strengthReduction(terms, targetIndices, ShapeCostEstimator())
     if isinstance(minTree, IndexedTensor):
       return minTree.eqspp()

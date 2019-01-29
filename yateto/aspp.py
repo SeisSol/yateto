@@ -15,6 +15,10 @@ class ASpp(ABC):
     pass
 
   @abstractmethod
+  def is_dense(self):
+    pass
+
+  @abstractmethod
   def nnzbounds(self):
     pass
 
@@ -41,6 +45,9 @@ class ASpp(ABC):
 class dense(ASpp):
   def count_nonzero(self):
     return self.size
+
+  def is_dense(self):
+    return True
 
   def nnzbounds(self):
     return [(0, s-1) for s in self.shape]
@@ -100,6 +107,9 @@ class general(ASpp):
 
   def count_nonzero(self):
     return np.count_nonzero(self.pattern)
+
+  def is_dense(self):
+    return self.count_nonzero() == self.size
 
   @classmethod
   def sumAxes(cls, spp, cache, axes):

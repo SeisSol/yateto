@@ -1,5 +1,11 @@
 from typing import List
 from abc import ABC, abstractmethod
+import operator
+
+class Preference(object):
+  HIGH = 2
+  MODERATE = 1
+  LOW = 0
 
 class GemmTool(ABC):
   def __init__(self, operation_name: str, includes: List[str] = []):
@@ -7,11 +13,11 @@ class GemmTool(ABC):
     self.includes = includes
 
   @abstractmethod
-  def isGoodIdea(self, m, n, k):
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     pass
 
   @abstractmethod
-  def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     pass
 
 class BLASlike(GemmTool):
@@ -19,10 +25,10 @@ class BLASlike(GemmTool):
     super().__init__(operation_name, includes)
     self.c_code_init = c_code_init
 
-  def isGoodIdea(self, m, n, k):
-    return True
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    return Preference.MODERATE
 
-  def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     return (not sparseA and not sparseB)
 
   def bool2Trans(self, trans):
@@ -67,34 +73,52 @@ class BLIS(BLASlike):
     return '{} {}({});'.format(init, self.operation_name, ', '.join(str(p) for p in parameters))
 
 class CodeGenerator(GemmTool):
-  def __init__(self, operation_name: str, includes: List[str], cmd: str, threshold: int):
+  def __init__(self, operation_name: str, includes: List[str], cmd: str, arch):
     super().__init__(operation_name, includes)
     self.cmd = cmd
-    self._threshold = threshold
+    self._arch = arch
 
   @abstractmethod
-  def _sparse(self, sparseA, sparseB):
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     pass
 
-  def isGoodIdea(self, m, n, k):
-    return (m*n*k)**(1./3.) <= self._threshold
-
-  def supported(self, sparseA, sparseB, transA, transB, alpha, beta):
-    return self._sparse(sparseA, sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0]
-
 class LIBXSMM(CodeGenerator):
-  def __init__(self, threshold: int = 128):
-    super().__init__('libxsmm', [], 'libxsmm_gemm_generator', threshold)
+  def __init__(self, arch, threshold: int = 128):
+    super().__init__('libxsmm', [], 'libxsmm_gemm_generator', arch)
+    self._threshold = threshold
 
-  def _sparse(self, sparseA, sparseB):
-    return not (sparseA and sparseB)
+  def _archSupported(self):
+    return self._arch.name.lower() in {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl'}
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0]
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    if sparseA:
+      return Preference.LOW
+    if sparseB:
+      return Preference.MODERATE
+    if (m*n*k)**(1./3.) <= self._threshold:
+      return Preference.HIGH
+    return Preference.LOW
 
 class PSpaMM(CodeGenerator):
-  def __init__(self, threshold: int = 128):
-    super().__init__('pspamm', [], 'pspamm.py', threshold)
+  def __init__(self, arch, threshold: int = 128):
+    super().__init__('pspamm', [], 'pspamm.py', arch)
+    self._threshold = threshold
 
-  def _sparse(self, sparseA, sparseB):
-    return not sparseA
+  def _archSupported(self):
+    return self._arch.name.lower() in {'armv8', 'knl'}
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB)
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    if sparseB:
+      return Preference.HIGH
+    if (m*n*k)**(1./3.) <= self._threshold:
+      return Preference.HIGH
+    return Preference.LOW
 
 class GeneratorCollection(object):
   def __init__(self, gemmTools: List[GemmTool]):
@@ -104,14 +128,12 @@ class GeneratorCollection(object):
   def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     tools = dict()
     for gemmTool in reversed(self.gemmTools):
-      if gemmTool.supported(sparseA, sparseB, transA, transB, alpha, beta):
-        tools[gemmTool.isGoodIdea(m, n, k)] = gemmTool
+      if gemmTool.supported(m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+        tools[gemmTool.preference(m, n, k, sparseA, sparseB, transA, transB, alpha, beta)] = gemmTool
 
     select = None
-    if True in tools:
-      select = tools[True]
-    elif False in tools:
-      select = tools[False]
+    if tools:
+      select = max(tools.items(), key=operator.itemgetter(0))[1]
 
     if select:
       self.selected.add(select)
@@ -121,8 +143,8 @@ class GeneratorCollection(object):
 class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
-    libxsmm = LIBXSMM()
-    pspamm = PSpaMM()
+    libxsmm = LIBXSMM(arch)
+    pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)
     openblas = OpenBLAS(arch)

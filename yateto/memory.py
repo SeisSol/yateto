@@ -24,6 +24,10 @@ class MemoryLayout(ABC):
   def alignedStride(self):
     return False
 
+  @abstractmethod
+  def mayVectorizeDim(self, dim):
+    pass
+
   def mayFuse(self, positions):
     return len(positions) == 1
   
@@ -88,7 +92,12 @@ class DenseMemoryLayout(MemoryLayout):
     offsetOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].start)
     ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
     return offsetOk and ldOk
-    
+
+  def mayVectorizeDim(self, dim):
+    if self.ALIGNMENT_ARCH is None:
+      return False
+    return self.ALIGNMENT_ARCH.checkAlignment(self._bbox[dim].size())
+
   @classmethod
   def fromSpp(cls, spp, alignStride=False):
     bbox = BoundingBox.fromSpp(spp)
@@ -298,6 +307,9 @@ class CSCMemoryLayout(MemoryLayout):
     return e
 
   def alignedStride(self):
+    return False
+
+  def mayVectorizeDim(self, dim):
     return False
 
   @classmethod

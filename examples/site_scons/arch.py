@@ -80,10 +80,7 @@ def getFlags(architecture, compiler = 'intel'):
   elif cpu == 'snb':
     flags =  ['-mavx']
   elif cpu == 'hsw':
-    if compiler == 'intel':
-      flags = ['-xCORE-AVX2', '-fma']
-    else:
-      flags = ['-mavx2', '-mfma']
+    flags = ['-mfma', '-march=core-avx2']
   elif cpu == 'knc':
     flags = ['-mmic', '-fma']
   elif cpu == 'knl':

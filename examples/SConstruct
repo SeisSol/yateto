@@ -18,8 +18,10 @@ vars.AddVariables(
 # set environment
 env = Environment(variables=vars)
 env['ENV'] = os.environ
-env['CC'] = env['ENV']['CC']
-env['CXX'] = env['ENV']['CXX']
+if 'CC' in env['ENV']:
+  env['CC'] = env['ENV']['CC']
+if 'CXX' in env['ENV']:
+  env['CXX'] = env['ENV']['CXX']
 
 # generate help text
 Help(vars.GenerateHelpText(env))

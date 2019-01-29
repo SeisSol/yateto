@@ -325,8 +325,7 @@ class UnitTestGenerator(KernelGenerator):
         
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
-        
-        factory.temporary(self._name(var), var.memoryLayout().requiredReals())
+        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
         
         shape = var.memoryLayout().shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(

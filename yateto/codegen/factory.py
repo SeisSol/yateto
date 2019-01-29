@@ -24,7 +24,8 @@ class KernelFactory(object):
   def simple(self, result, term, add, scalar, routineCache):
     raise NotImplementedError
 
-  def temporary(self, bufname, size, memory=list()):
+  def temporary(self, bufname, size, iniZero=False, memory=list()):
+    assert(iniZero == False or len(memory) == 0)
     if self._arch.onHeap(size):
       if memory:
         raise NotImplementedError('Direct temporary initialization is not supported for heap-allocated memory.')
@@ -37,9 +38,15 @@ class KernelFactory(object):
                   self._arch.alignment,
                   size,
                   self._arch.typename))
+      if iniZero:
+        self._cpp.memset(bufname, size, self._arch.typename)
       self._freeList.append(bufname)
     else:
-      ini = ' = {{{}}}'.format(', '.join(memory)) if memory else ''
+      ini = ''
+      if iniZero:
+        ini = ' = {}'
+      elif memory:
+        ini = ' = {{{}}}'.format(', '.join(memory))
       self._cpp('{} {}[{}] __attribute__((aligned({}))){};'.format(self._arch.typename, bufname, size, self._arch.alignment, ini))
 
   def freeTmp(self):
@@ -184,17 +191,15 @@ class UnitTestFactory(KernelFactory):
     spp = node.spp()
     isDense = spp.count_nonzero() == size
     if isDense:
-      memory = list()
+      self.temporary(resultName, size)
+      with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
+        self._cpp('{}[i] = static_cast<{}>(i % {} + 1);'.format(resultName, self._arch.typename, maxValue))
     else:
       memory = ['0.0']*size
       nz = spp.nonzero()
       for entry in zip(*nz):
         addr = ml.address(entry)
         memory[addr] = str(float(addr % maxValue)+1.0)
-
-    self.temporary(resultName, size, memory)
-    if isDense:
-      with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
-        self._cpp('{}[i] = static_cast<{}>(i % {} + 1);'.format(resultName, self._arch.typename, maxValue))
+      self.temporary(resultName, size, memory=memory)
 
 

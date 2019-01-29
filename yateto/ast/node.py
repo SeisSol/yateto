@@ -383,9 +383,10 @@ class LoopOverGEMM(BinOp):
   def argumentsCompatible(self, layouts):
     super().argumentsCompatible(layouts)
     m = self.leftTerm().indices.positions(self._m)
-    k = self.leftTerm().indices.positions(self._k)
+    k1 = self.leftTerm().indices.positions(self._k)
+    k2 = self.rightTerm().indices.positions(self._k)
     n = self.rightTerm().indices.positions(self._n)
-    return layouts[0].mayFuse(m) and layouts[0].mayFuse(k) and layouts[1].mayFuse(k) and layouts[1].mayFuse(n)
+    return layouts[0].mayFuse(m) and layouts[0].mayFuse(k1) and layouts[1].mayFuse(k2) and layouts[1].mayFuse(n)
 
   def resultCompatible(self, layout):
     super().resultCompatible(layout)

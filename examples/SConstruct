@@ -84,4 +84,4 @@ env.Program(os.path.join(env['example'], 'performance_' + env['arch']), objects 
 
 if env['unitTests']:
   env.Tool('cxxtest')
-  env.CxxTest(os.path.join(env['example'], 'unit_tests' + env['arch']), headersUnitTests + objects + objectsNoRedZone)
+  env.CxxTest(os.path.join(env['example'], 'unit_tests_' + env['arch']), headersUnitTests + objects + objectsNoRedZone)

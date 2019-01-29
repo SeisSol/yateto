@@ -23,7 +23,7 @@ except:
 
 targetFlopsPerSec = 40.0e9
 
-outDir = cmdLineArgs.example_script
+outDir = os.path.join(cmdLineArgs.example_script, cmdLineArgs.arch)
 try:
   os.makedirs(outDir)
 except OSError as e:

@@ -72,7 +72,7 @@ class dense(ASpp):
   @staticmethod
   def add(a1, a2):
     assert(a1.shape == a2.shape)
-    return type(self)(a1.shape)
+    return dense(a1.shape)
 
   @staticmethod
   def einsum(description, a1, a2):

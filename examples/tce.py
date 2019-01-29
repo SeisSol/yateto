@@ -3,8 +3,8 @@
 from yateto import *
 from yateto.gemm_configuration import *
 
-def gemm_cfg():
-  return GeneratorCollection([MKL()])
+def gemm_cfg(arch):
+  return GeneratorCollection([MKL(arch)])
 
 def add(g):
   N = 64

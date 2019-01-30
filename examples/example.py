@@ -12,6 +12,7 @@ from yateto.codegen.code import Cpp
 
 cmdLineParser = argparse.ArgumentParser()
 cmdLineParser.add_argument('--arch', type=str, default='dhsw', help='Architecture (e.g. dsnb for double precision on Sandy Bridge).')
+cmdLineParser.add_argument('--variant', type=str, default='', help='Example specific variant (e.g. onlyblas).')
 cmdLineParser.add_argument('example_script', type=str, help='A yateto example script from the examples folder (without file extension).')
 cmdLineArgs = cmdLineParser.parse_args()
 
@@ -23,7 +24,8 @@ except:
 
 targetFlopsPerSec = 40.0e9
 
-outDir = os.path.join(cmdLineArgs.example_script, cmdLineArgs.arch)
+variantSuffix = '_' + cmdLineArgs.variant if cmdLineArgs.variant else ''
+outDir = os.path.join(cmdLineArgs.example_script, cmdLineArgs.arch + variantSuffix)
 try:
   os.makedirs(outDir)
 except OSError as e:
@@ -34,7 +36,7 @@ arch = useArchitectureIdentifiedBy(cmdLineArgs.arch)
 
 g = Generator(arch)
 example.add(g)
-gemm_cfg = example.gemm_cfg(arch) if hasattr(example, 'gemm_cfg') else None
+gemm_cfg = example.gemm_cfg(arch, cmdLineArgs.variant) if hasattr(example, 'gemm_cfg') else None
 g.generate(outDir, gemm_cfg=gemm_cfg)
 
 for kernel in g.kernels():

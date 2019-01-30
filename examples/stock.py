@@ -2,12 +2,16 @@
 
 from yateto import *
 
+def gemm_cfg(arch, variant):
+  if variant == 'onlyblas':
+    return GeneratorCollection([MKL(arch)])
+  return GeneratorCollection([LIBXSMM(arch), MKL(arch)])
+
 def add(g):
-  for ep in range(3):
-    p = 8*(ep+1)
+  for ep in range(5):
+    p = 4*(ep+2)
     px = '{}p'.format(p)
-    for eq in range(4):
-      q = 2**eq
+    for q in range(1,p//2+1):
       pqx = '{}p{}q'.format(p,q)
       R = Tensor('R' + px, (p,p,p))
       S = Tensor('S' + px, (p,p,p))

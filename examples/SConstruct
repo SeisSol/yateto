@@ -7,6 +7,7 @@ vars.AddVariables(
                 allowed_values=('hosvd', 'matmul', 'minimal', 'springer', 'stock', 'tce')),
   EnumVariable( 'compileMode', 'Mode of the compilation', 'release',
                 allowed_values=('debug', 'release')),
+  EnumVariable( 'variant', 'Example-specific variant.', '', allowed_values=('', 'onlyblas')),
   EnumVariable( 'arch',
                 'Precision and architecture.',
                 'dsnb',
@@ -63,7 +64,8 @@ if env['example'] in ['hosvd', 'matmul', 'springer', 'stock', 'tce']:
 env.Append( CXXFLAGS  = optFlags,
             LINKFLAGS = optFlags )
 
-genCodeDir = os.path.join(env['example'], env['arch'])
+variantSuffix = '_' + env['variant'] if env['variant'] else ''
+genCodeDir = os.path.join(env['example'], env['arch'] + variantSuffix)
 addOutDir = lambda it: [os.path.join(genCodeDir, i) for i in it]
 
 sources = addOutDir(['kernel.cpp', 'init.cpp', 'tensor.cpp', 'trashTheCache.cpp'])
@@ -71,7 +73,8 @@ sourcesNoRedZone = addOutDir(['subroutine.cpp'])
 headers = addOutDir(['kernel.h', 'init.h', 'tensor.h', 'subroutine.h'])
 headersUnitTests = addOutDir(['KernelTest.t.h'])
 
-env.Append(BUILDERS = {'Generate': Builder(generator=lambda target, source, env, for_signature: './example.py --arch {} {}'.format(env['arch'], env['example']))})
+variantArg = '--variant ' + env['variant'] if env['variant'] else ''
+env.Append(BUILDERS = {'Generate': Builder(generator=lambda target, source, env, for_signature: './example.py --arch {} {} {}'.format(env['arch'], variantArg, env['example']))})
 generated = env.Generate(sources + sourcesNoRedZone + headers + headersUnitTests,
                          ['example.py', env['example'] + '.py'])
 
@@ -80,8 +83,8 @@ objects = [env.Object(source) for source in sources]
 objectsNoRedZone = [env.Object(source, CXXFLAGS=env['CXXFLAGS'] + '-mno-red-zone') for source in sourcesNoRedZone]
 
 mainObj = env.Object(os.path.join(genCodeDir, 'performance.cpp'))
-env.Program(os.path.join(env['example'], 'performance_' + env['arch']), objects + objectsNoRedZone + [mainObj])
+env.Program(os.path.join(env['example'], 'performance_' + env['arch'] + variantSuffix), objects + objectsNoRedZone + [mainObj])
 
 if env['unitTests']:
   env.Tool('cxxtest')
-  env.CxxTest(os.path.join(env['example'], 'unit_tests_' + env['arch']), headersUnitTests + objects + objectsNoRedZone)
+  env.CxxTest(os.path.join(env['example'], 'unit_tests_' + env['arch'] + variantSuffix), headersUnitTests + objects + objectsNoRedZone)

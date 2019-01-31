@@ -113,11 +113,11 @@ class Generic(object):
             self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices)
         if d.assignLoopRanges is not None:
           gemmDescr.setBeta(0.0)
-          flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody())
+          flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody(), pragmaSimd=False)
         if d.addLoopRanges is not None:
           gemmDescr.setBeta(1.0)
-          flops += forLoops(cpp, d.innerLoopIndices, d.addLoopRanges, LoGBody())
+          flops += forLoops(cpp, d.innerLoopIndices, d.addLoopRanges, LoGBody(), pragmaSimd=False)
         return flops
 
-    return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody())
+    return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody(), pragmaSimd=False)
 

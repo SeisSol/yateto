@@ -22,17 +22,20 @@ class IndexedTensorDescription(TensorDescription):
   def fromNode(cls, var, node):
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp())
 
-def forLoops(cpp, indexNames, ranges, body, indexNo=None):
+def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, indexNo=None):
   flops = 0
   if indexNo == None:
-    indexNo = len(indexNames)-1
+    n = len(indexNames)
+    if pragmaSimd and n > 0:
+      cpp('#pragma omp simd collapse({})'.format(n))
+    indexNo = n-1
   if indexNo < 0:
     flops = body()
   else:
     index = indexNames[indexNo]
     rng = ranges[index]
     with cpp.For('int {0} = {1}; {0} < {2}; ++{0}'.format(index, rng.start, rng.stop)):
-      flops = forLoops(cpp, indexNames, ranges, body, indexNo-1)
+      flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, indexNo-1)
     flops = flops * rng.size()
   return flops
   

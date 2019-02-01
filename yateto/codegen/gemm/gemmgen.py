@@ -108,6 +108,7 @@ class ExecuteGemmGen(RoutineGenerator):
     self._sppRows = sppRows
     self._mode = gemm_cfg.operation_name
     self._cmd = gemm_cfg.cmd
+    self._blockSize = gemm_cfg.blockSize(gemmDescr['M'], gemmDescr['N'], gemmDescr['K']) if hasattr(gemm_cfg, 'blockSize') else dict()
   
   def __eq__(self, other):
     return self._arch == other._arch and \
@@ -148,6 +149,8 @@ class ExecuteGemmGen(RoutineGenerator):
         '--output_filename',
         fileName,
       ]
+      for key, val in self._blockSize.items():
+        argList.extend(['--' + key, val])
     else:
       argList = [
         self._cmd,

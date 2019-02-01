@@ -3,9 +3,11 @@ from abc import ABC, abstractmethod
 import operator
 
 class Preference(object):
-  HIGH = 2
-  MODERATE = 1
-  LOW = 0
+  HIGHEST = 4
+  HIGH = 3
+  MODERATE = 2
+  LOW = 1
+  LOWEST = 0
 
 class GemmTool(ABC):
   def __init__(self, operation_name: str, includes: List[str] = []):
@@ -108,7 +110,7 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    return self._arch.name.lower() in {'armv8', 'knl'}
+    return self._arch.name.lower() in {'armv8', 'knl'} and self._arch.bytesPerReal == 8
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB)
@@ -119,6 +121,13 @@ class PSpaMM(CodeGenerator):
     if (m*n*k)**(1./3.) <= self._threshold:
       return Preference.HIGH
     return Preference.LOW
+
+  """ You may choose application-specific block-size parameters by overriding this function.
+      Return empty dict for automatic block-size.
+      Add entries bm,bn,bk to set specific block-sizes.
+  """
+  def blockSize(self, m, n, k):
+    return dict()
 
 class GeneratorCollection(object):
   def __init__(self, gemmTools: List[GemmTool]):

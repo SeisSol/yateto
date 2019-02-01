@@ -25,15 +25,14 @@ class IndexedTensorDescription(TensorDescription):
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, indexNo=None):
   flops = 0
   if indexNo == None:
-    n = len(indexNames)
-    if pragmaSimd and n > 0:
-      cpp('#pragma omp simd collapse({})'.format(n))
-    indexNo = n-1
+    indexNo = len(indexNames)-1
   if indexNo < 0:
     flops = body()
   else:
     index = indexNames[indexNo]
     rng = ranges[index]
+    if pragmaSimd and indexNo == 0:
+      cpp('#pragma omp simd')
     with cpp.For('int {0} = {1}; {0} < {2}; ++{0}'.format(index, rng.start, rng.stop)):
       flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, indexNo-1)
     flops = flops * rng.size()

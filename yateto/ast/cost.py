@@ -1,6 +1,7 @@
 from .indices import BoundingBox
+from abc import ABC, abstractmethod
 
-class CostEstimator(object):
+class CostEstimator(ABC):
   def estimate(self, node):
     childCost = 0
     for child in node:
@@ -8,17 +9,15 @@ class CostEstimator(object):
     method = 'estimate_' + node.__class__.__name__
     estimator = getattr(self, method, self.generic_estimate)
     return childCost + estimator(node)
-  
-  def generic_estimate(self, node):
-    raise NotImplementedError
 
-class ShapeCostEstimator(CostEstimator):    
-  def estimate_Add(self, node):
+  @abstractmethod
+  def generic_estimate(self, node):
+    pass
+
+class ShapeCostEstimator(CostEstimator):
+  def generic_estimate(self, node):
     return 0
-    
-  def estimate_IndexedTensor(self, node):
-    return 0
-  
+
   def estimate_Product(self, node):
     cost = 1
     for size in node.shape():
@@ -47,14 +46,10 @@ class BoundingBoxCostEstimator(CachedCostEstimator):
     super().__init__()
     self._cache = dict()
 
-  def estimate_Add(self, node):
+  def generic_estimate(self, node):
     self._cache[node] = node.boundingBox()
     return 0
-    
-  def estimate_IndexedTensor(self, node):
-    self._cache[node] = node.boundingBox()
-    return 0
-  
+
   def estimate_Product(self, node):
     lbb = self._cache[node.leftTerm()]
     rbb = self._cache[node.rightTerm()]
@@ -89,11 +84,7 @@ class ExactCost(CachedCostEstimator):
     super().__init__()
     self._cache = dict()
 
-  def estimate_Add(self, node):
-    self._cache[node] = node.eqspp()
-    return 0
-    
-  def estimate_IndexedTensor(self, node):
+  def generic_estimate(self, node):
     self._cache[node] = node.eqspp()
     return 0
   

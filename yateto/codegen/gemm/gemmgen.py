@@ -72,7 +72,7 @@ class GemmGen(object):
         'beta':         int(d.beta),
         'alignedA':     int(d.alignedA),
         'alignedC':     int(d.alignedC),
-        'prefetch':     'BL2viaC' if d.prefetchName is not None else 'pfsigonly'
+        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly'
       }
 
       routineName = self.generateRoutineName(gemm, spp)
@@ -148,6 +148,8 @@ class ExecuteGemmGen(RoutineGenerator):
         routineName,
         '--output_filename',
         fileName,
+        '--precision',
+        self._arch.precision
       ]
       for key, val in self._blockSize.items():
         argList.extend(['--' + key, val])

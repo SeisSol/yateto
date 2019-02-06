@@ -141,7 +141,7 @@ class UnitTestFactory(KernelFactory):
         self._cpp( '{} += {};'.format(resultTerm, ' * '.join(terms)) )
         return len(terms)
 
-    return forLoops(self._cpp, g, ranges, EinsumBody())
+    return forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False)
   
   def create_ScalarMultiplication(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     return self.simple(result, arguments[0], add, scalar, routineCache)
@@ -162,9 +162,9 @@ class UnitTestFactory(KernelFactory):
         self._cpp( '{} {} {};'.format(resultTerm, '+=' if add else '=', termTerm) )
         return 1 if add else 0
 
-    return forLoops(self._cpp, g, ranges, AssignBody())
+    return forLoops(self._cpp, g, ranges, AssignBody(), pragmaSimd=False)
 
-  def compare(self, ref, target, epsMult = 10.0):
+  def compare(self, ref, target, epsMult = 100.0):
     g = self._indices(ref)
     refTerm = self._formatTerm(ref, g)
     targetTerm = self._formatTerm(target, g)
@@ -181,7 +181,7 @@ class UnitTestFactory(KernelFactory):
     ranges = {idx: Range(targetBBox[i].start, min(targetBBox[i].stop, g.indexSize(idx))) for i,idx in enumerate(g)}
     self._cpp('double error = 0.0;')
     self._cpp('double refNorm = 0.0;')
-    forLoops(self._cpp, g, ranges, CompareBody())
+    forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
     self._cpp('TS_ASSERT_LESS_THAN(sqrt(error/refNorm), {});'.format(epsMult*self._arch.epsilon))
 
   def tensor(self, node, resultName, maxValue = 512):

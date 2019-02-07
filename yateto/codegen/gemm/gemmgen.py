@@ -20,7 +20,9 @@ class GemmGen(object):
     alpha = '1' if gemm['alpha'] == 1 else '_1'
     return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{beta}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(name=name, alphaSubs=alpha, **gemm)
   
-  def _pointer(self, term, offset2):
+  def _pointer(self, term, offset2, transpose):
+    if transpose:
+      offset2 = offset2[::-1]
     o = term.memoryLayout.subtensorOffset(offset2)
     if o > 0:
       return '{} + {}'.format(term.name, o)
@@ -55,12 +57,14 @@ class GemmGen(object):
       cpp(  self._gemm_cfg.call(  d.transA, \
                                   d.transB, \
                                   m.size(), n.size(), k.size(), \
-                                  d.alpha, self._pointer(d.leftTerm, (m.start, k.start)), ldA, \
-                                  self._pointer(d.rightTerm, (k.start, n.start)), ldB, \
-                                  d.beta, self._pointer(d.result, (m.start, n.start)), ldC
+                                  d.alpha, self._pointer(d.leftTerm, (m.start, k.start), d.transA), ldA, \
+                                  self._pointer(d.rightTerm, (k.start, n.start), d.transB), ldB, \
+                                  d.beta, self._pointer(d.result, (m.start, n.start), False), ldC
                                 ))
 
     else:
+      assert not (d.transA or d.transB)
+
       gemm = {
         'M':            m.size(),
         'N':            n.size(),
@@ -80,9 +84,9 @@ class GemmGen(object):
       if self._mode == 'pspamm':
         cpp( '{}({}, {}, {}, {}, {}, {});'.format(
           routineName,
-          self._pointer(d.leftTerm, (m.start, k.start)),
-          self._pointer(d.rightTerm, (k.start, n.start)),
-          self._pointer(d.result, (m.start, n.start)),
+          self._pointer(d.leftTerm, (m.start, k.start), d.transA),
+          self._pointer(d.rightTerm, (k.start, n.start), d.transB),
+          self._pointer(d.result, (m.start, n.start), False),
           gemm['alpha'],
           gemm['beta'],
           d.prefetchName if d.prefetchName is not None else 'nullptr'
@@ -90,9 +94,9 @@ class GemmGen(object):
       else:
         cpp( '{}({}, {}, {}, nullptr, {}, nullptr);'.format(
           routineName,
-          self._pointer(d.leftTerm, (m.start, k.start)),
-          self._pointer(d.rightTerm, (k.start, n.start)),
-          self._pointer(d.result, (m.start, n.start)),
+          self._pointer(d.leftTerm, (m.start, k.start), d.transA),
+          self._pointer(d.rightTerm, (k.start, n.start), d.transB),
+          self._pointer(d.result, (m.start, n.start), False),
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
 

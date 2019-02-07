@@ -156,16 +156,6 @@ class PrintEquivalentSparsityPatterns(Visitor):
     self._norm = colors.BoundaryNorm([0.0, 0.5, 1.0], 2, clip=True)
   
   def generic_visit(self, node):
-    #~ oldPrefix = self._prefix
-    #~ nameFun = getattr(node, 'name', None)
-    #~ name = re.sub('\]', '', re.sub('\[', '_', str(node)))
-    #~ basePrefix = '{}--{}'.format(self._prefix, name) if len(self._prefix) > 0 else name
-    #~ counter = 0
-    #~ for child in node:
-      #~ self._prefix = basePrefix + '.' + str(counter)
-      #~ self.visit(child)
-      #~ counter = counter + 1
-    #~ fileName = os.path.join(self._directory, basePrefix + '.pdf')
     nameFun = getattr(node, 'name', None)
     name = nameFun() if nameFun else '_result'
     baseDirectory = self._directory

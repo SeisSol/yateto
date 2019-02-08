@@ -92,7 +92,7 @@ def getArchitectureIdentifiedBy(ident):
     'wsm':    Architecture(name, precision, 16, False),
     'snb':    Architecture(name, precision, 32, False),
     'hsw':    Architecture(name, precision, 32, False),
-    'skx':    Architecture(name, precision, 64, False),
+    'skx':    Architecture(name, precision, 64, True),
     'knc':    Architecture(name, precision, 64, False),
     'knl':    Architecture(name, precision, 64, True) # Libxsmm currently supports prefetch only for KNL kernels
   }

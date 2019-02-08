@@ -110,7 +110,7 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    return self._arch.name.lower() in {'armv8', 'knl'}
+    return self._arch.name.lower() in {'armv8', 'knl', 'skx'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB)

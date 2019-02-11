@@ -78,48 +78,73 @@ class FindIndexPermutations(Visitor):
     def __init__(self, cost, choices):
       self._cost = cost
       self._choices = choices
-  
+
   def findVariants(self, node):
     permutationVariants = dict()
     for child in node:
       permutationVariants.update( self.visit(child) )
     return permutationVariants
   
+  def variantsFixedRootPermutation(self, node, fixedPerm, permutationVariants):
+    variants = dict()
+    feasible = True
+    cost = LoGCost.addIdentity()
+    for child in node:
+      if fixedPerm in permutationVariants[child]:
+        cost = cost + permutationVariants[child][fixedPerm]._cost
+      else:
+        feasible = False
+        break
+    if feasible:
+      variants[fixedPerm] = self.Variant(cost, [fixedPerm] * len(node))
+    return variants
+
+  def allPermutationsNoCostBinaryOp(self, node):
+    permutationVariants = self.findVariants(node)
+    lV = permutationVariants[node.leftTerm()]
+    rV = permutationVariants[node.rightTerm()]
+    minCost = LoGCost()
+    minAind = None
+    minBind = None
+    for Aind in sorted(lV):
+      for Bind in sorted(rV):
+        cost = lV[Aind]._cost + rV[Bind]._cost
+        if cost < minCost:
+          minCost = cost
+          minAind = Aind
+          minBind = Bind
+    assert minAind is not None and minBind is not None
+    iterator = itertools.permutations(node.indices)
+    permutationVariants[node] = {''.join(Cs): self.Variant(minCost, [minAind, minBind]) for Cs in iterator}
+    return permutationVariants
+
   def generic_visit(self, node):
     permutationVariants = self.findVariants(node)
-    choices = list()
-    for child in node:
-      choices.append( str(child.indices) )
-    variants = {str(node.indices): self.Variant(LoGCost.addIdentity(), choices)}
+    variants = self.variantsFixedRootPermutation(node, str(node.indices), permutationVariants)
+    assert variants, 'Could not find implementation for {}.'.format(type(node))
     permutationVariants[node] = variants
     return permutationVariants
-  
-  def allPermutations(self, node, inheritIndices):
+
+  def visit_Add(self, node):
     permutationVariants = self.findVariants(node)
     iterator = itertools.permutations(node.indices)
-    if inheritIndices:
-      variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), [''.join(Cs)] * len(node)) for Cs in iterator}
-    else:
-      choices = [str(child.indices) for child in node]
-      variants = {''.join(Cs): self.Variant(LoGCost.addIdentity(), choices) for Cs in iterator}
+    variants = dict()
+    for Cs in iterator:
+      variants.update( self.variantsFixedRootPermutation(node, ''.join(Cs), permutationVariants) )
+    assert variants, 'Could not find implementation for Add.'
     permutationVariants[node] = variants
     return permutationVariants
-  
-  def visit_Add(self, node):
-    if any([child.fixedIndexPermutation() for child in node]):
-      return self.generic_visit(node)
-    return self.allPermutations(node, True)
-  
+
   def visit_ScalarMultiplication(self, node):
-    if node.term().fixedIndexPermutation():
-      return self.generic_visit(node)
-    return self.allPermutations(node, True)
+    permutationVariants = self.visit(node.term())
+    permutationVariants[node] = {key: self.Variant(variant._cost, [key]) for key,variant in permutationVariants[node.term()].items()}
+    return permutationVariants
   
   def visit_Product(self, node):
-    return self.allPermutations(node, False)
+    return self.allPermutationsNoCostBinaryOp(node)
     
   def visit_IndexSum(self, node):
-    return self.allPermutations(node, False)
+    return self.allPermutationsNoCostBinaryOp(node)
 
   def visit_Contraction(self, node):
     permutationVariants = self.findVariants(node)
@@ -143,7 +168,7 @@ class FindIndexPermutations(Visitor):
             minBind = Bind
       if minAind is not None and minBind is not None:
         variants[C] = self.Variant(minCost, [minAind, minBind])
-    assert variants, 'Could not find implementation for Contraction. (Note: Matrix-Vector multiplication currently not supported.)'
+    assert variants, 'Could not find implementation for Contraction.'
     permutationVariants[node] = variants
     return permutationVariants
 

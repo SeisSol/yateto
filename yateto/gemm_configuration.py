@@ -161,6 +161,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'snb' : [libxsmm, mkl, blis],
       'hsw' : [libxsmm, mkl, blis],
       'knl' : [libxsmm, pspamm, mkl, blis],
+      'skx' : [libxsmm, pspamm, mkl, blis],
       'armv8' : [pspamm, openblas, blis]
     }
 

@@ -74,8 +74,8 @@ with Cpp(os.path.join(outDir, 'performance.cpp')) as cpp:
     if trashTheCache:
       cpp('double* _trash = new double[{}];'.format(trashSize))
     cpp('Stopwatch _sw;');
-    cpp('double _time, _flops;')
-    cpp('printf("kernel,repetitions,time,numflop,gflops\\n");')
+    cpp('double _time, _nzflops, _flops;')
+    cpp('printf("kernel,repetitions,time,numnzflop,numflop,nzgflops,gflops\\n");')
     for kernel in g.kernels():
       with cpp.AnonymousScope():
         tensors = FindTensors().visit(kernel.ast).items()
@@ -108,8 +108,9 @@ with Cpp(os.path.join(outDir, 'performance.cpp')) as cpp:
           with cpp.For('int i = 0; i < _reps; ++i'):
             cpp('{}.execute();'.format(kobj))
         cpp('_time = _sw.stop();')
+        cpp('_nzflops = static_cast<double>(kernel::{0}::NonZeroFlops) * _reps / _time / 1.0e9;'.format(kernel.name))
         cpp('_flops = static_cast<double>(kernel::{0}::HardwareFlops) * _reps / _time / 1.0e9;'.format(kernel.name))
-        cpp('printf("{0},%u,%lf,%lu,%lf\\n", _reps, _time, kernel::{0}::HardwareFlops, _flops);'.format(kernel.name))
+        cpp('printf("{0},%u,%lf,%lu,%lu,%lf,%lf\\n", _reps, _time, kernel::{0}::NonZeroFlops, kernel::{0}::HardwareFlops, _nzflops, _flops);'.format(kernel.name))
         for key,tensor in tensors:
           cpp('free({});'.format(formatArrayName(tensor)))
     if trashTheCache:

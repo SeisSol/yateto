@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 from yateto import *
 
 def gemm_cfg(arch, variant):
@@ -8,10 +9,16 @@ def gemm_cfg(arch, variant):
   return GeneratorCollection([LIBXSMM(arch), MKL(arch)])
 
 def add(g):
-  for ep in range(5):
-    p = 4*(ep+2)
+  for ep in range(2,7):
+    p = 8*ep
     px = '{}p'.format(p)
-    for q in range(1,p//2+1):
+    qmax = p//2
+    steps = min(5, qmax)
+    delta = (qmax-1)/(steps-1)
+    qset1 = set(int(1 + eq*delta) for eq in range(0,steps))
+    qset2 = set(2**i for i in range(0, int(math.log(qmax,2)+1)))
+    qset = qset1.union(qset2)
+    for q in qset:
       pqx = '{}p{}q'.format(p,q)
       R = Tensor('R' + px, (p,p,p))
       S = Tensor('S' + px, (p,p,p))
@@ -19,6 +26,8 @@ def add(g):
       XR = Tensor('XR' + pqx, (q,p))
       XLT = Tensor('XLT' + pqx, (q,p))
       XRT = Tensor('XRT' + pqx, (p,q))
+      XLTP = Tensor('XLTP' + pqx, (q,p), alignStride=True)
+      XRTP = Tensor('XRTP' + pqx, (p,q), alignStride=True)
       YL = Tensor('YL' + pqx, (p,q))
       YR = Tensor('YR' + pqx, (q,p))
       ZL = Tensor('ZL' + pqx, (p,q))
@@ -29,3 +38,7 @@ def add(g):
 
       stock = R['ijk'] <= S['xyz'] * XLT['lx'] * XRT['il'] * YL['ym'] * YR['mj'] * ZL['zn'] * ZR['nk']
       g.add('stock{}_trans'.format(pqx), stock)
+
+      stock = R['ijk'] <= S['xyz'] * XLTP['lx'] * XRTP['il'] * YL['ym'] * YR['mj'] * ZL['zn'] * ZR['nk']
+      g.add('stock{}_trans_pad'.format(pqx), stock)
+

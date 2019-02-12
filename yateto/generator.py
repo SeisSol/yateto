@@ -163,6 +163,9 @@ class Generator(object):
     self._kernels = list()
     self._kernelFamilies = dict()
     self._arch = arch
+
+  def arch(self):
+    return self._arch
   
   def add(self, name: str, ast: Node, prefetch=None):
     if KernelFamily.isValidName(name):

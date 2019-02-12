@@ -50,7 +50,11 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
   names = clones[name] if name in clones else [name]
   for name in names:
     shape = (columns, rows) if trans(name) else (rows, columns)
+    if shape[1] == 1:
+      shape = (shape[0],)
     mtx = __transposeMatrix(matrix) if trans(name) else matrix
+    if len(shape) == 1:
+      mtx = {(i[0],): val for i,val in mtx.items()}
     matrices[name] = Tensor(name, shape, mtx, alignStride=align(name))
   return matrices
 

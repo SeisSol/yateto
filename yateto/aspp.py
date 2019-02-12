@@ -9,6 +9,7 @@ class ASpp(ABC):
     self.size = 1
     for s in shape:
       self.size *= s
+    self.ndim = len(shape)
 
   def identity(self):
     return self
@@ -43,6 +44,10 @@ class ASpp(ABC):
 
   @abstractmethod
   def indexSum(self, sourceIndices, targetIndices):
+    pass
+
+  @abstractmethod
+  def as_ndarray(self):
     pass
 
 class dense(ASpp):
@@ -98,7 +103,10 @@ class dense(ASpp):
     return a1.shape == a2.shape
 
   def as_general(self):
-    return general(np.ones(self.shape, dtype=bool, order=general.NUMPY_DEFAULT_ORDER))
+    return general(self.as_ndarray())
+
+  def as_ndarray(self):
+    return np.ones(self.shape, dtype=bool, order=general.NUMPY_DEFAULT_ORDER)
 
 class general(ASpp):
   NUMPY_DEFAULT_ORDER = 'F'
@@ -161,6 +169,9 @@ class general(ASpp):
   @staticmethod
   def array_equal(a1, a2):
     return np.array_equal(a1.pattern, a2.pattern)
+
+  def as_ndarray(self):
+    return self.pattern
 
 _binary_op = {
   (dense, dense): dense,

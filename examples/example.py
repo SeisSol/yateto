@@ -7,7 +7,7 @@ import os, errno
 import argparse
 import importlib.util
 from yateto import *
-from yateto.ast.visitor import PrettyPrinter, FindTensors
+from yateto.ast.visitor import PrettyPrinter, FindTensors, PrintEquivalentSparsityPatterns
 from yateto.codegen.code import Cpp
 
 cmdLineParser = argparse.ArgumentParser()
@@ -45,6 +45,13 @@ for kernel in g.kernels():
   print('='*len(title))
   PrettyPrinter().visit(kernel.ast)
   print(' ')
+
+printEqspp = example.printEqspp() if hasattr(example, 'printEqspp') else False
+if printEqspp:
+  for kernel in g.kernels():
+    d = os.path.join(outDir, kernel.name)
+    os.makedirs(d, exist_ok=True)
+    PrintEquivalentSparsityPatterns(d).visit(kernel.ast)
 
 formatArrayName = lambda tensor: '{0}__{1}'.format(tensor.baseName(), '_'.join([str(g) for g in tensor.group()]))
 formatGroup = lambda tensor: ','.join([str(g) for g in tensor.group()])

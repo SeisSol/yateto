@@ -68,6 +68,7 @@ class Generic(object):
       sizes = {0: m.size(), 1: k.size(), self.OUTER_INDEX: n.size(), self.INNER_INDEX: m.size()}
       trans = d.transA
     elif d.isBCsc:
+      spp = d.rightTerm.memoryLayout.entries(k, n)
       sparse = Baccess
       result = lambda e: Caccess(self.OUTER_INDEX, e[1])
       dense = lambda e: Aaccess(self.OUTER_INDEX, e[0])

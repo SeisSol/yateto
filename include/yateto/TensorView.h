@@ -86,7 +86,7 @@ namespace yateto {
       uint_t stop0 = std::min(m_stop[0], this->shape(0));
       real_t* val = m_values;
       while (entry[Dim-1] != m_stop[Dim-1]) {
-        for (int i = m_start[0]; i < stop0; ++i) {
+        for (uint_t i = m_start[0]; i < stop0; ++i) {
           entry[0] = i;
           other[entry] = *(val++);
         }

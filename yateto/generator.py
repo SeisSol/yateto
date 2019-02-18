@@ -126,7 +126,10 @@ class KernelFamily(object):
     group = self.group(name)
     internalName = '_{}_{}'.format(baseName, group)
     self._kernels[group] = Kernel(internalName, ast, prefetch)
-  
+
+  def kernels(self):
+    return self._kernels.values()
+
   def prepareUntilUnitTest(self):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest()
@@ -180,7 +183,7 @@ class Generator(object):
       self._kernels.append(kernel)
 
   def kernels(self):
-    return [kernel for kernel in self._kernels] + [kernel for family in self._kernelFamilies.values() for kernel in family.values()]
+    return [kernel for kernel in self._kernels] + [kernel for family in self._kernelFamilies.values() for kernel in family.kernels()]
 
   def addFamily(self, name: str, parameterSpace, astGenerator, prefetchGenerator=None):
     if name not in self._kernelFamilies:

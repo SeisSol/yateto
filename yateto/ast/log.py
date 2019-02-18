@@ -1,4 +1,3 @@
-import sys
 import copy
 from .node import LoopOverGEMM
 from .indices import LoGCost
@@ -44,7 +43,7 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
 
   candidates = list()
   if set(C) != (set(A) | set(B)) - (set(A) & set(B)):
-    return sys.maxsize
+    return None
   requiredIndices = set([A[0], B[0], C[0]])
   if C[0] in set(B):
     B, A = A, B

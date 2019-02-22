@@ -57,13 +57,14 @@ def boundingBoxFromLoopRanges(indices, loopRanges):
 def reduceSpp(spp, sourceIndices, targetIndices):
   return spp.indexSum(sourceIndices, targetIndices)
 
-def initializeWithZero(cpp, arch, result: TensorDescription, writeBB):
-  addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))
-  if len(addresses) == 0:
-    return
-
-  regions = splitByDistance(addresses)
-  for region in regions:
-    m, M = min(region), max(region)
-    initialAddress = '{} + {}'.format(result.name, m)
-    cpp.memset(initialAddress, M-m+1, arch.typename)
+def initializeWithZero(cpp, arch, result: TensorDescription, writeBB = None):
+  if writeBB:
+    addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))
+    if len(addresses) > 0:
+      regions = splitByDistance(addresses)
+      for region in regions:
+        m, M = min(region), max(region)
+        initialAddress = '{} + {}'.format(result.name, m)
+        cpp.memset(initialAddress, M-m+1, arch.typename)
+  else:
+    cpp.memset(result.name, result.memoryLayout.requiredReals(), arch.typename)

@@ -38,8 +38,11 @@ class Indices(object):
     assert len(index) == 1
     return self._indices.index(index)
   
-  def positions(self, I):
-    return sorted([self.find(i) for i in I])
+  def positions(self, I, sort=True):
+    pos = [self.find(i) for i in I]
+    if sort:
+      return sorted(pos)
+    return pos
   
   def __eq__(self, other):
     return other != None and self._indices == other._indices and self._size == other._size

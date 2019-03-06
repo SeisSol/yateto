@@ -30,11 +30,11 @@ def strengthReduction(terms, target_indices, cost_estimator, split = 0):
     for j in range(max(i+1,split),n):
       mulTerm = Product(terms[i], terms[j])
       prodCost = cost_estimator.estimate(mulTerm)
-      if prodCost < minCost:
+      if best == None or prodCost < minCost:
         selection = set(range(n)) - set([i,j])
         tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, cost_estimator, j-1)
         treeCost = cost_estimator.estimate(tree)
-        if treeCost < minCost:
+        if best == None or treeCost < minCost:
           best = tree
           minCost = treeCost
   return best

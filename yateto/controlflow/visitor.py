@@ -105,8 +105,8 @@ class PrettyPrinter(object):
       if self._printPPState:
         if pp.live:
           print('L =', pp.live)
-        if pp.initLocal:
-          print('Init =', pp.initLocal)
+        if pp.initBuffer:
+          print('Init =', pp.initBuffer)
       if pp.action:
         actionRepr = str(pp.action.term)
         if pp.action.scalar is not None:

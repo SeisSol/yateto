@@ -114,7 +114,7 @@ class general(ASpp):
 
   def __init__(self, npspp: np.ndarray):
     super().__init__(npspp.shape)
-    self.pattern = npspp.astype(bool, order=self.NUMPY_DEFAULT_ORDER, copy=False)
+    self.pattern = np.asarray(npspp.astype(bool, order=self.NUMPY_DEFAULT_ORDER, copy=False))
 
   def count_nonzero(self):
     return np.count_nonzero(self.pattern)
@@ -139,7 +139,9 @@ class general(ASpp):
     for axis in range(n):
       axes = tuple([a for a in range(n) if a != axis])
       reduction = self.sumAxes(self.pattern, cache, axes)
-      m, M = np.where(reduction)[0][[0,-1]]
+      nonzeros = np.where(reduction)
+      assert len(nonzeros) == 1
+      m, M = nonzeros[0][[0,-1]]
       bounds.append((m, M))
     return bounds
 

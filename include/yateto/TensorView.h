@@ -31,13 +31,19 @@ namespace yateto {
     uint_t m_shape[Dim];
   };
 
-  template<unsigned Dim, typename real_t, typename uint_t>
+  template<unsigned Dim, typename real_t, typename uint_t=unsigned>
   class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
   public:
     explicit DenseTensorView(real_t* values, std::initializer_list<uint_t> shape, std::initializer_list<uint_t> start, std::initializer_list<uint_t> stop)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values) {
       std::copy(start.begin(), start.end(), m_start);
       std::copy(stop.begin(), stop.end(), m_stop);
+      computeStride();
+    }
+
+    explicit DenseTensorView(real_t* values, std::initializer_list<uint_t> shape)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_start{} {
+      std::copy(shape.begin(), shape.end(), m_stop);
       computeStride();
     }
 

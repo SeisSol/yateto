@@ -1,4 +1,0 @@
-yet another tensor toolbox
-yateto
-やてと
-ヤテト

@@ -134,6 +134,7 @@ class SelectIndexPermutations(Transformer):
 
 class AssignPrefetch(Transformer):
   def __init__(self, prefetchCapabilities, prefetchTensors):
+    self._assigned = set()
     self._bestMatch = dict()
     for tensor in prefetchTensors:
       tsize = tensor.memoryLayout().requiredReals()
@@ -150,8 +151,12 @@ class AssignPrefetch(Transformer):
   def generic_visit(self, node):
     if node in self._bestMatch:
       node.prefetch = self._bestMatch[node]
+      self._assigned |= {self._bestMatch[node]}
     super().generic_visit(node)
     return node
+
+  def assigned(self):
+    return self._assigned
 
 class ImplementContractions(Transformer):
   def visit_Contraction(self, node):

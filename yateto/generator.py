@@ -22,7 +22,10 @@ class Kernel(object):
 
   def __init__(self, name, ast, prefetch=None):
     self.name = name
-    self.ast = ast
+    if isinstance(ast, list):
+      self.ast = ast
+    else:
+      self.ast = [ast]
     self._prefetch = None
     if prefetch is not None:
       if isinstance(prefetch, Tensor):
@@ -39,32 +42,43 @@ class Kernel(object):
     return re.match(cls.VALID_NAME, name) is not None
   
   def prepareUntilUnitTest(self):
-    self.ast = DeduceIndices().visit(self.ast)
+    self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
-    ast2cf.visit(self.ast)
+    for ast in self.ast:
+      ast2cf.visit(ast)
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
   
   def prepareUntilCodeGen(self, costEstimator):
-    ast = copy.deepcopy(self.ast)
-    ast = EquivalentSparsityPattern(groupSpp=False).visit(ast)
-    ast = StrengthReduction(costEstimator).visit(ast)
-    ast = SetSparsityPattern().visit(ast)
-    self.nonZeroFlops = ComputeOptimalFlopCount().visit(ast)
+    self.nonZeroFlops = 0
+    for a in self.ast:
+      ast = copy.deepcopy(a)
+      ast = EquivalentSparsityPattern(groupSpp=False).visit(ast)
+      ast = StrengthReduction(costEstimator).visit(ast)
+      ast = SetSparsityPattern().visit(ast)
+      self.nonZeroFlops += ComputeOptimalFlopCount().visit(ast)
 
-    self.ast = EquivalentSparsityPattern().visit(self.ast)
-    self.ast = StrengthReduction(costEstimator).visit(self.ast)
-    self.ast = FindContractions().visit(self.ast)
-    self.ast = ComputeMemoryLayout().visit(self.ast)
-    permutationVariants = FindIndexPermutations().visit(self.ast)
-    self.ast = SelectIndexPermutations(permutationVariants).visit(self.ast)
-    self.ast = ImplementContractions().visit(self.ast)
-    if self._prefetch is not None:
-      prefetchCapabilities = FindPrefetchCapabilities().visit(self.ast)
-      self.ast = AssignPrefetch(prefetchCapabilities, self._prefetch).visit(self.ast)
+    tmpASTs = list()
+    prefetch = copy.copy(self._prefetch)
+    for ast in self.ast:
+      ast = EquivalentSparsityPattern().visit(ast)
+      ast = StrengthReduction(costEstimator).visit(ast)
+      ast = FindContractions().visit(ast)
+      ast = ComputeMemoryLayout().visit(ast)
+      permutationVariants = FindIndexPermutations().visit(ast)
+      ast = SelectIndexPermutations(permutationVariants).visit(ast)
+      ast = ImplementContractions().visit(ast)
+      if self._prefetch is not None:
+        prefetchCapabilities = FindPrefetchCapabilities().visit(ast)
+        assignPf = AssignPrefetch(prefetchCapabilities, prefetch)
+        ast = assignPf.visit(ast)
+        prefetch = [pf for pf in prefetch if pf not in assignPf.assigned()]
+      tmpASTs.append(ast)
+    self.ast = tmpASTs
 
     ast2cf = AST2ControlFlow()
-    ast2cf.visit(self.ast)
+    for ast in self.ast:
+      ast2cf.visit(ast)
     self.cfg = ast2cf.cfg()
     self.cfg = MergeScalarMultiplications().visit(self.cfg)
     self.cfg = LivenessAnalysis().visit(self.cfg)

@@ -550,7 +550,10 @@ class InitializerGenerator(object):
           values = tensor.values()
           if values is not None:
             name = '{}{}'.format(self.VALUES_BASENAME, index(group))
-            cpp('{} {} {}[];'.format(STATIC, self._realType, name))
+            aligned = ''
+            if tensor.memoryLayout().alignedStride():
+              aligned = ' __attribute__((aligned({})))'.format(self._arch.alignment)
+            cpp('{} {} {}[]{};'.format(STATIC, self._realType, name, aligned))
             nValueArrays += 1
         if nValueArrays > 1:
           cpp('{} {} {}[];'.format(STATIC, self._realPtrType, self.VALUES_BASENAME))

@@ -114,7 +114,10 @@ class general(ASpp):
 
   def __init__(self, npspp: np.ndarray):
     super().__init__(npspp.shape)
-    self.pattern = np.asarray(npspp.astype(bool, order=self.NUMPY_DEFAULT_ORDER, copy=False))
+    if np.ndim(npspp) == 0:
+      self.pattern = npspp
+    else:
+      self.pattern = np.asarray(npspp.astype(bool, order=self.NUMPY_DEFAULT_ORDER, copy=False))
 
   def count_nonzero(self):
     return np.count_nonzero(self.pattern)

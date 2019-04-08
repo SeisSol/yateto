@@ -598,7 +598,7 @@ class InitializerGenerator(object):
       if isGroup:
         stride = groupSizeToStride(groupSize)
         size = reduce(operator.mul, groupSize, 1)
-        init = [0]*size
+        init = ['0']*size
         for key, value in content.items():
           idx = address(key, stride)
           init[idx] = formatArray(value)
@@ -607,7 +607,6 @@ class InitializerGenerator(object):
 
       if isArray:
         init = ['{{{}}}'.format(i) for i in init]
-      
       initStr = ', '.join(init)
       if isGroup:
         initStr = '{{{}}}'.format(initStr)

@@ -155,6 +155,9 @@ class KernelFamily(object):
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
 
+def parameterSpaceFromRanges(*args):
+  return list(itertools.product(*[list(i) for i in args]))
+
 class Generator(object):
   INIT_FILE_NAME = 'init'
   TENSORS_FILE_NAME = 'tensor'

@@ -53,6 +53,10 @@ class Tensor(AbstractType):
           npspp[multiIndex] = value
         self._spp = aspp.general(npspp)
       elif isinstance(spp, ndarray) or isinstance(spp, aspp.ASpp):
+        if isinstance(spp, ndarray):
+          if spp.dtype.kind == 'f':
+            nonzeros = spp.nonzero()
+            self._values = {entry: str(spp[entry]) for entry in zip(*nonzeros)}
         self._setSparsityPattern(spp)
       else:
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')

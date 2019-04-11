@@ -55,7 +55,15 @@ namespace yateto {
       }
       computeStride();
     }
-    
+
+    explicit DenseTensorView(real_t* values, uint_t const shape[])
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_start{} {
+      for (uint_t d = 0; d < Dim; ++d) {
+        m_stop[d] = shape[d];
+      }
+      computeStride();
+    }
+
     uint_t size() const {
       return (m_stop[Dim-1]-m_start[Dim-1]) * m_stride[Dim-1];
     }

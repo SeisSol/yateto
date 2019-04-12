@@ -179,10 +179,11 @@ class UnitTestFactory(KernelFactory):
 
     targetBBox = target.memoryLayout().bbox()
     ranges = {idx: Range(targetBBox[i].start, min(targetBBox[i].stop, g.indexSize(idx))) for i,idx in enumerate(g)}
-    self._cpp('double error = 0.0;')
-    self._cpp('double refNorm = 0.0;')
-    forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
-    self._cpp('TS_ASSERT_LESS_THAN(sqrt(error/refNorm), {});'.format(epsMult*self._arch.epsilon))
+    with self._cpp.AnonymousScope():
+      self._cpp('double error = 0.0;')
+      self._cpp('double refNorm = 0.0;')
+      forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
+      self._cpp('TS_ASSERT_LESS_THAN(sqrt(error/refNorm), {});'.format(epsMult*self._arch.epsilon))
 
   def tensor(self, node, resultName, maxValue = 512):
     ml = node.memoryLayout()

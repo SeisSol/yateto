@@ -129,14 +129,14 @@ namespace yateto {
 
     template<typename Head>
     uint_t address(Head head) {
-      assert(head >= m_start[Dim-1] && head < m_stop[Dim-1]);
+      assert(static_cast<uint_t>(head) >= m_start[Dim-1] && static_cast<uint_t>(head) < m_stop[Dim-1]);
       return (head - m_start[Dim-1]) * m_stride[Dim-1];
     }
 
     template<typename Head, typename... Tail>
     uint_t address(Head head, Tail... tail) {
       uint_t const d = (Dim-1) - sizeof...(tail);
-      assert(head >= m_start[d] && head < m_stop[d]);
+      assert(static_cast<uint_t>(head) >= m_start[d] && static_cast<uint_t>(head) < m_stop[d]);
       return (head - m_start[d]) * m_stride[d] + address(tail...);
     }
 

@@ -61,7 +61,7 @@ class Generic(object):
     Caccess = self._accessFun(d.result, (m.start, n.start), False, False)
 
     if d.isACsc:
-      rows, cols = (k, m) if d.transB else (m, k)
+      rows, cols = (k, m) if d.transA else (m, k)
       spp = d.leftTerm.memoryLayout.entries(rows, cols)
       sparse = Aaccess
       result = lambda e: Caccess(e[0], self.OUTER_INDEX)

@@ -1,0 +1,22 @@
+import os
+
+VariantDir('build', '.')
+
+env = Environment()
+env['ENV'] = os.environ
+if 'CC' in env['ENV']:
+  env['CC'] = env['ENV']['CC']
+if 'CXX' in env['ENV']:
+  env['CXX'] = env['ENV']['CXX']
+
+# c++ standard
+env.Append(CXXFLAGS=['-std=c++11'])
+
+# include directories
+env.Append( CPPPATH=['#/../include/'] )
+
+env.Tool('cxxtest')
+
+env.CxxTest('build/unit_tests', [
+  'build/TensorView.t.h'
+])

@@ -4,8 +4,26 @@
 #include <cassert>
 #include <cstring>
 #include <algorithm>
+#include <limits>
+#include <type_traits>
 
 namespace yateto {
+  template<typename uint_t=unsigned>
+  class slice {
+  public:
+    explicit slice(uint_t start = 0, uint_t stop = std::numeric_limits<uint_t>::max())
+      : start(start), stop(stop)
+        {}
+
+    uint_t start;
+    uint_t stop;
+  };
+
+  template<typename uint_t, typename... Entry>
+  struct count_slices : std::integral_constant<uint_t,0> {};
+  template<typename uint_t, typename Head, typename... Tail>
+  struct count_slices<uint_t, Head, Tail...> : std::integral_constant<uint_t, ((std::is_same<Head, slice<uint_t>>::value) ? 1 : 0) + count_slices<uint_t, Tail...>::value> {};
+
   template<unsigned Dim, typename real_t, typename uint_t>
   class TensorView {
   public:
@@ -63,13 +81,38 @@ namespace yateto {
       }
       computeStride();
     }
+ 
+    explicit DenseTensorView(real_t* values, uint_t const shape[], uint_t const stride[])
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_start{} {
+      for (uint_t d = 0; d < Dim; ++d) {
+        m_stop[d] = shape[d];
+        m_stride[d] = stride[d];
+      }
+    }
 
     uint_t size() const {
       return (m_stop[Dim-1]-m_start[Dim-1]) * m_stride[Dim-1];
     }
     
     void setZero() {
-      memset(m_values, 0, size() * sizeof(real_t));
+      uint_t entry[Dim];
+      std::copy(m_start, m_start + Dim, entry);
+      while (entry[Dim-1] != m_stop[Dim-1]) {
+        auto values = &operator[](entry);
+        for (uint_t i = 0.0; i < m_stop[0]-m_start[0]; ++i) {
+          values[i*m_stride[0]] = 0.0;
+        }
+        if (Dim == 1) {
+          break;
+        }
+
+        uint_t d = 0;
+        do {
+          entry[d] = m_start[d];
+          d++;
+          ++entry[d];
+        } while (entry[d] == m_stop[d] && d < Dim-1);
+      }
     }
 
     template<typename... Entry>
@@ -119,6 +162,17 @@ namespace yateto {
       }
     }
 
+    template<typename... Entry>
+    auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t>  {
+      static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match Tensor's dimension.");
+      constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
+      uint_t begin[Dim];
+      uint_t size[nSlices];
+      uint_t stride[nSlices];
+      extractSubtensor(begin, size, stride, entry...);
+      DenseTensorView<nSlices, real_t, uint_t> subtensor(&operator[](begin), size, stride);
+      return subtensor;
+    }
   protected:
     void computeStride() {
       m_stride[0] = 1;
@@ -138,6 +192,32 @@ namespace yateto {
       uint_t const d = (Dim-1) - sizeof...(tail);
       assert(static_cast<uint_t>(head) >= m_start[d] && static_cast<uint_t>(head) < m_stop[d]);
       return (head - m_start[d]) * m_stride[d] + address(tail...);
+    }
+
+    template<typename T, typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
+    void extractDim(uint_t*& begin, uint_t*&, uint_t*&, uint_t dimNo, T entry) {
+      assert(static_cast<uint_t>(entry) >= m_start[dimNo] && static_cast<uint_t>(entry) < m_stop[dimNo]);
+      *begin++ = entry;
+    }
+
+    template<typename T, typename std::enable_if<std::is_same<T, slice<uint_t>>::value, int>::type = 0>
+    void extractDim(uint_t*& begin, uint_t*& size, uint_t*& stride, uint_t dimNo, T dim) {
+      *begin = std::max(m_start[dimNo], dim.start);
+      *size++ = std::min(m_stop[dimNo], dim.stop) - *begin;
+      ++begin;
+      *stride++ = m_stride[dimNo];
+    }
+
+    template<typename Head>
+    void extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head) {
+      extractDim<Head>(begin, size, stride, Dim-1, head);
+    }
+
+    template<typename Head, typename... Tail>
+    void extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head, Tail... tail) {
+      uint_t const d = (Dim-1) - sizeof...(tail);
+      extractDim<Head>(begin, size, stride, d, head);
+      extractSubtensor(begin, size, stride, tail...);
     }
 
     real_t* m_values;

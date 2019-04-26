@@ -161,11 +161,12 @@ class FindIndexPermutations(Visitor):
       for Aind in sorted(lV):
         for Bind in sorted(rV):
           log = LoG(node, Aind, Bind, C)
-          cost = log.cost() + lV[Aind]._cost + rV[Bind]._cost
-          if cost < minCost:
-            minCost = cost
-            minAind = Aind
-            minBind = Bind
+          if log is not None:
+            cost = log.cost() + lV[Aind]._cost + rV[Bind]._cost
+            if cost < minCost:
+              minCost = cost
+              minAind = Aind
+              minBind = Bind
       if minAind is not None and minBind is not None:
         variants[C] = self.Variant(minCost, [minAind, minBind])
     assert variants, 'Could not find implementation for Contraction.'

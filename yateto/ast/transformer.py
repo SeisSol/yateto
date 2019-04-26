@@ -43,15 +43,16 @@ class DeduceIndices(Transformer):
     deduced = g - contractions
     if node.indices == None:
       node.indices = deduced.sorted()
-    elif not node.indices <= deduced:
+    elif not node.indices <= g:
       raise ValueError('Einsum: Indices are not contained in deduced indices or sizes do not match. [{} not contained in {}]'.format(node.indices.__repr__(), deduced.__repr__()))
     return node
   
   def visit_Add(self, node):
-    for child in node:
-      if child.fixedIndexPermutation():
-        node.indices = child.indices
-        break
+    if node.indices == None:
+      for child in node:
+        if child.fixedIndexPermutation():
+          node.indices = child.indices
+          break
 
     for child in node:
       if not child.fixedIndexPermutation():

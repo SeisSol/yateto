@@ -42,15 +42,14 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   C = I.indices.tostring()
 
   candidates = list()
-  if set(C) != (set(A) | set(B)) - (set(A) & set(B)):
-    return None
   requiredIndices = set([A[0], B[0], C[0]])
   if C[0] in set(B):
     B, A = A, B
     R, L = L, R
-  Im = set(A) & set(C)
-  In = set(B) & set(C)
-  Ik = set(A) & set(B)
+  Icommon = set(A) & set(B) & set(C)
+  Im = (set(A) & set(C)) - Icommon
+  In = (set(B) & set(C)) - Icommon
+  Ik = (set(A) & set(B)) - Icommon
   
   PA = {idx: pos for pos, idx in enumerate(A)}
   PB = {idx: pos for pos, idx in enumerate(B)}
@@ -80,5 +79,6 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
         if cost < minCost:
           minCost = cost
           minLog = log
-  minLog.setMemoryLayout( I.memoryLayout() )
+  if minLog:
+    minLog.setMemoryLayout( I.memoryLayout() )
   return minLog

@@ -204,7 +204,8 @@ class DenseMemoryLayout(MemoryLayout):
   def withDummyDimension(self):
     shape = self._shape + (1,)
     bbox = BoundingBox(list(self._bbox) + [Range(0,1)])
-    return DenseMemoryLayout(shape, bbox)
+    stride = self._stride + (self._bbox[-1].size() * self._stride[-1],)
+    return DenseMemoryLayout(shape, bbox, stride)
 
   def unfold(self, indices, I, J):
     positionsI = indices.positions(I)

@@ -45,23 +45,21 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
     matrix[(row, col)] = entry[2]
 
   matrices = dict()
-  align = lambda name: name in alignStride if isinstance(alignStride, set) else alignStride
-  trans = lambda name: name in transpose if isinstance(transpose, set) else transpose
   names = clones[name] if name in clones else [name]
   for name in names:
-    shape = (columns, rows) if trans(name) else (rows, columns)
+    shape = (columns, rows) if transpose(name) else (rows, columns)
     if shape[1] == 1:
       shape = (shape[0],)
-    mtx = __transposeMatrix(matrix) if trans(name) else matrix
+    mtx = __transposeMatrix(matrix) if transpose(name) else matrix
     if len(shape) == 1:
       mtx = {(i[0],): val for i,val in mtx.items()}
-    matrices[name] = Tensor(name, shape, mtx, alignStride=align(name))
+    matrices[name] = Tensor(name, shape, mtx, alignStride=alignStride(name))
   return matrices
 
 def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
-def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False, alignStride=None):
+def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False):
   tree = etree.parse(xmlFile)
   root = tree.getroot()
   
@@ -89,7 +87,7 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=False, alignStride=None
 
   return __createCollection(matrices)
 
-def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=False, alignStride=None):
+def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False):
   matrices = dict()
 
   with open(jsonFile) as j:

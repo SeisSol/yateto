@@ -31,6 +31,17 @@ class Tensor(AbstractType):
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
 
   def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False):
+    """
+    Parameters
+    ----------
+    name : str
+        a text string must match a regex defined by VALID_NAME
+    shape : tuple
+    spp : an instance of a derived spp class
+    memoryLayoutClass : an instance of a derived MemoryLayout class
+    alignStride : bool
+        TODO: complete description
+    """
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -61,6 +72,8 @@ class Tensor(AbstractType):
       else:
         raise ValueError(name, 'Matrix values must be given as dictionary (e.g. {(1,2,3): 2.0} or as numpy.ndarray.')
     else:
+      # if the user din't specify a certain sparsity pattern, then
+      # create a dense sparsity pattern object with give shape from assp module
       self._spp = aspp.dense(shape)
     self._groupSpp = self._spp
     
@@ -82,9 +95,26 @@ class Tensor(AbstractType):
     self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
 
   def __getitem__(self, indexNames):
+    """
+    Creates and returns an IndexedTensor node
+    initialized with the current tensor object and index names
+    Parameters
+    ----------
+    indexNames : str
+        a string of tensor indices
+    Returns
+    -------
+    IndexedTensor node
+    """
     return IndexedTensor(self, indexNames)
   
   def shape(self):
+    """
+    Returns
+    -------
+    tuple
+        shape of the tensor i.e. sizes of each dimension
+    """
     return self._shape
   
   def memoryLayout(self):

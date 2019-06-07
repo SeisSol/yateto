@@ -1,1 +1,7 @@
 *.pyc
+.idea
+.vscode
+*.swp
+*log
+examples/minimal
+docs/build/*

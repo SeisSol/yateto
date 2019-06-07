@@ -59,6 +59,18 @@ class Node(ABC):
     pass
 
   def _checkMultipleScalarMults(self):
+    """
+    Checks whether the self object is not a type
+    of ScalarMultiplication. If it is a case, the
+    corresponding exception is raised
+    Returns
+    -------
+    None
+
+    Throws
+    -------
+    ValueError
+    """
     if isinstance(self, ScalarMultiplication):
       raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
 
@@ -76,8 +88,12 @@ class Node(ABC):
 
   def __mul__(self, other):
     if not isinstance(other, Node):
+      # if the other operand doesn't belong to
+      # any derived type Node then check whther
+      # ...
       self._checkMultipleScalarMults()
       return ScalarMultiplication(other, self)
+
     if isinstance(self, ScalarMultiplication):
       other._checkMultipleScalarMults()
       self.setTerm(self.term() * other)
@@ -86,9 +102,26 @@ class Node(ABC):
       self._checkMultipleScalarMults()
       other.setTerm(self * other.term())
       return other
+
     return self._binOp(other, Einsum)
   
   def __rmul__(self, other):
+    """
+    Invokes when the left operand does not how to
+    perform multiplication with an instance of the class Node.
+    The function delegates multiplication to the function
+    responsible for the left multiplication of Tensor with
+    another python object
+    Parameters
+      ----------
+    other : any python object
+      can be any python object which does know how to handle
+      left multiplication with an instance of the class Node
+    Returns
+    -------
+    any derived instance of the class Node
+       e.g. ScalarMultiplication, self or binOp
+    """
     return self.__mul__(other)
   
   def __add__(self, other):
@@ -113,6 +146,22 @@ class Node(ABC):
 
 class IndexedTensor(Node):
   def __init__(self, tensor, indexNames):
+    """
+    Saves a passed tensor object as a data member of the class
+    as well as generates an instance of Indices class
+    for the following use
+    NOTE: The default constructor of the supper class
+    inits
+        self.indices = None
+        self._children = []
+        self._eqspp = None
+
+    Parameters
+    ----------
+    tensor : Tensor
+    indexNames : str
+    """
+
     super().__init__()
     self.tensor = tensor
     self.indices = Indices(indexNames, self.tensor.shape())

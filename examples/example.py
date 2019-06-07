@@ -24,6 +24,7 @@ except:
 
 targetFlopsPerSec = 40.0e9
 
+# create the output directory
 variantSuffix = '_' + cmdLineArgs.variant if cmdLineArgs.variant else ''
 outDir = os.path.join(cmdLineArgs.example_script, cmdLineArgs.arch + variantSuffix)
 try:
@@ -32,9 +33,14 @@ except OSError as e:
   if e.errno == errno.EEXIST:
     pass
 
+# create an architecture object based on the command line parameters
 arch = useArchitectureIdentifiedBy(cmdLineArgs.arch)
 
+# init generator by architecture
 g = Generator(arch)
+
+# call the user's script where he/she defines a desired contraction
+# with yateto DSL. The function call builds AST from the contraction equation
 example.add(g)
 gemm_cfg = example.gemm_cfg(arch, cmdLineArgs.variant) if hasattr(example, 'gemm_cfg') else None
 g.generate(outDir, gemm_cfg=gemm_cfg)

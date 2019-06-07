@@ -4,12 +4,24 @@ from .. import aspp
 
 class Indices(object):
   def __init__(self, indexNames = '', shape = ()):
+    """
+    Parameters
+    ----------
+    indexNames : str
+      each character of a string defines a name of the corresponding index
+    shape : tuple
+      shape of the tensor i.e. sizes of each dimension
+    """
     self._indices = tuple(indexNames)
     self._size = dict()
     
     assert len(self._indices) == len(set(self._indices)), 'Repeated indices are not allowed ({}).'.format(indexNames)
     assert len(self._indices) == len(shape), 'Indices {} do not match tensor shape {}.'.format(str(self), shape)
 
+    # create a table where the key of each entry is a character of
+    # the corresponding index and the value is a size of the dimension
+    # defined by the index i.e. a simple lookup table which allows to
+    # find the dimension of an index by its name
     self._size = {self._indices[i]: size for i, size in enumerate(shape)}
   
   def tostring(self):

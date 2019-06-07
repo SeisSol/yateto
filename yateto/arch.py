@@ -85,20 +85,52 @@ class Architecture(object):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
 
 def getArchitectureIdentifiedBy(ident):
-  precision = ident[0].upper()
-  name = ident[1:]
-  arch = {
-    'noarch': Architecture(name, precision, 16, False),
-    'wsm':    Architecture(name, precision, 16, False),
-    'snb':    Architecture(name, precision, 32, False),
-    'hsw':    Architecture(name, precision, 32, False),
-    'skx':    Architecture(name, precision, 64, True),
-    'knc':    Architecture(name, precision, 64, False),
-    'knl':    Architecture(name, precision, 64, True) # Libxsmm currently supports prefetch only for KNL kernels
-  }
-  return arch[name]
+    """
+    Creates a particular architecture object based on the input string.
+
+    Parameters
+    ----------
+    ident : str
+      text string describes the target precision (as the first
+      character) and architecture (using the rest of the characters)
+
+    Returns
+    -------
+    arch : an instance of Architecture class
+    """
+
+    precision = ident[0].upper()
+    name = ident[1:]
+
+    # implementation of switch case construct in python
+    arch = {
+      'noarch': Architecture(name, precision, 16, False),
+      'wsm':    Architecture(name, precision, 16, False),
+      'snb':    Architecture(name, precision, 32, False),
+      'hsw':    Architecture(name, precision, 32, False),
+      'skx':    Architecture(name, precision, 64, True),
+      'knc':    Architecture(name, precision, 64, False),
+      'knl':    Architecture(name, precision, 64, True) # Libxsmm currently supports prefetch only for KNL kernels
+    }
+    return arch[name]
 
 def useArchitectureIdentifiedBy(ident):
-  arch = getArchitectureIdentifiedBy(ident)
-  DenseMemoryLayout.setAlignmentArch(arch)
-  return arch
+    """
+    Creates an architecture object initialized according
+    to the input string as well as initializes DenseMemoryLayout
+    class with the created architecture object
+
+    Parameters
+    ----------
+    ident : str
+      text string describes the target precision (the first
+      character) and architecture type (using the rest of the characters)
+
+    Returns
+    -------
+    arch : an instance of Architecture class
+    """
+
+    arch = getArchitectureIdentifiedBy(ident)
+    DenseMemoryLayout.setAlignmentArch(arch)
+    return arch

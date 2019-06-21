@@ -1,4 +1,4 @@
-# How to compile documentation:
+### How to compile documentation:
 
 Execute the following in order to compile documentation: 
 
@@ -6,7 +6,7 @@ Execute the following in order to compile documentation:
     
 ***
 
-# How to open documentation:
+### How to open documentation:
 Open **build/html/yateto.html** file in your favorite web-browser.
 
 For example:

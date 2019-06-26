@@ -2,7 +2,7 @@
 #
 
 # You can set these variables from the command line.
-SPHINXOPTS    =
+SPHINXOPTS    = -v -j4
 SPHINXBUILD   = sphinx-build
 SPHINXPROJ    = yateto
 SOURCEDIR     = source

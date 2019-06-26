@@ -9,16 +9,12 @@ yateto.codegen.indexsum.factory module
 
 .. automodule:: yateto.codegen.indexsum.factory
     :members:
-    :undoc-members:
-    :show-inheritance:
 
 yateto.codegen.indexsum.generic module
 --------------------------------------
 
 .. automodule:: yateto.codegen.indexsum.generic
     :members:
-    :undoc-members:
-    :show-inheritance:
 
 
 Module contents
@@ -26,5 +22,3 @@ Module contents
 
 .. automodule:: yateto.codegen.indexsum
     :members:
-    :undoc-members:
-    :show-inheritance:

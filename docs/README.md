@@ -12,7 +12,7 @@ For example:
 	firefox ./build/html/yateto.html
 
 ### How to get documentation coverage statistics:
-Generate the documentation code coverage statistics:
+Generate statistics:
 
     sphinx-build -b coverage source/ build/coverage
     

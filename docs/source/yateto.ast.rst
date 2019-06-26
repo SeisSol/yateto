@@ -35,6 +35,7 @@ yateto.ast.node module
     :members:
     :undoc-members:
     :show-inheritance:
+    :private-members:
 
 yateto.ast.opt module
 ---------------------

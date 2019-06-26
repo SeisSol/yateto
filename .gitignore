@@ -5,3 +5,5 @@
 *log
 examples/minimal
 docs/build/*
+examples/rav-test
+venv

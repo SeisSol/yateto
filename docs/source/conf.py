@@ -14,6 +14,7 @@
 #
 import os
 import sys
+
 sys.path.insert(0, os.path.abspath('../..'))
 
 
@@ -45,6 +46,14 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx.ext.napoleon'
 ]
+
+
+try:
+    import sphinxcontrib.spelling
+except ImportError:
+    pass
+else:
+    extensions.append("sphinxcontrib.spelling")
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -167,3 +176,12 @@ texinfo_documents = [
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
 napoleon_numpy_docstring = True
+
+
+def skip(app, what, name, obj, would_skip, options):
+    if name == "__init__":
+        return False
+    return would_skip
+
+def setup(app):
+    app.connect("autodoc-skip-member", skip)

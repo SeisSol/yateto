@@ -6,6 +6,13 @@
 Welcome to yateto's documentation!
 ==================================
 
+.. image:: _static/images/tensor.jpeg
+    :align: center
+
+Image `source 
+<https://cdn-images-1.medium.com/max/1600/1*jqOq4maGmsyklNOwKDlVaw.jpeg>`_.
+
+
 .. toctree::
    :maxdepth: 2
    :caption: Contents:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from yateto import *
+#from yateto import *
 
 
 def gemm_cfg(arch, variant):
@@ -16,29 +16,38 @@ def add(g):
   w = Tensor('w', (N,))
   C = Tensor('C', (N, N))
 
+  print("start")
   kernel = C['ij'] <= 2.0 * C['ij'] + A['lj'] * B['ikl'] * w['k']
   g.add('kernel', kernel)
+
+
 
 
 if __name__ == "__main__":
 
   import sys
   sys.path.append('..')
+  from yateto import *
   import trace
+  from hunter import trace, Q, CallPrinter, CodePrinter, VarsPrinter
 
 
-  arch = useArchitectureIdentifiedBy("dhsw")
-  g = Generator(arch)
+
 
   mode = "debug"
   #mode = "trace"
 
   if mode == "trace":
-    tracer = trace.Trace(
-      ignoredirs=[sys.prefix, sys.exec_prefix],
-      trace=1,
-      count=1)
-    tracer.run('add(g)')
-  else:
+    trace(Q(stdlib=False), action=CallPrinter)
+    arch = useArchitectureIdentifiedBy("dhsw")
+    g = Generator(arch)
+    print("start generation xxxx")
     add(g)
-  #results = tracer.results()
+    print("start generation yyyy")
+    g.generate(outputDir="./rav-test", gemm_cfg=gemm_cfg(arch, "onlyblas"))
+
+  else:
+    arch = useArchitectureIdentifiedBy("dhsw")
+    g = Generator(arch)
+    add(g)
+    g.generate(outputDir="./rav-test", gemm_cfg=gemm_cfg(arch, "onlyblas"))

@@ -8,7 +8,7 @@ class AST2ControlFlow(Visitor):
   
   def __init__(self, simpleMemoryLayout=False):
     self._tmp = 0
-    self._cfg = []
+    self._cfg = [] # list of ProgrammingPoints
     self._writable = set()
     self._simpleMemoryLayout = simpleMemoryLayout
   

@@ -63,45 +63,99 @@ class Node(ABC):
     Checks whether the self object is not a type
     of ScalarMultiplication. If it is a case, the
     corresponding exception is raised
+
     Returns
     -------
-    None
 
-    Throws
+    Raises
     -------
     ValueError
+      Multiple multiplications with scalars are not allowed
     """
     if isinstance(self, ScalarMultiplication):
       raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
 
+
   def _binOp(self, other, opType):
+    """
+    Combines to objects (self and other) into one binary operation
+
+    Parameters
+    ----------
+    other: an instance of either a derived type Node or Op
+    opType: a class of a derived type Op
+      usually, the class is = Einsum
+
+    Returns
+    -------
+    obj: opType
+      self, or other, or a new instance opType(self, other)
+    """
     if isinstance(self, opType):
       if isinstance(other, opType):
+        # Extend the children of the self object
+        # by sticking the children of the OTHER object
+        # if both "self" and "OTHER" belong to the opType
+        # provided by the caller
         self._children.extend(other._children)
       else:
+        # Attach the OTHER object to the list of children ot the self object
+        # in case of the OTHER doesn't belong to the given opType
         self._children.append(other)
+
+      # returb updated self object
       return self
     elif isinstance(other, opType):
+
+      # Insert the self object to the list of children of the OTHER
+      # object if only the OTHER object belongs to the provided opType
       other._children.insert(0, self)
+
+      # return updated OTHER object
       return other
+
+    # Create and return an object of the given type using the self and
+    # OTHER objects in case of both objects don't belong to
+    # the provided opType
     return opType(self, other)
+
 
   def __mul__(self, other):
     if not isinstance(other, Node):
-      # if the other operand doesn't belong to
-      # any derived type Node then check whther
-      # ...
+      # if the OTHER operand doesn't belong to
+      # any derived type of Node then we create an instance
+      # of ScalarMultiplication class using passed parameters
+      # i.e. other (usually a float number) and Node (any derived
+      # type of node)
+
+
+      # Check whether the derived type of the Node class (i.e. Node)
+      # doesn't belong to ScalarMultiplication. Because
+      # we prohibit multiple multiplications with scalars
       self._checkMultipleScalarMults()
       return ScalarMultiplication(other, self)
 
     if isinstance(self, ScalarMultiplication):
+
+      # Check whether the OTHER operand doesn't
+      # belong to ScalarMultiplication. Because we prohibit
+      # multiple multiplications of ScalarMultiplication instances
       other._checkMultipleScalarMults()
+
+      # At this point, we definetely know that the self object is an instance
+      # of ScalarMultiplication and the OTHER belongs to any other derived type of Node.
+      # Therefore, we substitute the first "Node" children of the ScalarMultiplication instance
+      # (called "T" for simplicity) with the product of T and OTHER:
       self.setTerm(self.term() * other)
       return self
+
     elif isinstance(other, ScalarMultiplication):
+      # The same as the previous case but "vice versa"
+
       self._checkMultipleScalarMults()
       other.setTerm(self * other.term())
       return other
+
 
     return self._binOp(other, Einsum)
   
@@ -112,6 +166,7 @@ class Node(ABC):
     The function delegates multiplication to the function
     responsible for the left multiplication of Tensor with
     another python object
+
     Parameters
       ----------
     other : any python object
@@ -151,10 +206,8 @@ class IndexedTensor(Node):
     as well as generates an instance of Indices class
     for the following use
     NOTE: The default constructor of the supper class
-    inits
-        self.indices = None
-        self._children = []
-        self._eqspp = None
+    inits: self.indices = None, self._children = []
+    and self._eqspp = None
 
     Parameters
     ----------
@@ -257,6 +310,12 @@ class Add(Op):
 
 class UnaryOp(Op):
   def term(self):
+    """
+
+    Returns
+    -------
+      a derived type of Node: the left (first) child of an tensor unary operation
+    """
     return self._children[0]
 
 class ScalarMultiplication(UnaryOp):

@@ -21,16 +21,62 @@ if colorsSpec:
 # Similar as ast.NodeVisitor
 class Visitor(object):
   def visit(self, node, **kwargs):
+    """
+    Defines and calls a specific visit-method (of a derived Visitor instance)
+    based on class of 'node' data type. The function calls the default (generic)
+    visit-method in case if the derived instance doesn't contain such specific
+    visit-method
+
+    Parameters
+    ----------
+    node: Node
+      a node of an AST
+    kwargs: dict
+      additional parameters to be passed to a specific
+      visit-method
+
+    Returns
+    -------
+      a result of a specific visit-method call
+    """
+
+    # derive a name of a specific visit-method
+    # of the Visitor class represented by the 'node' instance
+    # Example: if 'node' belongs to class IndexTensor
+    #          then the method name is visit_IndexTensor
     method = 'visit_' + node.__class__.__name__
+
+    # Try to get a function pointer of the visit-method
+    # by its name defined above.
+    # Note: if a class represented by 'node' doesn't contain
+    # such method, then we are going to use Visitor.generic_visit
+    # method as a default choice
     visitor = getattr(self, method, self.generic_visit)
+
+    # call a specific visit-method
     return visitor(node, **kwargs)
-  
+
   def generic_visit(self, node, **kwargs):
+    """
+    Iterates through children of a given 'node' and calls
+    their specific visit-methods
+
+    Parameters
+    ----------
+    node: Node
+      a node of an AST
+    kwargs: dict
+      additional parameters to be passed to a specific
+      visit-method
+
+    """
     for child in node:
       self.visit(child, **kwargs)
 
+
 def addIndent(string, indent):
   return '\n'.join([indent + line for line in string.splitlines()])
+
 
 class PrettyPrinter(Visitor):
   def __init__(self):
@@ -41,6 +87,7 @@ class PrettyPrinter(Visitor):
     self._indent = self._indent + 1
     super().generic_visit(node)
     self._indent = self._indent - 1
+
 
 class ComputeSparsityPattern(Visitor):
   def __init__(self, useAvailable):
@@ -56,12 +103,14 @@ class ComputeSparsityPattern(Visitor):
   def visit_IndexedTensor(self, node):
     return node.eqspp()
 
+
 class ComputeOptimalFlopCount(Visitor):
   def generic_visit(self, node):
     childFlops = 0
     for child in node:
       childFlops += self.visit(child)
     return childFlops + node.nonZeroFlops()
+
 
 class FindTensors(Visitor):
   def generic_visit(self, node):
@@ -72,6 +121,7 @@ class FindTensors(Visitor):
 
   def visit_IndexedTensor(self, node):
     return {node.name(): node.tensor}
+
 
 class FindIndexPermutations(Visitor):
   class Variant(object):
@@ -172,6 +222,7 @@ class FindIndexPermutations(Visitor):
     assert variants, 'Could not find implementation for Contraction.'
     permutationVariants[node] = variants
     return permutationVariants
+
 
 class PrintEquivalentSparsityPatterns(Visitor):
   def __init__(self, directory):

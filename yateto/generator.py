@@ -42,7 +42,15 @@ class Kernel(object):
     return re.match(cls.VALID_NAME, name) is not None
   
   def prepareUntilUnitTest(self):
+
+    # At this point self.ast is a list of kernels where each kernel is
+    # an ast without annotation i.e. some nodes (Assign, Add, ScalarMultiplication, etc.)
+    # don't have the target indices being set up.
+
+    # Iterate through each ast and fix the above mentioned issue
     self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
+
+    # TODO: document
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
     for ast in self.ast:
       ast2cf.visit(ast)

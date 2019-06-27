@@ -1,4 +1,6 @@
 from numpy import ndindex, arange
+from typing import Type
+
 import math
 import collections
 import itertools
@@ -7,6 +9,7 @@ import os.path
 from .node import Op
 from .indices import LoGCost
 from .log import LoG
+from .node import Node
 
 # Optional modules
 import importlib.util
@@ -20,23 +23,19 @@ if colorsSpec:
 
 # Similar as ast.NodeVisitor
 class Visitor(object):
-  def visit(self, node, **kwargs):
-    """
-    Defines and calls a specific visit-method (of a derived Visitor instance)
-    based on class of 'node' data type. The function calls the default (generic)
+  def visit(self, node: Type[Node], **kwargs):
+    """Defines and calls a specific visit-method (of Type[Visitor] instance)
+    based on class of 'node' data type.
+
+    The function calls the default (generic)
     visit-method in case if the derived instance doesn't contain such specific
-    visit-method
+    visit-method.
 
-    Parameters
-    ----------
-    node: Node
-      a node of an AST
-    kwargs: dict
-      additional parameters to be passed to a specific
-      visit-method
+    Args:
+      node: a node of an AST
+      **kwargs (dict): additional arguments
 
-    Returns
-    -------
+    Returns:
       a result of a specific visit-method call
     """
 
@@ -56,20 +55,15 @@ class Visitor(object):
     # call a specific visit-method
     return visitor(node, **kwargs)
 
-  def generic_visit(self, node, **kwargs):
-    """
-    Iterates through children of a given 'node' and calls
-    their specific visit-methods
+  def generic_visit(self, node: Type[Node], **kwargs):
+    """Iterates through children of a given 'node' and calls
+    their specific visit-methods.
 
-    Parameters
-    ----------
-    node: Node
-      a node of an AST
-    kwargs: dict
-      additional parameters to be passed to a specific
-      visit-method
-
+    Args:
+      node: a node of an AST
+      **kwargs (dict): additional arguments
     """
+
     for child in node:
       self.visit(child, **kwargs)
 

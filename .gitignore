@@ -4,6 +4,7 @@
 *.swp
 *log
 docs/build/*
+.mypy_cache
 venv
 examples/minimal
 examples/rav-test

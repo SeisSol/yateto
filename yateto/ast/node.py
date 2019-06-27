@@ -1,8 +1,11 @@
 import re
+from typing import Type, Any
+
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
 from .. import aspp
+
 
 class Node(ABC):
   def __init__(self):
@@ -59,38 +62,31 @@ class Node(ABC):
     pass
 
   def _checkMultipleScalarMults(self):
-    """
-    Checks whether the self object is not a type
-    of ScalarMultiplication. If it is a case, the
-    corresponding exception is raised
+    """Checks whether the self object is not a type
+    of ScalarMultiplication.
 
-    Returns
-    -------
+    If it is a case, the corresponding exception is raised
 
-    Raises
-    -------
-    ValueError
-      Multiple multiplications with scalars are not allowed
+    Raises:
+      ValueError: Multiple multiplications with scalars are not allowed
     """
+
     if isinstance(self, ScalarMultiplication):
       raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
 
 
   def _binOp(self, other, opType):
-    """
-    Combines to objects (self and other) into one binary operation
+    """Combines to objects (self and other) into one binary operation
 
-    Parameters
-    ----------
-    other: an instance of either a derived type Node or Op
-    opType: a class of a derived type Op
-      usually, the class is = Einsum
+    Args:
+      other (Union[Type(Node), Type(Op)]):
+      opType (Type(Op)): usually, it is an instance of Einsum class
 
-    Returns
-    -------
-    obj: opType
-      self, or other, or a new instance opType(self, other)
+    Returns:
+      Type(Op): self, or other, or a new instance opType(self, other)
+
     """
+
     if isinstance(self, opType):
       if isinstance(other, opType):
         # Extend the children of the self object
@@ -159,23 +155,21 @@ class Node(ABC):
 
     return self._binOp(other, Einsum)
   
-  def __rmul__(self, other):
-    """
-    Invokes when the left operand does not how to
+  def __rmul__(self, other: Any):
+    """Invokes when the left operand does not how to
     perform multiplication with an instance of the class Node.
+
     The function delegates multiplication to the function
     responsible for the left multiplication of Tensor with
-    another python object
+    another python object.
 
-    Parameters
-      ----------
-    other : any python object
-      can be any python object which does know how to handle
-      left multiplication with an instance of the class Node
-    Returns
-    -------
-    any derived instance of the class Node
-       e.g. ScalarMultiplication, self or binOp
+    Args:
+      other: any python object which doesn't know how to treat
+             how to treat left multiplication with Type(Node)
+
+    Returns:
+      Type(Node): any derived instance of the class Node
+                  e.g. ScalarMultiplication, self or binOp
     """
     return self.__mul__(other)
   
@@ -199,20 +193,20 @@ class Node(ABC):
       return Assign(self, Einsum(other))
     return Assign(self, other)
 
-class IndexedTensor(Node):
-  def __init__(self, tensor, indexNames):
-    """
-    Saves a passed tensor object as a data member of the class
-    as well as generates an instance of Indices class
-    for the following use
-    NOTE: The default constructor of the supper class
-    inits: self.indices = None, self._children = []
-    and self._eqspp = None
 
-    Parameters
-    ----------
-    tensor : Tensor
-    indexNames : str
+class IndexedTensor(Node):
+  def __init__(self, tensor, indexNames: str):
+    """Saves a passed tensor object as a data member of the class
+    as well as generates an instance of Indices class
+    for the following use.
+
+    The default constructor of the supper class
+    inits: self.indices = None, self._children = []
+    and self._eqspp = None.
+
+    Args:
+      tensor (Tensor):
+      indexNames:
     """
 
     super().__init__()
@@ -308,18 +302,23 @@ class Add(Op):
       nzFlops += child.eqspp().count_nonzero()
     return nzFlops - self.eqspp().count_nonzero()
 
-class UnaryOp(Op):
-  def term(self):
-    """
 
-    Returns
-    -------
-      a derived type of Node: the left (first) child of an tensor unary operation
+class UnaryOp(Op):
+  def term(self) -> Type[Node]:
+    """
+    Returns:
+      the left (first) child of an tensor unary operation
     """
     return self._children[0]
 
+
 class ScalarMultiplication(UnaryOp):
-  def __init__(self, scalar, term):
+  def __init__(self, scalar, term: Type[Node]):
+    """
+    Args:
+      scalar (Scalar):
+      term:
+    """
     super().__init__(term)
     self._isConstant = isinstance(scalar, float) or isinstance(scalar, int)
     self._scalar = float(scalar) if self._isConstant else scalar

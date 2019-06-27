@@ -29,6 +29,8 @@ version = ''
 # The full version, including alpha/beta/rc tags
 release = '1.0'
 
+autodoc_default_flags = ['members', 'undoc-members', 'private-members', 'show-inheritance']
+
 
 # -- General configuration ---------------------------------------------------
 
@@ -45,7 +47,8 @@ extensions = [
     'sphinx.ext.coverage',
     'sphinx.ext.viewcode',
     'sphinx.ext.napoleon',
-    'sphinx.ext.coverage'
+    'sphinx.ext.coverage',
+    'sphinx_autodoc_typehints'
 ]
 
 
@@ -177,6 +180,7 @@ texinfo_documents = [
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
 napoleon_numpy_docstring = True
+napoleon_google_docstring = True
 
 
 def skip(app, what, name, obj, would_skip, options):

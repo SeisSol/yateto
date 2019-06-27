@@ -4,15 +4,14 @@ from .. import aspp
 
 
 class Indices(object):
-  def __init__(self, indexNames='', shape=()):
+  def __init__(self, indexNames: str = '', shape: tuple = ()):
+    """TODO: complete description
+
+    Args:
+      indexNames: each character of a string defines a name of the corresponding index
+      shape: shape of the tensor i.e. sizes of each dimension
     """
-    Parameters
-    ----------
-    indexNames : str
-      each character of a string defines a name of the corresponding index
-    shape : tuple
-      shape of the tensor i.e. sizes of each dimension
-    """
+
     self._indices = tuple(indexNames)
     self._size = dict()
     

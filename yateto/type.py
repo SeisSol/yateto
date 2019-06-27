@@ -1,3 +1,4 @@
+from typing import Tuple
 import re
 from .ast.node import Node, IndexedTensor
 from numpy import ndarray, zeros
@@ -94,34 +95,31 @@ class Tensor(AbstractType):
     self._setSparsityPattern(spp, setOnlyGroupSpp=True)
     self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
 
-  def __getitem__(self, indexNames):
+  def __getitem__(self, indexNames: str) -> IndexedTensor:
     """
     Creates and returns an IndexedTensor node
     initialized with the current tensor object and index names
-    Parameters
-    ----------
-    indexNames : str
-        a string of tensor indices
-    Returns
-    -------
-    IndexedTensor node
+
+    Args:
+      indexNames: a string of tensor indices
+
+    Returns:
+      an instance of IndexedTensor
     """
     return IndexedTensor(self, indexNames)
   
-  def shape(self):
+  def shape(self) -> Tuple[int]:
     """
-    Returns
-    -------
-    tuple
-        shape of the tensor i.e. sizes of each dimension
+    Returns:
+      shape of the tensor i.e. sizes of each dimension
     """
     return self._shape
-  
+
   def memoryLayout(self):
     return self._memoryLayout
   
   @classmethod
-  def getBaseName(cls, name):
+  def getBaseName(cls, name: str):
     return re.match(cls.BASE_NAME, name).group(0)
   
   def baseName(self):

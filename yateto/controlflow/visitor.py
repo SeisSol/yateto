@@ -1,5 +1,4 @@
 from ..ast.visitor import Visitor
-from yateto import Scalar
 from .graph import *
 from ..memory import DenseMemoryLayout
 

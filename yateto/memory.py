@@ -5,6 +5,7 @@ import warnings
 import numpy as np
 from abc import ABC, abstractmethod
 
+
 class MemoryLayout(ABC):
   def __init__(self, shape):
     self._shape = shape
@@ -47,6 +48,7 @@ class MemoryLayout(ABC):
   @abstractmethod
   def isCompatible(self, spp):
     pass
+
 
 class DenseMemoryLayout(MemoryLayout):
   ALIGNMENT_ARCH = None
@@ -244,6 +246,7 @@ class DenseMemoryLayout(MemoryLayout):
 
   def __str__(self):
     return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)
+
 
 class CSCMemoryLayout(MemoryLayout):
   def __init__(self, spp):

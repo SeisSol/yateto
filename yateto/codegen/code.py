@@ -39,6 +39,7 @@
 
 import sys
 
+
 class Block:
   def __init__(self, writer, argument, foot = ''):
     self.writer = writer
@@ -53,6 +54,7 @@ class Block:
   def __exit__(self, type, value, traceback):
     self.writer.indent -= 1
     self.writer('}' + self.foot)
+
 
 class MultiBlock:
   def __init__(self, writer, arguments, foot = ''):
@@ -69,7 +71,8 @@ class MultiBlock:
     for arg in self.arguments:
       self.writer.indent -= 1
       self.writer('}' + self.foot)
-    
+
+
 class HeaderGuard:
   def __init__(self, writer, name):
     self.writer = writer
@@ -81,7 +84,8 @@ class HeaderGuard:
 
   def __exit__(self, type, value, traceback):
     self.writer('#endif')
-    
+
+
 class PPIfBlock:
   def __init__(self, writer, name, typ):
     self.writer = writer
@@ -93,6 +97,7 @@ class PPIfBlock:
 
   def __exit__(self, type, value, traceback):
     self.writer('#endif')
+
 
 class Cpp:
   def __init__(self, streamOrFileName = sys.stdout):

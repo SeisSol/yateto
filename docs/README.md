@@ -1,3 +1,7 @@
+### Install python dependencies in order to work with documentation
+    pip install -r requirements.txt
+
+
 ### How to compile documentation:
 
 Execute the following in order to compile documentation: 

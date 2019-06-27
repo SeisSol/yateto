@@ -2,8 +2,9 @@ import sys
 import functools
 from .. import aspp
 
+
 class Indices(object):
-  def __init__(self, indexNames = '', shape = ()):
+  def __init__(self, indexNames='', shape=()):
     """
     Parameters
     ----------
@@ -106,6 +107,7 @@ class Indices(object):
   def size(self):
     return self._size
 
+
 class Range(object):
   def __init__(self, start, stop):
     self.start = start
@@ -134,7 +136,8 @@ class Range(object):
   
   def __iter__(self):
     return iter(range(self.start, self.stop))
-      
+
+
 class BoundingBox(object):
   def __init__(self, listOfRanges):
     self._box = listOfRanges

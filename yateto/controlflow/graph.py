@@ -1,7 +1,8 @@
 from ..ast.node import Node
 
+
 class Variable(object):
-  def __init__(self, name, writable, memoryLayout, eqspp = None, tensor = None):
+  def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None):
     self.name = name
     self.writable = writable
     self.tensor = tensor
@@ -46,6 +47,7 @@ class Variable(object):
     assert not isEq or (self.writable == other.writable and self._memoryLayout == other._memoryLayout)
     return isEq
 
+
 class Expression(object):
   def __init__(self, node, memoryLayout, variables):
     self.node = node
@@ -81,8 +83,9 @@ class Expression(object):
   def __str__(self):
     return '{}({})'.format(type(self.node).__name__, ', '.join([str(var) for var in self._variables]))
 
+
 class ProgramAction(object):
-  def __init__(self, result, term, add, scalar = None):
+  def __init__(self, result, term, add, scalar=None):
     self.result = result
     self.term = term
     self.add = add
@@ -122,10 +125,11 @@ class ProgramAction(object):
     tsubs = self.term.substituted(when, by, rsubs.memoryLayout()) if term else self.term
     return ProgramAction(rsubs, tsubs, self.add, self.scalar)
 
+
 class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
     self.live = None
     self.initBuffer = None
     self.bufferMap = None
-    
+

@@ -3,7 +3,8 @@
 .vscode
 *.swp
 *log
-examples/minimal
 docs/build/*
-examples/rav-test
 venv
+examples/minimal
+examples/rav-test
+examples/rav-minimal.py

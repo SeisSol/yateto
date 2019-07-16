@@ -226,7 +226,8 @@ class Generator(object):
                 outputDir: str,
                 namespace = 'yateto',
                 gemm_cfg: GeneratorCollection = None,
-                costEstimator = BoundingBoxCostEstimator):
+                costEstimator = BoundingBoxCostEstimator,
+                include_tensors = set()):
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
@@ -313,6 +314,8 @@ class Generator(object):
         cache.generate(header, fRoutines.cpp)
     
     tensors = dict()
+    for tensor in include_tensors:
+      tensors[tensor.name()] = tensor
     for kernel in self._kernels:
       tensors.update( FindTensors().visit(kernel.ast) )
     for family in self._kernelFamilies.values():

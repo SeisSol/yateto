@@ -10,15 +10,35 @@ class GemmGen(object):
     self._descr = descr
     self._gemm_cfg = gemm_cfg
     self._mode = gemm_cfg.operation_name
- 
+
+  def _is_special(self, value, specials):
+    result = 'generic'
+    try:
+      candidate = int(value)
+      if candidate in specials:
+        result = candidate
+    except:
+      pass
+    return result
+
+  def _alpha(self, alpha):
+    return self._is_special(alpha, {1})
+
+  def _beta(self, beta):
+    return self._is_special(beta, {0,1})
+
   def generateRoutineName(self, gemm, spp):
     name = self._gemm_cfg.operation_name
     if spp is not None:
       sha = hashlib.md5()
       sha.update(str(spp).encode())
       name += 'sparse_' + sha.hexdigest()
-    alpha = '1' if gemm['alpha'] == 1 else '_1'
-    return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{beta}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(name=name, alphaSubs=alpha, **gemm)
+    return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(
+      name=name,
+      alphaSubs=self._alpha(gemm['alpha']),
+      betaSubs=self._beta(gemm['beta']),
+      **gemm
+    )
   
   def _pointer(self, term, offset2, transpose):
     if transpose:
@@ -72,8 +92,8 @@ class GemmGen(object):
         'LDA':          ldA,
         'LDB':          ldB,
         'LDC':          ldC,
-        'alpha':        int(d.alpha),
-        'beta':         int(d.beta),
+        'alpha':        self._alpha(d.alpha),
+        'beta':         self._beta(d.beta),
         'alignedA':     int(d.alignedA),
         'alignedC':     int(d.alignedC),
         'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly'
@@ -87,8 +107,8 @@ class GemmGen(object):
           self._pointer(d.leftTerm, (m.start, k.start), d.transA),
           self._pointer(d.rightTerm, (k.start, n.start), d.transB),
           self._pointer(d.result, (m.start, n.start), False),
-          gemm['alpha'],
-          gemm['beta'],
+          str(d.alpha),
+          str(d.beta),
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
       else:

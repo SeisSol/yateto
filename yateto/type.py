@@ -1,6 +1,6 @@
 import re
 from .ast.node import Node, IndexedTensor
-from numpy import ndarray, zeros
+from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
 from . import aspp
 
@@ -112,7 +112,15 @@ class Tensor(AbstractType):
   
   def values(self):
     return self._values
-  
+
+  def values_as_ndarray(self, dtype=float64):
+    A = None
+    if self._values:
+      A = zeros(self._shape, dtype=dtype, order=aspp.general.NUMPY_DEFAULT_ORDER)
+      for multiIndex, value in self._values.items():
+        A[multiIndex] = value
+    return A
+
   def __eq__(self, other):
     equal = self._name == other._name
     if equal:

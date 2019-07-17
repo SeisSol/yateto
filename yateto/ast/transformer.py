@@ -1,6 +1,7 @@
 import sys
+from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern
-from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction
+from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -9,26 +10,27 @@ from .. import aspp
 
 # Similar as ast.NodeTransformer
 class Transformer(Visitor): 
-  def generic_visit(self, node):
-    newChildren = [self.visit(child) for child in node]
+  def generic_visit(self, node, **kwargs):
+    newChildren = [self.visit(child, **kwargs) for child in node]
     node.setChildren(newChildren)
     return node
 
 class DeduceIndices(Transformer):
-  def __init__(self, targetIndices=None):
-    self._targetIndices = targetIndices
+  def __init__(self, targetIndices: Union[str, Indices] = None):
+    self._targetIndices = None
+    if isinstance(targetIndices, str):
+      self._targetIndices = lambda indices: indices.permuted(targetIndices)
+    elif isinstance(targetIndices, Indices):
+      self._targetIndices = lambda indices: targetIndices
   
-  def visit(self, node):
-    if self._targetIndices:
-      if isinstance(node, Einsum) or isinstance(node, Add):
-        node.indices = self._targetIndices
-      else:
-        raise ValueError('Setting target indices in DeduceIndices is only allowed if the root node is of type Add or Einsum.')
-      self._targetIndices = None
-    return super().visit(node)
+  def visit(self, node, root=True):
+    if self._targetIndices and root:
+      if not (isinstance(node, Einsum) or isinstance(node, Add) or isinstance(node, ScalarMultiplication)):
+        raise ValueError('Setting target indices in DeduceIndices is only allowed if the root node is of type Add, Einsum, or ScalarMultiplication.')
+    return super().visit(node, root=root)
 
-  def visit_Einsum(self, node):
-    self.generic_visit(node)
+  def visit_Einsum(self, node, root):
+    self.generic_visit(node, root=False)
 
     g = Indices()
     contractions = set()
@@ -41,13 +43,18 @@ class DeduceIndices(Transformer):
       contractions.update(overlap)
 
     deduced = g - contractions
+    if self._targetIndices and root:
+      node.indices = self._targetIndices(deduced)
     if node.indices == None:
       node.indices = deduced.sorted()
     elif not node.indices <= g:
       raise ValueError('Einsum: Indices are not contained in deduced indices or sizes do not match. [{} not contained in {}]'.format(node.indices.__repr__(), deduced.__repr__()))
     return node
   
-  def visit_Add(self, node):
+  def visit_Add(self, node, root):
+    if self._targetIndices and root:
+      node.indices = self._targetIndices(node[0].indices)
+
     if node.indices == None:
       for child in node:
         if child.fixedIndexPermutation():
@@ -57,7 +64,7 @@ class DeduceIndices(Transformer):
     for child in node:
       if not child.fixedIndexPermutation():
         child.indices = node.indices
-      self.visit(child)
+      self.visit(child, root=False)
 
     ok = all([node[0].indices == child.indices for child in node])
     if not ok:
@@ -76,15 +83,15 @@ class DeduceIndices(Transformer):
       else:
         raise ValueError('Index dimensions do not match: {} != {}'.format(node.indices.__repr__(), term.indices.__repr__()))
   
-  def visit_ScalarMultiplication(self, node):
+  def visit_ScalarMultiplication(self, node, root):
     if node.indices is not None:
       self._setSingleChildIndices(node, node.term())
-    self.visit(node.term())
+    self.visit(node.term(), root)
     if node.indices is None:
       node.indices = node.term().indices
     return node
 
-  def visit_Assign(self, node):
+  def visit_Assign(self, node, root):
     lhs = node[0]
     rhs = node[1]
     
@@ -94,7 +101,7 @@ class DeduceIndices(Transformer):
     node.indices = lhs.indices
 
     self._setSingleChildIndices(node, rhs)
-    self.visit(rhs)
+    self.visit(rhs, root=False)
     return node
 
 ### Optimal binary tree

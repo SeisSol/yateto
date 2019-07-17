@@ -229,7 +229,10 @@ class ScalarMultiplication(UnaryOp):
 
   def name(self):
     return str(self._scalar) if self._isConstant else self._scalar.name()
-  
+
+  def is_constant(self):
+    return self._isConstant
+
   def scalar(self):
     return self._scalar
   

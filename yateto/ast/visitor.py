@@ -1,4 +1,4 @@
-from numpy import ndindex, arange
+from numpy import ndindex, arange, float64, add, einsum
 import math
 import collections
 import itertools
@@ -7,6 +7,7 @@ import os.path
 from .node import Op
 from .indices import LoGCost
 from .log import LoG
+from functools import reduce
 
 # Optional modules
 import importlib.util
@@ -232,3 +233,34 @@ class FindPrefetchCapabilities(Visitor):
     sizes = self.generic_visit(node)
     sizes[node] = node.memoryLayout().requiredReals()
     return sizes
+
+class ComputeConstantExpression(Visitor):
+  def __init__(self, dtype = float64):
+    self._dtype = dtype
+
+  def generic_visit(self, node):
+    return [self.visit(child) for child in node]
+
+  def visit_Einsum(self, node):
+    terms = self.generic_visit(node)
+    childIndices = [child.indices for child in node]
+    assert None not in childIndices and node.indices is not None, 'Use DeduceIndices before {}.'.format(self.__class__.__name__)
+    einsumDescription = ','.join([indices.tostring() for indices in childIndices])
+    einsumDescription = '{}->{}'.format(einsumDescription, node.indices.tostring())
+    return einsum(einsumDescription, *terms)
+
+  def visit_Add(self, node):
+    terms = self.generic_visit(node)
+    assert len(terms) > 1
+    return reduce(add, terms)
+
+  def visit_ScalarMultiplication(self, node):
+    assert node.is_constant() is not None, '{} may only be used when all involved scalars are constant.'.format(self.__class__.__name__)
+    terms = self.generic_visit(node)
+    assert len(terms) == 1
+    return node.scalar() * terms[0]
+
+  def visit_IndexedTensor(self, node):
+    term = node.tensor.values_as_ndarray(self._dtype)
+    assert term is not None, '{} may only be used when all involved tensors are constant.'.format(self.__class__.__name__)
+    return term

@@ -9,3 +9,8 @@ venv
 examples/minimal
 examples/rav-test
 examples/rav-minimal.py
+
+examples/minimal-gpu
+examples/matmul-gpu
+examples/ader
+examples/ader-gpu

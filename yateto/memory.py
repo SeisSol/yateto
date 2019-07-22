@@ -151,6 +151,8 @@ class DenseMemoryLayout(MemoryLayout):
     return size
   
   def addressString(self, indices, I = None):
+    if len(self._bbox) == 0:
+      return '0'
     if I is None:
       I = set(indices)
     positions = indices.positions(I)

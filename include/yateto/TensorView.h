@@ -227,6 +227,30 @@ namespace yateto {
   };
 
   template<typename real_t, typename uint_t>
+  class DenseTensorView<0,real_t,uint_t> : public TensorView<0, real_t, uint_t> {
+  public:
+    explicit DenseTensorView(real_t* values, std::initializer_list<uint_t> shape, std::initializer_list<uint_t> start, std::initializer_list<uint_t> stop)
+      : TensorView<0, real_t, uint_t>(shape), m_values(values) {
+    }
+
+    uint_t size() const {
+      return 1;
+    }
+
+    void setZero() {
+      m_values[0] = 0.0;
+    }
+
+    template<class view_t>
+    void copyToView(view_t& other) {
+      other.m_values[0] = m_values[0];
+    }
+
+  protected:
+    real_t* m_values;
+  };
+
+  template<typename real_t, typename uint_t>
   class CSCMatrixView : public TensorView<2, real_t, uint_t> {
   public:
     explicit CSCMatrixView(real_t* values, std::initializer_list<uint_t> shape, uint_t const* rowInd, uint_t const* colPtr)

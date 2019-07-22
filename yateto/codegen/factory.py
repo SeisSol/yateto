@@ -115,6 +115,7 @@ class UnitTestFactory(KernelFactory):
   def __init__(self, cpp, arch, nameFun):
     super().__init__(cpp, arch)
     self._name = nameFun
+    self._rand = 0
 
   def _formatTerm(self, var, indices):
     address = var.memoryLayout().addressString(indices)
@@ -194,13 +195,14 @@ class UnitTestFactory(KernelFactory):
     if isDense:
       self.temporary(resultName, size)
       with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
-        self._cpp('{}[i] = static_cast<{}>(i % {} + 1);'.format(resultName, self._arch.typename, maxValue))
+        self._cpp('{}[i] = static_cast<{}>((i + {}) % {} + 1);'.format(resultName, self._arch.typename, self._rand, maxValue))
     else:
       memory = ['0.0']*size
       nz = spp.nonzero()
       for entry in zip(*nz):
         addr = ml.address(entry)
-        memory[addr] = str(float(addr % maxValue)+1.0)
+        memory[addr] = str(float((addr + self._rand) % maxValue)+1.0)
       self.temporary(resultName, size, memory=memory)
+    self._rand += 1
 
 

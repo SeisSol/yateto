@@ -156,12 +156,13 @@ class Op(Node):
 
   def computeMemoryLayout(self):
     alignStride = False
-    for child in self:
-      if self.indices[0] in child.indices:
-        position = child.indices.find(self.indices[0])
-        if child.memoryLayout().mayVectorizeDim(position):
-          alignStride = True
-          break
+    if len(self.indices) > 0:
+      for child in self:
+        if self.indices[0] in child.indices:
+          position = child.indices.find(self.indices[0])
+          if child.memoryLayout().mayVectorizeDim(position):
+            alignStride = True
+            break
     self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride)
 
   def fixedIndexPermutation(self):

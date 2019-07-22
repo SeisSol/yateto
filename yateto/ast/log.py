@@ -42,10 +42,10 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   C = I.indices.tostring()
 
   candidates = list()
-  requiredIndices = set([A[0], B[0], C[0]])
-  if C[0] in set(B):
-    B, A = A, B
-    R, L = L, R
+  if len(C) > 0:
+    if C[0] in set(B):
+      B, A = A, B
+      R, L = L, R
   Icommon = set(A) & set(B) & set(C)
   Im = (set(A) & set(C)) - Icommon
   In = (set(B) & set(C)) - Icommon

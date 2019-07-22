@@ -84,7 +84,7 @@ class dense(ASpp):
 
   @staticmethod
   def einsum(description, a1, a2):
-    p = re.match('(\w+),(\w+)->(\w+)', description)
+    p = re.match('(\w+),(\w+)->(\w*)', description)
     if p:
       A = p.group(1)
       B = p.group(2)

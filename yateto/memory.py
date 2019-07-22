@@ -145,6 +145,8 @@ class DenseMemoryLayout(MemoryLayout):
     return self._bbox[dim]
 
   def requiredReals(self):
+    if len(self._bbox) == 0:
+      return 1
     size = self._bbox[-1].size() * self._stride[-1]
     return size
   

@@ -418,8 +418,9 @@ class InitializerGenerator(object):
         )
       )
     def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
-      cpp(self.formatArray(numberType, namespace + self.START_NAME + index, [r.start for r in memLayout.bbox()], declarationOnly))
-      cpp(self.formatArray(numberType, namespace + self.STOP_NAME + index, [r.stop for r in memLayout.bbox()], declarationOnly))
+      if memLayout.shape():
+        cpp(self.formatArray(numberType, namespace + self.START_NAME + index, [r.start for r in memLayout.bbox()], declarationOnly))
+        cpp(self.formatArray(numberType, namespace + self.STOP_NAME + index, [r.stop for r in memLayout.bbox()], declarationOnly))
 
   class CSCMatrixView(TensorView):
     ROWIND_NAME = 'RowInd'

@@ -593,6 +593,8 @@ class InitializerGenerator(object):
 
     isArray = alwaysArray or maxLen > 1
     arrayIndices = '[{}]'.format(maxLen) if isArray else ''
+    if maxLen == 0:
+      return
     
     if declarationOnly:
       cpp('{}{} {}{}{};'.format(cexpr, typ, name, groupIndices, arrayIndices))

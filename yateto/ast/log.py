@@ -66,6 +66,8 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   NC = CN & BN
   KC = AK & BK
 
+  if MC == set():
+    MC = ['']
   if NC == set():
     NC = ['']
 

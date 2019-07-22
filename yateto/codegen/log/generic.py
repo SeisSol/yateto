@@ -1,6 +1,7 @@
 from ...ast.indices import Indices
 from ..common import *
 from .. import gemm
+from ...memory import DenseMemoryLayout
 
 class Generic(object):
   def __init__(self, arch, descr):
@@ -20,8 +21,12 @@ class Generic(object):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices)
     
   def _memLayout(self, term, I, J):
-    assert len(I) > 0
-    if len(J) == 0:
+    if len(I) == 0 and len(J) == 0:
+      return DenseMemoryLayout((1,1))
+    elif len(I) == 0:
+      ml = term.memoryLayout.vec(term.indices, J)
+      return ml.withDummyDimension()
+    elif len(J) == 0:
       ml = term.memoryLayout.vec(term.indices, I)
       return ml.withDummyDimension()
     elif len(term.indices) == 2:

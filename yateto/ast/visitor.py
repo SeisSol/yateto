@@ -14,8 +14,12 @@ import importlib.util
 mplSpec = importlib.util.find_spec('matplotlib')
 pltSpec = importlib.util.find_spec('matplotlib.pylab') if mplSpec else None
 colorsSpec = importlib.util.find_spec('matplotlib.colors') if mplSpec else None
-if pltSpec:
-  plt = pltSpec.loader.load_module()
+try:
+  if pltSpec:
+    plt = pltSpec.loader.load_module()
+except:
+  print('An exception occured trying to load matplotlib. This can be ignored in most cases')
+  plt = None
 if colorsSpec:
   colors = colorsSpec.loader.load_module()
 

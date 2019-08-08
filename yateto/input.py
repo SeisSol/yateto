@@ -4,6 +4,7 @@ import json
 from . import Collection, Tensor
 from .memory import CSCMemoryLayout, DenseMemoryLayout
 from . import aspp
+from .util import create_collection
 
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')
@@ -12,24 +13,6 @@ if etreeSpec:
   etree = etreeSpec.loader.load_module()
 else:
   etree = importlib.util.find_spec('xml.etree.ElementTree').loader.load_module()
-
-def __createCollection(matrices):
-  maxIndex = dict()
-  collection = Collection()
-  for name, matrix in matrices.items():
-    if not Tensor.isValidName(name):
-      raise ValueError('Illegal matrix name', name, 'in', xmlFile)
-    baseName = Tensor.getBaseName(name)
-    group = Collection.group(name)
-    if group is tuple():
-      collection[baseName] = matrix
-    else:
-      if baseName in collection:
-        collection[baseName][group] = matrix
-      else:
-        collection[baseName] = {group: matrix}
-
-  return collection
 
 def __transposeMatrix(matrix):
   matrixT = dict()
@@ -85,7 +68,7 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, ali
     else:
       __complain(node)
 
-  return __createCollection(matrices)
+  return create_collection(matrices)
 
 def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False):
   matrices = dict()
@@ -98,7 +81,7 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
         entries = [(entry[0], entry[1], True) for entry in entries]
       matrices.update( __processMatrix(m['name'], m['rows'], m['columns'], entries, clones, transpose, alignStride) )
 
-  return __createCollection(matrices)
+  return create_collection(matrices)
 
 def memoryLayoutFromFile(xmlFile, db, clones):
   tree = etree.parse(xmlFile)

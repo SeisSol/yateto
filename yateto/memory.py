@@ -150,7 +150,7 @@ class DenseMemoryLayout(MemoryLayout):
     size = self._bbox[-1].size() * self._stride[-1]
     return size
   
-  def addressString(self, indices, I = None):
+  def addressString(self, indices, I = None, prefix='_'):
     if len(self._bbox) == 0:
       return '0'
     if I is None:
@@ -159,9 +159,9 @@ class DenseMemoryLayout(MemoryLayout):
     a = list()
     for p in positions:
       if self._bbox[p].start != 0:
-        a.append('{}*({}-{})'.format(self._stride[p], indices[p], self._bbox[p].start))
+        a.append('{}*({}{}-{})'.format(self._stride[p], prefix, indices[p], self._bbox[p].start))
       else:
-        a.append('{}*{}'.format(self._stride[p], indices[p]))
+        a.append('{}*{}{}'.format(self._stride[p], prefix, indices[p]))
     return ' + '.join(a)
 
   def isAlignedAddressString(self, indices, I = None):

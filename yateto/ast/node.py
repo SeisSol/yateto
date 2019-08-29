@@ -347,14 +347,27 @@ class LoopOverGEMM(BinOp):
     self._m = m
     self._n = n
     self._k = k
-    self._transA = self.isDOT() or aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
-    self._transB = not self.isGEMV() and bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
+    """ If dim(m) == 0, then A is a vector or scalar. In the case of a vector, the memory layout
+        is artificially extended to be a k x 1 matrix. If A is a scalar (dim(n) == 0),
+        then the memory layout is a 1 x 1 matrix.
+        The same is true for B and dim(n) == 0.
 
-  def isGEMV(self):
-    return len(self._n) == 0
+        We have the following four cases:
+        dim(m) == 0 and dim(n) == 0: (1 x 1) = (k x 1) * (k x 1)
+            => Transpose A, do not transpose B (DOT)
+        dim(m) == 0 and dim(n) != 0: (1 x n) = (k x 1) * (k x n or n x k)
+            => Transpose A, transpose B if n precedes k (GEMV)
+        dim(m) != 0 and dim(n) == 0: (m x 1) = (m x k or k x n) * (n x 1)
+            => Transpose A if k precedes m, do not transpose B (GEMV)
+        dim(m) != 0 and dim(n) != 0: (m x k) = (m x k or k x n) * (k x n or n x k)
+            => Transpose A if k precedes m, transpose B if n precedes k (GEMM)
+    """
+    self._transA = self.hasDimensionZero(m) or aTerm.indices.find(m[0]) > aTerm.indices.find(k[0])
+    self._transB = not self.hasDimensionZero(n) and bTerm.indices.find(k[0]) > bTerm.indices.find(n[0])
 
-  def isDOT(self):
-    return self.isGEMV() and len(self._m) == 0
+  @staticmethod
+  def hasDimensionZero(x):
+    return len(x) == 0
 
   def nonZeroFlops(self):
     p = Product(self.leftTerm(), self.rightTerm())

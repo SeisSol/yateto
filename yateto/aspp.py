@@ -84,7 +84,7 @@ class dense(ASpp):
 
   @staticmethod
   def einsum(description, a1, a2):
-    p = re.match('(\w+),(\w+)->(\w*)', description)
+    p = re.match('(\w*),(\w*)->(\w*)', description)
     if p:
       A = p.group(1)
       B = p.group(2)
@@ -93,7 +93,7 @@ class dense(ASpp):
       sz2 = {i: a2.shape[B.find(i)] for i in B}
       intersect = filter(lambda x: x in sz1, sz2.keys())
       assert all([sz1[i] == sz2[i] for i in intersect])    
-      sz1.update(sz2)  
+      sz1.update(sz2)
       return dense(tuple(sz1[i] for i in C))
     else:
       raise ValueError(description + ' not understood.')

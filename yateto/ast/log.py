@@ -1,4 +1,4 @@
-import copy
+import copy, re
 from .node import LoopOverGEMM
 from .indices import LoGCost
 
@@ -41,12 +41,12 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   B = R.indices.tostring()
   C = I.indices.tostring()
 
-  candidates = list()
-  if len(C) > 0:
-    if C[0] in set(B):
+  Icommon = set(A) & set(B) & set(C)
+  C_gemm = re.sub(r'[{}]'.format(Icommon), '', C) # delete indices in Icommon
+  if len(C_gemm) > 0:
+    if C_gemm[0] in set(B):
       B, A = A, B
       R, L = L, R
-  Icommon = set(A) & set(B) & set(C)
   Im = (set(A) & set(C)) - Icommon
   In = (set(B) & set(C)) - Icommon
   Ik = (set(A) & set(B)) - Icommon

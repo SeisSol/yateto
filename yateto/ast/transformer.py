@@ -57,6 +57,7 @@ class DeduceIndices(Transformer):
       node.indices = self._targetIndices(node[0].indices)
 
     for child in node:
+      self._setSingleChildIndices(node, child, True)
       self.visit(child, root=False)
 
     ok = all([node[0].indices <= child.indices and child.indices <= node[0].indices for child in node])
@@ -71,16 +72,17 @@ class DeduceIndices(Transformer):
       raise ValueError('Add: {} is not a equal to {}'.format(node.indices.__repr__(), node[0].indices.__repr__()))
     return node
   
-  def _setSingleChildIndices(self, node, term):
+  def _setSingleChildIndices(self, node, term, allowPermutation):
     if term.indices != node.indices:
-      if term.indices is None or (not term.fixedIndexPermutation() and term.indices <= node.indices and node.indices <= term.indices):
+      mayNotPermute = not allowPermutation and term.fixedIndexPermutation()
+      if term.indices is None:
         term.indices = node.indices
-      else:
+      elif mayNotPermute or not (term.indices <= node.indices and node.indices <= term.indices):
         raise ValueError('Index dimensions do not match: {} != {}'.format(node.indices.__repr__(), term.indices.__repr__()))
   
   def visit_ScalarMultiplication(self, node, root):
     if node.indices is not None:
-      self._setSingleChildIndices(node, node.term())
+      self._setSingleChildIndices(node, node.term(), False)
     self.visit(node.term(), root)
     if node.indices is None:
       node.indices = node.term().indices
@@ -95,10 +97,8 @@ class DeduceIndices(Transformer):
 
     node.indices = lhs.indices
 
+    self._setSingleChildIndices(node, rhs, True)
     self.visit(rhs, root=False)
-
-    if not (rhs.indices <= lhs.indices and lhs.indices <= rhs.indices):
-      raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
 
     return node
 

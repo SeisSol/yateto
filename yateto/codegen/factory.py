@@ -100,6 +100,17 @@ class OptimisedKernelFactory(KernelFactory):
     )
     generator = product.generator(self._arch, description)
     return generator.generate(self._cpp, routineCache)
+
+  def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    term = arguments[0]
+    description = copyscaleadd.Description(
+      alpha = scalar,
+      beta = 1.0 if add else 0.0,
+      result = IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()),
+      term = IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())
+    )
+    generator = copyscaleadd.generator(self._arch, description)
+    return generator.generate(self._cpp, routineCache)
   
   def simple(self, result, term, add, scalar, routineCache):
     description = copyscaleadd.Description(
@@ -147,23 +158,32 @@ class UnitTestFactory(KernelFactory):
   def create_ScalarMultiplication(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     return self.simple(result, arguments[0], add, scalar, routineCache)
 
-  def simple(self, result, term, add, scalar, routineCache):
-    g = self._indices(result)
-    
-    ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
-    
-    resultTerm = self._formatTerm(result, g)
-    termTerm = self._formatTerm(term, g)
+  def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert node.indices <= node.term().indices and node.term().indices <= node.indices
+    resultTerm = self._formatTerm(result, node.indices)
+    termTerm = self._formatTerm(arguments[0], node.term().indices)
+    return self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)
+
+  def _simpleBody(self, resultTerm, termTerm, add, scalar, indices):
+    ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
 
     if scalar and scalar != 1.0:
       termTerm = '{} * {}'.format(scalar, termTerm)
-    
+
     class AssignBody(object):
       def __call__(s):
         self._cpp( '{} {} {};'.format(resultTerm, '+=' if add else '=', termTerm) )
         return 1 if add else 0
 
-    return forLoops(self._cpp, g, ranges, AssignBody(), pragmaSimd=False)
+    return forLoops(self._cpp, indices, ranges, AssignBody(), pragmaSimd=False)
+
+  def simple(self, result, term, add, scalar, routineCache):
+    g = self._indices(result)
+
+    resultTerm = self._formatTerm(result, g)
+    termTerm = self._formatTerm(term, g)
+
+    return self._simpleBody(resultTerm, termTerm, add, scalar, g)
 
   def compare(self, ref, target, epsMult = 100.0):
     g = self._indices(ref)

@@ -1,4 +1,5 @@
 import sys
+from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern
 from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication
@@ -55,24 +56,18 @@ class DeduceIndices(Transformer):
     if self._targetIndices and root:
       node.indices = self._targetIndices(node[0].indices)
 
-    if node.indices == None:
-      for child in node:
-        if child.fixedIndexPermutation():
-          node.indices = child.indices
-          break
-
     for child in node:
-      if not child.fixedIndexPermutation():
-        child.indices = node.indices
       self.visit(child, root=False)
 
-    ok = all([node[0].indices == child.indices for child in node])
+    ok = all([node[0].indices <= child.indices and child.indices <= node[0].indices for child in node])
     if not ok:
       raise ValueError('Add: Indices do not match: ', *[child.indices for child in node])
 
     if node.indices == None:
+      node.indices = deepcopy(node[0].indices)
+    if node.indices == None:
       node.indices = node[0].indices
-    elif node.indices != node[0].indices:
+    elif not (node.indices <= node[0].indices and node[0].indices <= node.indices):
       raise ValueError('Add: {} is not a equal to {}'.format(node.indices.__repr__(), node[0].indices.__repr__()))
     return node
   
@@ -100,8 +95,11 @@ class DeduceIndices(Transformer):
 
     node.indices = lhs.indices
 
-    self._setSingleChildIndices(node, rhs)
     self.visit(rhs, root=False)
+
+    if not (rhs.indices <= lhs.indices and lhs.indices <= rhs.indices):
+      raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
+
     return node
 
 ### Optimal binary tree
@@ -194,8 +192,7 @@ class EquivalentSparsityPattern(Transformer):
   
   def visit_Assign(self, node):
     self.generic_visit(node)
-    assert isinstance(node[1].eqspp(), aspp.ASpp)
-    node.setEqspp(node[1].eqspp())
+    node.setEqspp( node.computeSparsityPattern() )
     return node
   
   def getEqspp(self, terms, targetIndices):
@@ -217,7 +214,7 @@ class EquivalentSparsityPattern(Transformer):
     
     for child in node:
       child.setEqspp( self.getEqspp(terms, child.indices) )
-      
+
     # TODO: Backtracking of equivalent sparsity pattern to children?
 
     return node

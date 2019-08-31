@@ -58,6 +58,10 @@ class Node(ABC):
   def setIndexPermutation(self, indices, permuteEqspp=True):
     pass
 
+  def permute(self, indices, spp):
+    perm = tuple([indices.find(idx) for idx in self.indices])
+    return spp.transposed(perm)
+
   def _checkMultipleScalarMults(self):
     if isinstance(self, ScalarMultiplication):
       raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
@@ -107,8 +111,6 @@ class Node(ABC):
     return self._binOp(-other, Add)
     
   def __le__(self, other):
-    if isinstance(other, IndexedTensor) and not (self == other):
-      return Assign(self, Einsum(other))
     return Assign(self, other)
 
 class IndexedTensor(Node):
@@ -198,7 +200,8 @@ class Add(Op):
       spps = [node.eqspp() for node in self]
     spp = spps[0]
     for i in range(1, len(spps)):
-      spp = aspp.add(spp, spps[i])
+      add_spp = self.permute(self[i].indices, spps[i])
+      spp = aspp.add(spp, add_spp)
     return spp
   
   def nonZeroFlops(self):
@@ -276,10 +279,21 @@ class Assign(BinOp):
     return 0
   
   def computeSparsityPattern(self, *spps):
-    if len(spps) == 0:
-      return self.rightTerm().eqspp()
-    assert len(spps) == 2
-    return spps[1]
+    spp = spps[1] if len(spps) == 2 else self.rightTerm().eqspp()
+    return self.permute(self.rightTerm().indices, spp)
+
+class Permute(UnaryOp):
+  def __init__(self, term, targetIndices):
+    super().__init__(term)
+    self.indices = targetIndices
+
+  def nonZeroFlops(self):
+    return 0
+
+  def computeSparsityPattern(self, *spps):
+    assert len(spps) <= 1
+    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    return self.permute(self.term().indices, spp)
 
 def _productContractionLoGSparsityPattern(node, *spps):
   if len(spps) == 0:

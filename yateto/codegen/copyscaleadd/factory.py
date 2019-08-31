@@ -10,11 +10,11 @@ class Description(object):
     
     assert self.alpha != 0.0, 'copyscaleadd does not support alpha=0.0 at the moment.'
     assert self.beta == 1.0 or self.beta == 0.0, 'copyscaleadd supports only beta=0.0 or beta=1.0 at the moment.'
-    
-    assert self.result.indices == self.term.indices
+ 
     rA = loopRanges(self.term, self.term.indices)
     rB = loopRanges(self.result, self.result.indices)
     assert testLoopRangesAContainedInB(rA, rB)
+    assert self.term.indices <= self.result.indices and self.result.indices <= self.term.indices
     
     self.loopRanges = rA
     

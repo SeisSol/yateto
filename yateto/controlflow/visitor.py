@@ -2,6 +2,7 @@ from ..ast.visitor import Visitor
 from yateto import Scalar
 from .graph import *
 from ..memory import DenseMemoryLayout
+from ..ast.node import Permute
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
@@ -17,7 +18,19 @@ class AST2ControlFlow(Visitor):
 
   def _ml(self, node):
     return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()
-    
+
+  def _addPermuteIfRequired(self, indices, term, variable):
+    if indices != term.indices:
+      permute = Permute(term, indices)
+      if not self._simpleMemoryLayout:
+        permute.setEqspp( permute.computeSparsityPattern() )
+        permute.computeMemoryLayout()
+      result = self._nextTemporary(permute)
+      action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
+      self._addAction(action)
+      return result
+    return variable
+
   def generic_visit(self, node):
     variables = [self.visit(child) for child in node]
     
@@ -35,8 +48,9 @@ class AST2ControlFlow(Visitor):
 
     tmp = self._nextTemporary(node)
     add = False
-    for var in variables:
-      action = ProgramAction(tmp, var, add)
+    for i,var in enumerate(variables):
+      rhs = self._addPermuteIfRequired(node.indices, node[i], var)
+      action = ProgramAction(tmp, rhs, add)
       self._addAction(action)
       add = True
     
@@ -55,7 +69,8 @@ class AST2ControlFlow(Visitor):
     self._writable = self._writable | {node[0].name()}
     variables = [self.visit(child) for child in node]
 
-    action = ProgramAction(variables[0], variables[1], False)
+    rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), variables[1])
+    action = ProgramAction(variables[0], rhs, False)
     self._addAction(action)
     
     return variables[0]

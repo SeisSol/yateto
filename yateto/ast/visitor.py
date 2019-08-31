@@ -93,15 +93,18 @@ class FindIndexPermutations(Visitor):
   def variantsFixedRootPermutation(self, node, fixedPerm, permutationVariants):
     variants = dict()
     feasible = True
-    cost = LoGCost.addIdentity()
-    for child in node:
-      if fixedPerm in permutationVariants[child]:
-        cost = cost + permutationVariants[child][fixedPerm]._cost
-      else:
-        feasible = False
-        break
-    if feasible:
-      variants[fixedPerm] = self.Variant(cost, [fixedPerm] * len(node))
+    minCost = LoGCost()
+    minInd = None
+    for childPerms in itertools.product(*[permutationVariants[child] for child in node]):
+      cost = LoGCost.addIdentity()
+      for i, childPerm in enumerate(childPerms):
+        transpose = int(fixedPerm != childPerm)
+        cost = cost + permutationVariants[ node[i] ][childPerm]._cost + LoGCost(0,transpose,0,0)
+      if cost < minCost:
+        minCost = cost
+        minInd = childPerms
+    assert minInd is not None
+    variants[fixedPerm] = self.Variant(cost, list(minInd))
     return variants
 
   def allPermutationsNoCostBinaryOp(self, node):
@@ -268,7 +271,8 @@ class ComputeConstantExpression(Visitor):
   def visit_Add(self, node):
     terms = self.generic_visit(node)
     assert len(terms) > 1
-    return reduce(add, terms)
+    permute = lambda indices, tensor: tensor.transpose(tuple([indices.find(idx) for idx in node.indices]))
+    return reduce(add, [permute(child.indices, terms[i]) for i,child in enumerate(node)])
 
   def visit_ScalarMultiplication(self, node):
     assert node.is_constant() is not None, '{} may only be used when all involved scalars are constant.'.format(self.__class__.__name__)

@@ -149,7 +149,19 @@ class FindIndexPermutations(Visitor):
     return self.allPermutationsNoCostBinaryOp(node)
     
   def visit_IndexSum(self, node):
-    return self.allPermutationsNoCostBinaryOp(node)
+    permutationVariants = self.findVariants(node)
+    tV = permutationVariants[node.term()]
+    minCost = LoGCost()
+    minTind = None
+    for Tind in sorted(tV):
+        cost = tV[Tind]._cost
+        if cost < minCost:
+            minCost = cost
+            minTind = Tind
+    assert minTind is not None
+    iterator = itertools.permutations(node.indices)
+    permutationVariants[node] = {''.join(Cs): self.Variant(minCost, [minTind]) for Cs in iterator}
+    return permutationVariants
 
   def visit_Contraction(self, node):
     permutationVariants = self.findVariants(node)

@@ -41,8 +41,11 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   B = R.indices.tostring()
   C = I.indices.tostring()
 
+
   Icommon = set(A) & set(B) & set(C)
-  C_gemm = re.sub(r'[{}]'.format(Icommon), '', C) # delete indices in Icommon
+  C_gemm = C
+  if Icommon:
+    C_gemm = re.sub(r'[{}]'.format(''.join(Icommon)), '', C_gemm) # delete indices in Icommon
   if len(C_gemm) > 0:
     if C_gemm[0] in set(B):
       B, A = A, B

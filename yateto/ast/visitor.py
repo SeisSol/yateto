@@ -103,18 +103,22 @@ class FindIndexPermutations(Visitor):
   
   def variantsFixedRootPermutation(self, node, fixedPerm, permutationVariants):
     variants = dict()
-    minCost = LoGCost()
-    minInd = None
-    for childPerms in itertools.product(*[permutationVariants[child] for child in node]):
-      cost = LoGCost.addIdentity()
-      for i, childPerm in enumerate(childPerms):
-        transpose = int(fixedPerm != childPerm)
-        cost = cost + permutationVariants[ node[i] ][childPerm]._cost + LoGCost(0,transpose,0,0)
-      if cost < minCost:
-        minCost = cost
-        minInd = childPerms
+    minCost = LoGCost.addIdentity()
+    minInd = list()
+    for child in node:
+      childMinCost = LoGCost()
+      childMinInd = None
+      for ind in sorted(permutationVariants[child]):
+        transpose = int(fixedPerm != ind)
+        cost = permutationVariants[child][ind]._cost + LoGCost(0,transpose,0,0)
+        if cost < childMinCost:
+          childMinCost = cost
+          childMinInd = ind
+      assert childMinInd is not None
+      minCost = minCost + childMinCost
+      minInd.append(childMinInd)
     assert minInd is not None
-    variants[fixedPerm] = self.Variant(minCost, list(minInd))
+    variants[fixedPerm] = self.Variant(minCost, minInd)
     return variants
 
   def allPermutationsNoCostBinaryOp(self, node):

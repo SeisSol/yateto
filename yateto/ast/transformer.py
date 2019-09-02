@@ -1,7 +1,7 @@
 import sys
 from copy import deepcopy
 from typing import Union
-from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern
+from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
 from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication
 from .indices import Indices
 from .log import LoG
@@ -18,87 +18,67 @@ class Transformer(Visitor):
 
 class DeduceIndices(Transformer):
   def __init__(self, targetIndices: Union[str, Indices] = None):
-    self._targetIndices = None
-    if isinstance(targetIndices, str):
-      self._targetIndices = lambda indices: indices.permuted(targetIndices)
-    elif isinstance(targetIndices, Indices):
-      self._targetIndices = lambda indices: targetIndices
+    self._targetIndices = targetIndices
+    self._indexSetVisitor = ComputeIndexSet()
   
-  def visit(self, node, root=True):
-    if self._targetIndices and root:
-      if not (isinstance(node, Einsum) or isinstance(node, Add) or isinstance(node, ScalarMultiplication)):
-        raise ValueError('Setting target indices in DeduceIndices is only allowed if the root node is of type Add, Einsum, or ScalarMultiplication.')
-    return super().visit(node, root=root)
+  def visit(self, node, bound=None):
+    if bound is None:
+      bound = set(self._targetIndices) if self._targetIndices is not None else set()
+    return super().visit(node, bound=bound)
 
-  def visit_Einsum(self, node, root):
-    self.generic_visit(node, root=False)
+  def visit_IndexedTensor(self, node, bound):
+    if set(node.indices) != bound:
+      free = set(node.indices) ^ bound
+      raise ValueError('The indices {} are not bound.'.format(free))
+    return node
 
+  def visit_Einsum(self, node, bound):
+    indexSets = [self._indexSetVisitor.visit(child) for child in node]
+    contractions = set.intersection(*indexSets) - bound
+
+    node = self.generic_visit(node, bound=bound | contractions)
+
+    # Check if index sizes match
     g = Indices()
-    contractions = set()
     for child in node:
       overlap = g & child.indices
       if any([g.size()[index] != child.size()[index] for index in overlap]):
         PrettyPrinter().visit(node)
         raise ValueError('Einsum: Index dimensions do not match: ', g, child.indices, str(child))
       g = g.merged(child.indices - overlap)
-      contractions.update(overlap)
 
     deduced = g - contractions
-    if self._targetIndices and root:
-      node.indices = self._targetIndices(deduced)
-    if node.indices == None:
-      node.indices = deduced.sorted()
-    elif not node.indices <= g:
-      raise ValueError('Einsum: Indices are not contained in deduced indices or sizes do not match. [{} not contained in {}]'.format(node.indices.__repr__(), deduced.__repr__()))
+    node.indices = deduced.sorted()
     return node
   
-  def visit_Add(self, node, root):
-    if self._targetIndices and root:
-      node.indices = self._targetIndices(node[0].indices)
-
+  def visit_Add(self, node, bound):
     for child in node:
-      self._setSingleChildIndices(node, child, True)
-      self.visit(child, root=False)
+      self.visit(child, bound)
 
     ok = all([node[0].indices <= child.indices and child.indices <= node[0].indices for child in node])
     if not ok:
       raise ValueError('Add: Indices do not match: ', *[child.indices for child in node])
 
-    if node.indices == None:
-      node.indices = deepcopy(node[0].indices)
-    if node.indices == None:
-      node.indices = node[0].indices
-    elif not (node.indices <= node[0].indices and node[0].indices <= node.indices):
-      raise ValueError('Add: {} is not a equal to {}'.format(node.indices.__repr__(), node[0].indices.__repr__()))
-    return node
-  
-  def _setSingleChildIndices(self, node, term, allowPermutation):
-    if term.indices != node.indices:
-      mayNotPermute = not allowPermutation and term.fixedIndexPermutation()
-      if term.indices is None:
-        term.indices = node.indices
-      elif mayNotPermute or not (term.indices <= node.indices and node.indices <= term.indices):
-        raise ValueError('Index dimensions do not match: {} != {}'.format(node.indices.__repr__(), term.indices.__repr__()))
-  
-  def visit_ScalarMultiplication(self, node, root):
-    if node.indices is not None:
-      self._setSingleChildIndices(node, node.term(), False)
-    self.visit(node.term(), root)
-    if node.indices is None:
-      node.indices = node.term().indices
+    node.indices = deepcopy(node[0].indices)
     return node
 
-  def visit_Assign(self, node, root):
+  def visit_ScalarMultiplication(self, node, bound):
+    self.visit(node.term(), bound)
+    node.indices = deepcopy(node.term().indices)
+    return node
+
+  def visit_Assign(self, node, bound):
     lhs = node[0]
     rhs = node[1]
     
     if not isinstance(lhs, IndexedTensor):
       raise ValueError('Assign: Left-hand side must be of type IndexedTensor')
 
-    node.indices = lhs.indices
+    self.visit(rhs, bound=set(lhs.indices))
 
-    self._setSingleChildIndices(node, rhs, True)
-    self.visit(rhs, root=False)
+    node.indices = lhs.indices
+    if not (lhs.indices <= rhs.indices and lhs.indices <= rhs.indices):
+      raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
 
     return node
 

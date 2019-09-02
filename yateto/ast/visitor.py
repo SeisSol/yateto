@@ -34,6 +34,17 @@ class Visitor(object):
     for child in node:
       self.visit(child, **kwargs)
 
+class CachedVisitor(Visitor):
+  def __init__(self):
+    self._cache = dict()
+
+  def visit(self, node, **kwargs):
+    if node in self._cache:
+      return self._cache[node]
+    result = super().visit(node, **kwargs)
+    self._cache[node] = result
+    return result
+
 def addIndent(string, indent):
   return '\n'.join([indent + line for line in string.splitlines()])
 
@@ -283,3 +294,13 @@ class ComputeConstantExpression(Visitor):
     term = node.tensor.values_as_ndarray(self._dtype)
     assert term is not None, '{} may only be used when all involved tensors are constant.'.format(self.__class__.__name__)
     return term
+
+class ComputeIndexSet(CachedVisitor):
+  def generic_visit(self, node):
+    union = set()
+    for child in node:
+      union = union | super().visit(child)
+    return union
+
+  def visit_IndexedTensor(self, node):
+    return set(node.indices)

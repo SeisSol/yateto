@@ -33,8 +33,15 @@ class DeduceIndices(Transformer):
     return node
 
   def visit_Einsum(self, node, bound):
-    indexSets = [self._indexSetVisitor.visit(child) for child in node]
-    contractions = set.intersection(*indexSets) - bound
+    # Computes pairwise intersection of the children's indices
+    indexUnion = set()
+    contractions = set()
+    for child in node:
+      childIndexUnion = self._indexSetVisitor.visit(child)
+      contractions = contractions | (indexUnion & childIndexUnion)
+      indexUnion = indexUnion | childIndexUnion
+
+    contractions = contractions - bound
 
     node = self.generic_visit(node, bound=bound | contractions)
 

@@ -198,9 +198,10 @@ class Add(Op):
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       spps = [node.eqspp() for node in self]
-    spp = spps[0]
+    permute_summand = lambda i: self.permute(self[i].indices, spps[i])
+    spp = permute_summand(0)
     for i in range(1, len(spps)):
-      add_spp = self.permute(self[i].indices, spps[i])
+      add_spp = permute_summand(i)
       spp = aspp.add(spp, add_spp)
     return spp
   

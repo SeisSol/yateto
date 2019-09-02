@@ -22,9 +22,23 @@ class DeduceIndices(Transformer):
     self._indexSetVisitor = ComputeIndexSet()
   
   def visit(self, node, bound=None):
+    forceIndices = bound is None and self._targetIndices is not None
     if bound is None:
       bound = set(self._targetIndices) if self._targetIndices is not None else set()
-    return super().visit(node, bound=bound)
+    node = super().visit(node, bound=bound)
+
+    if forceIndices:
+      oldIndices = node.indices
+      if isinstance(self._targetIndices, str):
+        node.indices = node.indices.permuted(self._targetIndices)
+      elif isinstance(self._targetIndices, Indices):
+        node.indices = self._targetIndices
+      else:
+        raise ValueError('Target indices type ({}) is not supported.'.format(self._targetIndices.__class__.__name__))
+      if not (node.indices <= oldIndices and oldIndices <= node.indices):
+        raise ValueError('Target index dimensions do not match: {} != {}'.format(node.indices.__repr__(), oldIndices.__repr__()))
+
+    return node
 
   def visit_IndexedTensor(self, node, bound):
     if set(node.indices) > bound:

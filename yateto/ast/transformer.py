@@ -27,9 +27,9 @@ class DeduceIndices(Transformer):
     return super().visit(node, bound=bound)
 
   def visit_IndexedTensor(self, node, bound):
-    if set(node.indices) != bound:
-      free = set(node.indices) ^ bound
-      raise ValueError('The indices {} are not bound.'.format(free))
+    if set(node.indices) > bound:
+      free = node.indices - bound
+      raise ValueError('The indices {} are not bound in {}.'.format(free.__repr__(), node))
     return node
 
   def visit_Einsum(self, node, bound):

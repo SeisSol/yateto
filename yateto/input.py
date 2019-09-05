@@ -20,7 +20,7 @@ def __transposeMatrix(matrix):
     matrixT[(entry[1], entry[0])] = value
   return matrixT
 
-def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride):
+def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride, namespace=None):
   matrix = dict()
   for entry in entries:
     row = int(entry[0])-1
@@ -36,13 +36,13 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
     mtx = __transposeMatrix(matrix) if transpose(name) else matrix
     if len(shape) == 1:
       mtx = {(i[0],): val for i,val in mtx.items()}
-    matrices[name] = Tensor(name, shape, mtx, alignStride=alignStride(name))
+    matrices[name] = Tensor(name, shape, mtx, alignStride=alignStride(name), namespace=namespace)
   return matrices
 
 def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
-def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False):
+def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
   tree = etree.parse(xmlFile)
   root = tree.getroot()
   
@@ -64,13 +64,13 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, ali
         else:
           __complain(child)
 
-      matrices.update( __processMatrix(name, rows, columns, entries, clones, transpose, alignStride) )
+      matrices.update( __processMatrix(name, rows, columns, entries, clones, transpose, alignStride, namespace) )
     else:
       __complain(node)
 
   return create_collection(matrices)
 
-def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False):
+def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
   matrices = dict()
 
   with open(jsonFile) as j:
@@ -79,7 +79,7 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
       entries = m['entries']
       if len(next(iter(entries))) == 2:
         entries = [(entry[0], entry[1], True) for entry in entries]
-      matrices.update( __processMatrix(m['name'], m['rows'], m['columns'], entries, clones, transpose, alignStride) )
+      matrices.update( __processMatrix(m['name'], m['rows'], m['columns'], entries, clones, transpose, alignStride, namespace) )
 
   return create_collection(matrices)
 

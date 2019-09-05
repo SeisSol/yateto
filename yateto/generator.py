@@ -2,6 +2,7 @@ import copy
 import itertools
 import re
 import os
+from functools import wraps
 from yateto import Tensor
 from .ast.cost import BoundingBoxCostEstimator
 from .ast.node import Node
@@ -20,7 +21,7 @@ class Kernel(object):
   BASE_NAME = r'[a-zA-Z]\w*'
   VALID_NAME = r'^{}$'.format(BASE_NAME)
 
-  def __init__(self, name, ast, prefetch=None):
+  def __init__(self, name, ast, prefetch=None, namespace=None):
     self.name = name
     if isinstance(ast, list):
       self.ast = ast
@@ -34,6 +35,10 @@ class Kernel(object):
         self._prefetch = prefetch
       else:
         raise ValueError('Prefetch must either be a Tensor (without indices) or a list of Tensors.')
+    if namespace is None:
+      self.namespace = ''
+    else:
+      self.namespace = namespace
     self.cfg = None
     self.nonZeroFlops = -1
 
@@ -91,10 +96,14 @@ class KernelFamily(object):
   GROUP_INDEX = r'\((0|[1-9]\d*)\)'
   VALID_NAME = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX)
 
-  def __init__(self):
+  def __init__(self, namespace=None):
     self._kernels = dict()
     self.name = None
     self._stride = None
+    if namespace:
+      self.namespace = namespace
+    else:
+      self.namespace = ''
   
   def items(self):
     return self._kernels.items()
@@ -131,7 +140,7 @@ class KernelFamily(object):
       index += p*stride[i]
     return index
 
-  def add(self, name, ast, prefetch=None):
+  def add(self, name, ast, prefetch=None, namespace=None):
     baseName = self.baseName(name)
     if not self.name:
       self.name = baseName
@@ -139,7 +148,12 @@ class KernelFamily(object):
     
     group = self.group(name)
     internalName = '_{}_{}'.format(baseName, group)
-    self._kernels[group] = Kernel(internalName, ast, prefetch)
+    self._kernels[group] = Kernel(internalName, ast, prefetch, namespace)
+
+    if namespace is None:
+      self.namespace = ''
+    else:
+      self.namespace = namespace
 
   def kernels(self):
     return self._kernels.values()
@@ -157,6 +171,7 @@ def simpleParameterSpace(*args):
 
 def parameterSpaceFromRanges(*args):
   return list(itertools.product(*[list(i) for i in args]))
+
 
 class Generator(object):
   INIT_FILE_NAME = 'init'
@@ -187,24 +202,24 @@ class Generator(object):
   def arch(self):
     return self._arch
   
-  def add(self, name: str, ast: Node, prefetch=None):
+  def add(self, name: str, ast: Node, prefetch=None, namespace=None):
     if KernelFamily.isValidName(name):
       baseName = KernelFamily.baseName(name)
       if baseName not in self._kernelFamilies:
         self._kernelFamilies[baseName] = KernelFamily()
-      self._kernelFamilies[baseName].add(name, ast, prefetch)
+      self._kernelFamilies[baseName].add(name, ast, prefetch, namespace)
     else:      
       if not Kernel.isValidName(name):
         raise ValueError('Kernel name invalid (must match regexp {}): {}'.format(Kernel.VALID_NAME, name))
-      kernel = Kernel(name, ast, prefetch)
+      kernel = Kernel(name, ast, prefetch, namespace=namespace)
       self._kernels.append(kernel)
 
   def kernels(self):
     return [kernel for kernel in self._kernels] + [kernel for family in self._kernelFamilies.values() for kernel in family.kernels()]
 
-  def addFamily(self, name: str, parameterSpace, astGenerator, prefetchGenerator=None):
+  def addFamily(self, name: str, parameterSpace, astGenerator, prefetchGenerator=None, namespace=None):
     if name not in self._kernelFamilies:
-      self._kernelFamilies[name] = KernelFamily()
+      self._kernelFamilies[name] = KernelFamily(namespace=namespace)
     family = self._kernelFamilies[name]
     pmax = max(parameterSpace)
     stride = [1]
@@ -216,7 +231,7 @@ class Generator(object):
       indexedName = '{}({})'.format(name, KernelFamily.linear(stride, p))
       ast = astGenerator(*p)
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
-      family.add(indexedName, ast, prefetch)
+      family.add(indexedName, ast, prefetch, namespace)
   
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
@@ -258,10 +273,10 @@ class Generator(object):
         with cpp.Class('{}::{}::{} : public CxxTest::TestSuite'.format(namespace, self.TEST_NAMESPACE, self.TEST_CLASS)):
           cpp.label('public')
           for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.name, kernel.name, kernel.cfg, gemm_cfg)
+            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg)
           for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-              UnitTestGenerator(self._arch).generate(cpp, kernel.name, family.name, kernel.cfg, gemm_cfg, group)
+              UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, group)
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
@@ -270,6 +285,22 @@ class Generator(object):
     for family in self._kernelFamilies.values():
       print(family.name)
       family.prepareUntilCodeGen(costEstimator)
+
+
+    # Create mapping from namespace to kernel/family
+    kernel_dict = {}
+    for kernel in self._kernels:
+      if kernel.namespace in kernel_dict:
+        kernel_dict[kernel.namespace].append(kernel)
+      else:
+        kernel_dict[kernel.namespace] = [kernel]
+
+    kernel_family_dict = {}
+    for family in self._kernelFamilies.values():
+      if family.namespace in kernel_family_dict:
+        kernel_family_dict[family.namespace].append(family)
+      else:
+        kernel_family_dict[family.namespace] = [family]
 
     print('Generating kernels...')
     cache = RoutineCache()
@@ -288,16 +319,21 @@ class Generator(object):
           header.includeSys('limits')
           header.include(fTensors.hName)
           cpp.include(fKernels.hName)
-          with cpp.Namespace(namespace):
-            with header.Namespace(namespace):
-              for kernel in self._kernels:
-                kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
-                optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
-              for family in self._kernelFamilies.values():
-                kernelOutlines = [None] * len(family)
-                for group, kernel in family.items():
-                  kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
-                optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
+          with cpp.Namespace(namespace), header.Namespace(namespace):
+              # Group kernels by namespace
+              for kernel_namespace, kernels in kernel_dict.items():
+                for kernel in kernels:
+                  kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
+                  with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
+                    optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
+              # Group families by namespace
+              for family_namespace, families in kernel_family_dict.items():
+                for family in families:
+                  kernelOutlines = [None] * len(family)
+                  for group, kernel in family.items():
+                    kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
+                  with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
+                    optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
       kernelSourceContent = kernelSource.getvalue()
 
     with Cpp(fKernels.cpp) as cpp:
@@ -313,17 +349,27 @@ class Generator(object):
       with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
         cache.generate(header, fRoutines.cpp)
     
+    # Mapping basename -> tensor
     tensors = dict()
+
+    # Mapping namespace -> (basename -> tensor)
+    tensors_dict = collections.defaultdict(dict)
+
     for tensor in include_tensors:
       tensors[tensor.name()] = tensor
+      tensors_dict[tensor.namespace][tensor.name()] = tensor
     for kernel in self._kernels:
-      tensors.update( FindTensors().visit(kernel.ast) )
+        tensors.update( FindTensors().visit(kernel.ast) )
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
     for family in self._kernelFamilies.values():
       for group, kernel in family.items():
         tensors.update( FindTensors().visit(kernel.ast) )
-
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+    
     print('Generating initialization code...')
-    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=lambda x: x.name()))
+    # Sort order: Namespace, base name of group, idx of tensor in group
+    sort_key = lambda x: (x.namespace, x.name())
+    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key))
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):
@@ -343,3 +389,28 @@ class Generator(object):
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
 
+
+class NamespacedGenerator(object):
+  def __init__(self, generator, namespace):
+    self.generator = generator
+    self.namespace = namespace
+
+
+  def _add_ns(func):
+    """Decorator that passes self.namespace to func."""
+    @wraps(func)
+    def wrapper_add_ns(self, *args, **kwargs):
+      if 'namespace' in kwargs:
+        kwargs['namespace'] = '{}::{}'.format(self.namespace, kwargs['namespace'])
+      else:
+        kwargs['namespace'] = self.namespace
+      return func(self, *args, **kwargs)
+    return wrapper_add_ns
+
+  @_add_ns
+  def add(self, *args, **kwargs):
+    return self.generator.add(*args, **kwargs)
+
+  @_add_ns
+  def addFamily(self, *args, **kwargs):
+    return self.generator.addFamily(*args, **kwargs)

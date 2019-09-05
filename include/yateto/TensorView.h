@@ -115,9 +115,23 @@ namespace yateto {
       }
     }
 
+    template<typename Head>
+  void isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head) {
+      assert(head >= start[dim]);
+      assert(head < stop[dim]);
+    }
+
+    template<typename Head, typename... Tail>
+    void isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head, Tail... tail) {
+      assert(head >= start[dim]);
+      assert(head < stop[dim]);
+      isInRange(start, stop, dim+1, tail...);
+    }
+  
     template<typename... Entry>
     real_t& operator()(Entry... entry) {
       static_assert(sizeof...(entry) == Dim, "Number of arguments to operator() does not match Tensor's dimension.");
+      isInRange(m_start, m_stop, 0, entry...);
       return m_values[address(entry...)];
     }
 

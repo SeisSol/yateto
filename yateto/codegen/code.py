@@ -39,6 +39,13 @@
 
 import sys
 
+class NoScope:
+  def __enter__(self):
+    pass
+
+  def __exit__(self, type, value, traceback):
+    pass
+  
 class Block:
   def __init__(self, writer, argument, foot = ''):
     self.writer = writer
@@ -55,10 +62,13 @@ class Block:
     self.writer('}' + self.foot)
 
 class MultiBlock:
-  def __init__(self, writer, arguments, foot = ''):
+  def __init__(self, writer, arguments, foot=None):
     self.writer = writer
     self.arguments = arguments
-    self.foot = foot
+    if foot is None:
+      self.foot = [''] * len(self.arguments)
+    else:
+      self.foot = foot
   
   def __enter__(self):
     for arg in self.arguments:
@@ -66,9 +76,10 @@ class MultiBlock:
       self.writer.indent += 1
   
   def __exit__(self, type, value, traceback):
-    for arg in self.arguments:
+    # Blocks are closed in reverse order, thus reverse footer
+    for arg, foot in zip(self.arguments, reversed(self.foot)):
       self.writer.indent -= 1
-      self.writer('}' + self.foot)
+      self.writer('}' + foot)
     
 class HeaderGuard:
   def __init__(self, writer, name):
@@ -123,10 +134,15 @@ class Cpp:
     return Block(self, 'for ({})'.format(argument))
     
   def Namespace(self, name):
+    if len(name) == 0:
+      return NoScope()
     spaces = name.split('::')
     if len(spaces) == 1:
-      return Block(self, 'namespace ' + name)
-    return MultiBlock(self, ['namespace ' + space for space in spaces])
+      foot = ' // namespace {}'.format(name)
+      return Block(self, 'namespace ' + name, foot=foot)
+    else:
+      foot = [' // namespace {}'.format(s) for s in spaces]
+      return MultiBlock(self, ['namespace ' + space for space in spaces], foot=foot)
 
   def AnonymousScope(self):
     return Block(self, '')

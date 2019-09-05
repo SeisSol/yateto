@@ -30,7 +30,8 @@ class Tensor(AbstractType):
   GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
 
-  def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False):
+  def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False,
+               namespace=None):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -43,6 +44,11 @@ class Tensor(AbstractType):
     self._name = name
     self._shape = shape
     self._values = None
+
+    if namespace is None:
+      self.namespace = ''
+    else:
+      self.namespace = namespace
     
     if spp is not None:
       if isinstance(spp, dict):
@@ -96,6 +102,25 @@ class Tensor(AbstractType):
   
   def baseName(self):
     return self.getBaseName(self._name)
+
+  @classmethod
+  def splitBasename(cls, base_name_with_namespace):
+    name_parts = base_name_with_namespace.rsplit('::', 1)
+    if len(name_parts) > 1:
+      prefix = '{}::'.format(name_parts[0])
+    else:
+      prefix = ''
+    base_name = name_parts[-1]
+    return prefix, base_name
+  
+  def prefix(self):
+    return '{}::'.format(self.namespace) if self.namespace else ''
+  
+  def baseNameWithNamespace(self):
+    return '{}{}'.format(self.prefix(), self.baseName())
+
+  def nameWithNamespace(self):
+    return '{}{}'.format(self.prefix(), self.name())
 
   @classmethod
   def getGroup(cls, name):

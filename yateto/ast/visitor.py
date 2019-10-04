@@ -229,7 +229,16 @@ class PrintEquivalentSparsityPatterns(Visitor):
       self.visit(child)
       counter = counter + 1
     fileName = os.path.join(baseDirectory, name + '.pdf')
+    file_name_mm = os.path.join(baseDirectory, name + '.mtx')
     eqspp = node.eqspp()
+    pattern = eqspp.as_ndarray()
+    with open(file_name_mm, 'w') as f:
+      f.write('%%TensorMarket tensor coordinate real general\n')
+      nzs = pattern.nonzero()
+      if nzs:
+        f.write('{} {}\n'.format(' '.join([str(s) for s in pattern.shape]), len(nzs[0])))
+        for idx in zip(*nzs):
+          f.write('{} {}\n'.format(' '.join([str(i) for i in idx]), float(pattern[idx])))
     nSubplots = 1
     for dim in range(2, eqspp.ndim):
       nSubplots *= eqspp.shape[dim]
@@ -238,7 +247,6 @@ class PrintEquivalentSparsityPatterns(Visitor):
     fig, axs = plt.subplots(nrows, ncols)
     if ncols > 1:
       axs = [y for x in axs for y in x]
-    pattern = eqspp.as_ndarray()
     if nSubplots == 1:
       axs.imshow(pattern.astype(bool), cmap=self._cmap, norm=self._norm)
     else:

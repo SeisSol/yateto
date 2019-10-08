@@ -116,15 +116,15 @@ namespace yateto {
     }
 
     template<typename Head>
-  void isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head) {
-      assert(head >= start[dim]);
-      assert(head < stop[dim]);
+    void isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head) {
+      assert(static_cast<uint_t>(head) >= start[dim]);
+      assert(static_cast<uint_t>(head) < stop[dim]);
     }
 
     template<typename Head, typename... Tail>
     void isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head, Tail... tail) {
-      assert(head >= start[dim]);
-      assert(head < stop[dim]);
+      assert(static_cast<uint_t>(head) >= start[dim]);
+      assert(static_cast<uint_t>(head) < stop[dim]);
       isInRange(start, stop, dim+1, tail...);
     }
   

@@ -46,6 +46,10 @@ class Variable(object):
     assert not isEq or (self.writable == other.writable and self._memoryLayout == other._memoryLayout)
     return isEq
 
+  def setWritable(self, name):
+    if self.name == name:
+      self.writable = True
+
 class Expression(object):
   def __init__(self, node, memoryLayout, variables):
     self.node = node
@@ -80,6 +84,10 @@ class Expression(object):
 
   def __str__(self):
     return '{}({})'.format(type(self.node).__name__, ', '.join([str(var) for var in self._variables]))
+
+  def setWritable(self, name):
+    for v in self._variables:
+      v.setWritable(name)
 
 class ProgramAction(object):
   def __init__(self, result, term, add, scalar = None):
@@ -122,10 +130,14 @@ class ProgramAction(object):
     tsubs = self.term.substituted(when, by, rsubs.memoryLayout()) if term else self.term
     return ProgramAction(rsubs, tsubs, self.add, self.scalar)
 
+  def setVariablesWritable(self, name):
+    self.result.setWritable(name)
+    self.term.setWritable(name)
+
 class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
     self.live = None
     self.initBuffer = None
     self.bufferMap = None
-    
+

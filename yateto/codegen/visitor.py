@@ -225,7 +225,7 @@ class OptimisedKernelGenerator(KernelGenerator):
             header.functionDeclaration(executeName(index))
 
         if familyStride is not None:
-          header('typedef void ({}::* const {})(void);'.format(name, self.MEMBER_FUNCTION_PTR_NAME))
+          header('using {} = void ({}::*)();'.format(self.MEMBER_FUNCTION_PTR_NAME, name))
           header('{} {} {}[] = {};'.format(
             MODIFIERS,
             self.MEMBER_FUNCTION_PTR_NAME,

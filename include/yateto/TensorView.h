@@ -187,6 +187,11 @@ namespace yateto {
       DenseTensorView<nSlices, real_t, uint_t> subtensor(&operator[](begin), size, stride);
       return subtensor;
     }
+
+    real_t* data() {
+      return m_values;
+    }
+
   protected:
     void computeStride() {
       m_stride[0] = 1;

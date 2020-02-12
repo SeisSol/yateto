@@ -4,7 +4,7 @@ import arch
 vars = Variables()
 vars.AddVariables(
   EnumVariable( 'example', 'Example that should be compiled', 'minimal',
-                allowed_values=('hosvd', 'matmul', 'minimal', 'seissol_eqspp', 'springer', 'stock', 'tce')),
+                allowed_values=('hosvd', 'matmul', 'minimal', 'seissol_eqspp', 'springer', 'stock', 'tce', 'optimal_ind')),
   EnumVariable( 'compileMode', 'Mode of the compilation', 'release',
                 allowed_values=('debug', 'release')),
   EnumVariable( 'variant', 'Example-specific variant.', '', allowed_values=('', 'onlyblas')),
@@ -54,7 +54,7 @@ else:
   optFlags = ['-O0']
 
 # Link to BLAS
-if env['example'] in ['hosvd', 'matmul', 'springer', 'stock', 'tce']:
+if env['example'] in ['hosvd', 'matmul', 'springer', 'stock', 'tce', 'optimal_ind']:
   env.Append(LIBS=['mkl_intel_lp64', 'mkl_sequential', 'mkl_core'])
   mklroot = env['ENV']['MKLROOT']
   if mklroot:

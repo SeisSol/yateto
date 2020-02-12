@@ -25,9 +25,9 @@ def add(g):
             i1 = ''.join(i1_t)
             i2 = ''.join(i2_t)
 
-            kernel = [  tmp1[i1] <= D['cdel'] * B['befl'],
-                        tmp2[i2] <= tmp1[i1] * C['dfjk'],
-                        S['abij'] <= A['acik'] * tmp2[i2] ]
+            kernel = [  tmp1[i1]  <= B['befl'] * D['cdel'],
+                        tmp2[i2]  <= tmp1[i1]  * C['dfjk'],
+                        S['abij'] <= tmp2[i2]  * A['acik'] ]
             g.add('kernel_{}_{}'.format(i1,i2), kernel)
 
 

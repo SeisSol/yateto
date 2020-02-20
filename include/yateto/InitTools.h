@@ -4,11 +4,8 @@
 #include <algorithm>
 #include <cstdint>
 
-// DEBUGGING
-#include <iostream>
-
-#ifdef USE_MEMKIND
-#include "device_utils.h"
+#ifdef ACL_DEVICE
+#include "device.h"
 #endif
 
 namespace yateto {
@@ -142,6 +139,7 @@ namespace yateto {
         }
     };
 
+#ifdef ACL_DEVICE
     template<class float_t>
     class DeviceCopyManager : public CopyManager<float_t> {
     private:
@@ -160,8 +158,9 @@ namespace yateto {
 
             // compute the amount of bytes to copy
             const unsigned bytes = (last - first) * sizeof(float_t);
+
             // copy data
-            device_copy_to(mem, first, bytes);
+            device::Device::getInstance().api->copyTo(mem, first, bytes);
 
             // increment memory poiter
             mem += (last - first);
@@ -171,6 +170,8 @@ namespace yateto {
             assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);
         }
     };
+
+#endif
 }
 
 #endif

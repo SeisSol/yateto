@@ -160,7 +160,7 @@ namespace yateto {
             const unsigned bytes = (last - first) * sizeof(float_t);
 
             // copy data
-            device::Device::getInstance().api->copyTo(mem, first, bytes);
+            device::DeviceInstance::getInstance().api->copyTo(mem, first, bytes);
 
             // increment memory poiter
             mem += (last - first);

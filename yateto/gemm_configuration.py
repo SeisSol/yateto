@@ -74,6 +74,56 @@ class BLIS(BLASlike):
       '&_blas_beta', C, 1, ldC]
     return '{} {}({});'.format(init, self.operation_name, ', '.join(str(p) for p in parameters))
 
+class Eigen(BLASlike):
+  def __init__(self, arch):
+    super().__init__(None, ['Eigen/Eigen'])
+    self._arch = arch
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    return (not sparseA and not sparseB)
+
+  def bool2Trans(self, trans):
+    return '.transpose()' if trans else ''
+
+  def sizeTrans(self, rows, cols, trans):
+    return '{},{}'.format(cols,rows) if trans else '{},{}'.format(rows,cols)
+
+  def align(self, ld):
+    aligned = 'Unaligned'
+    if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
+      aligned = 'Aligned{}'.format(self._arch.alignment)
+    return aligned
+
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+    AxB = '{alpha}_mapA{transA}*_mapB{transB}'.format(
+            alpha=alpha + '*' if alpha != 1.0 else '',
+            transA=self.bool2Trans(transA), transB=self.bool2Trans(transB),
+          )
+    code = ''
+    if beta == 1.0:
+      code = '_mapC += {AxB};'.format(AxB=AxB)
+    elif beta == 0.0:
+      code = '_mapC = {AxB};'.format(AxB=AxB)
+    else:
+      code = '_mapC = {AxB} + {beta}*_mapC;'.format(AxB=AxB, beta=beta)
+
+    code = """{{
+  using Eigen::Matrix;
+  using Eigen::Map;
+  using Eigen::Stride;
+  Map<Matrix<{prec},{sizeA}>,Eigen::{alignA},Stride<{ldA},1>> _mapA(const_cast<{prec}*>({A}));
+  Map<Matrix<{prec},{sizeB}>,Eigen::Unaligned,Stride<{ldB},1>> _mapB(const_cast<{prec}*>({B}));
+  Map<Matrix<{prec},{M},{N}>,Eigen::{alignC},Stride<{ldC},1>> _mapC({C});
+  {code}
+}}
+    """.format(prec=self._arch.typename, M=M, N=N,
+               sizeA=self.sizeTrans(M,K,transA),
+               sizeB=self.sizeTrans(K,N,transB),
+               ldA=ldA, ldB=ldB, ldC=ldC, A=A, B=B, C=C,
+               alignA=self.align(ldA), alignC=self.align(ldC),
+               code=code)
+    return code
+
 class CodeGenerator(GemmTool):
   def __init__(self, operation_name: str, includes: List[str], cmd: str, arch):
     super().__init__(operation_name, includes)
@@ -157,12 +207,13 @@ class DefaultGeneratorCollection(GeneratorCollection):
     mkl = MKL(arch)
     blis = BLIS(arch)
     openblas = OpenBLAS(arch)
+    eigen = Eigen(arch)
     defaults = {
-      'snb' : [libxsmm, mkl, blis],
-      'hsw' : [libxsmm, mkl, blis],
-      'knl' : [libxsmm, pspamm, mkl, blis],
-      'skx' : [libxsmm, pspamm, mkl, blis],
-      'armv8' : [pspamm, openblas, blis]
+      'snb' : [libxsmm, mkl, blis, eigen],
+      'hsw' : [libxsmm, mkl, blis, eigen],
+      'knl' : [libxsmm, pspamm, mkl, blis, eigen],
+      'skx' : [libxsmm, pspamm, mkl, blis, eigen],
+      'armv8' : [pspamm, openblas, blis, eigen]
     }
 
     if arch.name in defaults:

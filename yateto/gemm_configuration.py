@@ -96,7 +96,7 @@ class Eigen(BLASlike):
 
   def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
     AxB = '{alpha}_mapA{transA}*_mapB{transB}'.format(
-            alpha=alpha + '*' if alpha != 1.0 else '',
+            alpha=str(alpha) + '*' if alpha != 1.0 else '',
             transA=self.bool2Trans(transA), transB=self.bool2Trans(transB),
           )
     code = ''

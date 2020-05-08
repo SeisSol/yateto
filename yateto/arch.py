@@ -89,12 +89,13 @@ def getArchitectureIdentifiedBy(ident):
   name = ident[1:]
   arch = {
     'noarch': Architecture(name, precision, 16, False),
-    'wsm':    Architecture(name, precision, 16, False),
-    'snb':    Architecture(name, precision, 32, False),
-    'hsw':    Architecture(name, precision, 32, False),
-    'skx':    Architecture(name, precision, 64, True),
-    'knc':    Architecture(name, precision, 64, False),
-    'knl':    Architecture(name, precision, 64, True) # Libxsmm currently supports prefetch only for KNL kernels
+    'wsm': Architecture(name, precision, 16, False),
+    'snb': Architecture(name, precision, 32, False),
+    'hsw': Architecture(name, precision, 32, False),
+    'skx': Architecture(name, precision, 64, True),
+    'knc': Architecture(name, precision, 64, False),
+    'knl': Architecture(name, precision, 64, True), # Libxsmm currently supports prefetch only for KNL kernels
+    'thunderx2t99': Architecture(name, precision, 16, False)
   }
   return arch[name]
 

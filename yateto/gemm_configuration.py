@@ -61,7 +61,7 @@ class BLIS(BLASlike):
     self._typename = arch.typename
 
   def bool2Trans(self, trans):
-    return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_'),
+    return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_')
 
   def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
     init = '_blis_alpha = {}; _blis_beta = {};'.format(alpha, beta)
@@ -69,9 +69,9 @@ class BLIS(BLASlike):
       self.bool2Trans(transA),
       self.bool2Trans(transB),
       M, N, K,
-      '&_blas_alpha', 'const_cast<{}*>({})'.format(self._typename, A), 1, ldA,
+      '&_blis_alpha', 'const_cast<{}*>({})'.format(self._typename, A), 1, ldA,
       'const_cast<{}*>({})'.format(self._typename, B), 1, ldB,
-      '&_blas_beta', C, 1, ldC]
+      '&_blis_beta', C, 1, ldC]
     return '{} {}({});'.format(init, self.operation_name, ', '.join(str(p) for p in parameters))
 
 class Eigen(BLASlike):
@@ -160,7 +160,7 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    return self._arch.name.lower() in {'armv8', 'knl', 'skx'}
+    return self._arch.name.lower() in {'thunderx2t99', 'knl', 'skx'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB)
@@ -213,7 +213,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'hsw' : [libxsmm, mkl, blis, eigen],
       'knl' : [libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm, pspamm, mkl, blis, eigen],
-      'armv8' : [pspamm, openblas, blis, eigen]
+      'thunderx2t99' : [pspamm, openblas, blis, eigen]
     }
 
     if arch.name in defaults:

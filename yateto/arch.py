@@ -40,7 +40,7 @@
 from .memory import DenseMemoryLayout
 
 class Architecture(object):
-  def __init__(self, name, precision, alignment, enablePrefetch=False):
+  def __init__(self, name, precision, alignment, enablePrefetch=False, host_name=None):
     self.name = name
     self.precision = precision.upper()
     if self.precision == 'D':
@@ -63,6 +63,8 @@ class Architecture(object):
 
     self._tmpStackLimit = 524288
 
+    self.host_name = host_name
+
   def setTmpStackLimit(self, tmpStackLimit):
     self._tmpStackLimit = tmpStackLimit
 
@@ -84,21 +86,30 @@ class Architecture(object):
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
 
-def getArchitectureIdentifiedBy(ident):
-  precision = ident[0].upper()
-  name = ident[1:]
-  arch = {
-    'noarch': Architecture(name, precision, 16, False),
-    'wsm':    Architecture(name, precision, 16, False),
-    'snb':    Architecture(name, precision, 32, False),
-    'hsw':    Architecture(name, precision, 32, False),
-    'skx':    Architecture(name, precision, 64, True),
-    'knc':    Architecture(name, precision, 64, False),
-    'knl':    Architecture(name, precision, 64, True) # Libxsmm currently supports prefetch only for KNL kernels
-  }
-  return arch[name]
+def getArchitectureIdentifiedBy(host_ident, compute_ident=None):
+  if not compute_ident:
+    compute_ident = host_ident
 
-def useArchitectureIdentifiedBy(ident):
-  arch = getArchitectureIdentifiedBy(ident)
+  if host_ident[0].upper() != compute_ident[0].upper():
+    raise RuntimeError(f'Precision of host and compute arch. must be the same. '
+                       f'Given: {host_ident}, {compute_ident}')
+
+  precision = compute_ident[0].upper()
+  compute_name = compute_ident[1:]
+  host_name = host_ident[1:]
+  arch = {
+    'noarch': Architecture(compute_name, precision, 16, False),
+    'wsm':    Architecture(compute_name, precision, 16, False),
+    'snb':    Architecture(compute_name, precision, 32, False),
+    'hsw':    Architecture(compute_name, precision, 32, False),
+    'skx':    Architecture(compute_name, precision, 64, True),
+    'knc':    Architecture(compute_name, precision, 64, False),
+    'knl':    Architecture(compute_name, precision, 64, True), # Libxsmm currently supports prefetch only for KNL kernels
+    'nvidia': Architecture(compute_name, precision, 64, False, host_name)
+  }
+  return arch[compute_name]
+
+def useArchitectureIdentifiedBy(host_ident, compute_ident):
+  arch = getArchitectureIdentifiedBy(host_ident, compute_ident)
   DenseMemoryLayout.setAlignmentArch(arch)
   return arch

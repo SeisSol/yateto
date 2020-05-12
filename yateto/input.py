@@ -22,21 +22,51 @@ def __transposeMatrix(matrix):
 
 def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride, namespace=None):
   matrix = dict()
+  is_values_booleans = False
+
+  # traverse a list of matrix entries and generate a matrix description
+  # as a hash table
   for entry in entries:
+    # adjust row and column numbers
     row = int(entry[0])-1
     col = int(entry[1])-1
+
+    # allocate a matrix element inside of a table
     matrix[(row, col)] = entry[2]
 
+    # if all entries given as booleans it means that the matrix has the same
+    # sparsity pattern for all mesh elements but different values for each
+    # In other words, the matrix is not constant
+    is_values_booleans = isinstance(entry[2], bool)
+
+  # allocate an empty hash table to hold tensors (matrices) which are going to be generated
+  # using the matrix description
   matrices = dict()
+
+  # create target tensors names
   names = clones[name] if name in clones else [name]
+
+  # generate tensors using description of a give matrix
   for name in names:
+    # compute a shape of a tensor
     shape = (columns, rows) if transpose(name) else (rows, columns)
     if shape[1] == 1:
       shape = (shape[0],)
+
+    # transpose matrix if it is needed
     mtx = __transposeMatrix(matrix) if transpose(name) else matrix
+
+    # adjust layout description in case if a given matrix is a vector
     if len(shape) == 1:
       mtx = {(i[0],): val for i,val in mtx.items()}
-    matrices[name] = Tensor(name, shape, mtx, alignStride=alignStride(name), namespace=namespace)
+
+    # Create an tensor(matrix) using the matrix description and append the hash table
+    matrices[name] = Tensor(name=name,
+                            shape=shape,
+                            spp=mtx,
+                            alignStride=alignStride(name),
+                            namespace=namespace,
+                            is_compute_constant=False if is_values_booleans else True)
   return matrices
 
 def __complain(child):

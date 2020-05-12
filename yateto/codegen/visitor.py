@@ -91,7 +91,17 @@ class OptimisedKernelGenerator(KernelGenerator):
     self._routineCache = routineCache
   
   class KernelOutline(object):
-    def __init__(self, nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function):
+    def __init__(self,
+                 nonZeroFlops,
+                 hwFlops,
+                 tensors,
+                 writable,
+                 prefetch,
+                 scalars,
+                 function,
+                 is_compute_constant_tensors,
+                 platform):
+
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
       self.tensors = tensors
@@ -99,6 +109,8 @@ class OptimisedKernelGenerator(KernelGenerator):
       self.prefetch = prefetch
       self.scalars = scalars
       self.function = function
+      self.is_compute_constant_tensors = is_compute_constant_tensors
+      self.platform = platform
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -112,19 +124,23 @@ class OptimisedKernelGenerator(KernelGenerator):
       else:
         tensors[base_name] = {group}
   
-  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg):
+  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, platform):
     scalars = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     writable = dict()
+    is_compute_constant_tensors = dict()
     for var in variables:
       self.KernelOutline._addTensor(var.tensor, tensors)
       bn = var.tensor.baseNameWithNamespace()
+
       if bn in writable:
         if var.writable:
           writable[bn] = True
       else:
         writable[bn] = var.writable
+
+      is_compute_constant_tensors[bn] = var.tensor.is_compute_constant
 
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()
@@ -134,11 +150,19 @@ class OptimisedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = OptimisedKernelFactory(fcpp, self._arch)
+      factory = OptimisedKernelFactory(fcpp, self._arch, platform)
       hwFlops = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.freeTmp()
       function = functionIO.getvalue()    
-    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function)
+    return self.KernelOutline(nonZeroFlops,
+                              hwFlops,
+                              tensors,
+                              writable,
+                              prefetch,
+                              scalars,
+                              function,
+                              is_compute_constant_tensors,
+                              platform)
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -154,12 +178,23 @@ class OptimisedKernelGenerator(KernelGenerator):
     prefetch = collections.OrderedDict()
     writable = dict()
     scalars = set()
+    is_compute_constant_tensors = dict()
     for ko in kernelOutlines:
       if ko:
         scalars = scalars | ko.scalars
         self._addFromKO(ko.tensors, tensors)
         self._addFromKO(ko.writable, writable)
         self._addFromKO(ko.prefetch, prefetch)
+        self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
+
+    platform = kernelOutlines[-1].platform
+    is_same_platform = True
+    for outline in kernelOutlines:
+      if outline:
+        is_same_platform = True if outline.platform == platform else False
+
+    if not is_same_platform:
+      raise RuntimeError("kernels with the same family belong to different compute platforms.")
 
     scalars = sorted(list(scalars), key=str)
 
@@ -193,30 +228,50 @@ class OptimisedKernelGenerator(KernelGenerator):
         for scalar in scalars:
           header('{0} {1} = std::numeric_limits<{0}>::signaling_NaN();'.format(self._arch.typename, scalar))
         
-        def kernelArgs(base_name_with_namespace, groups, writable):
+        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, platform):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           typ = self._arch.typename
+          ptr_type = '**' if not is_constant and platform == 'gpu' else '*'
           if not writable:
             typ += ' const'
           if len(next(iter(groups))) > 0:
-            header('{prefix}{tensor_namespace}::{base_name}::{container}<{typ}*> {base_name};'.format(
-              tensor_namespace=InitializerGenerator.TENSOR_NAMESPACE,
-              prefix=prefix,
-              base_name=base_name,
-              container=InitializerGenerator.CONTAINER_CLASS_NAME,
-              typ=typ
-            ))
+            class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
+            container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
+            header(f'{class_name}::{container_type} {base_name};')
           else:
-            header('{}* {}{{}};'.format(typ, base_name))
+            header(f'{typ}{ptr_type} {base_name}{{}};')
         
         for baseName, groups in tensors.items():
-          kernelArgs(baseName, groups, writable[baseName])
+          kernelArgs(baseName,
+                     groups,
+                     writable[baseName],
+                     is_compute_constant_tensors[baseName],
+                     platform)
+        header.emptyline()
+
+        # containers with extra offsets for GPU-like computations
+        if platform == 'gpu':
+          header(f'size_t {InitializerGenerator.NUM_ELEMENTS_NAME} = 0;')
+
+          def generate_extra_offset_args(base_name_with_namespace, groups):
+            prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+            offset_type = 'int'
+            offset_name = f'{InitializerGenerator.EXTRA_OFFSET_NAME}_{base_name}'
+            if len(next(iter(groups))) > 0:
+              class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
+              container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{offset_type}>'
+              header(f'{class_name}::{container_type} {offset_name};')
+            else:
+              header(f'{offset_type} {offset_name}{{}};')
+
+          for base_name, groups in tensors.items():
+            generate_extra_offset_args(base_name, groups)
         header.emptyline()
 
         if len(prefetch) > 0:
           with header.Struct(self.PREFETCHSTRUCT_NAME):
             for baseName, groups in prefetch.items():
-              kernelArgs(baseName, groups, False)
+              kernelArgs(baseName, groups, False, False, platform='any')
           header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
           header.emptyline()
 
@@ -277,7 +332,12 @@ class OptimisedKernelGenerator(KernelGenerator):
             for gis in groups:
               cpp('assert({}({}) != nullptr);'.format(base_name, ','.join(str(gi) for gi in gis)))
           else:
-            cpp('assert({} != nullptr);'.format(base_name))
+            cpp(f'assert({base_name} != nullptr);')
+
+        if platform == 'gpu':
+          cpp(f'assert({InitializerGenerator.NUM_ELEMENTS_NAME} != 0);')
+          cpp(f'device::DeviceInstance& device = device::DeviceInstance::getInstance();')
+
         cpp(kernelOutline.function)
 
 class UnitTestGenerator(KernelGenerator):
@@ -388,6 +448,8 @@ class InitializerGenerator(object):
   VIEW_STRUCT_NAME = 'view'
   VIEW_FUN_NAME = 'create'
   VIEW_TYPE_NAME = 'type'
+  EXTRA_OFFSET_NAME = 'ExtraOffset'
+  NUM_ELEMENTS_NAME = 'NumElements'
   
   class TensorView(object):
     ARGUMENT_NAME = 'values'

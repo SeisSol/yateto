@@ -4,9 +4,10 @@ from .. import gemm
 from ...memory import DenseMemoryLayout
 
 class Generic(object):
-  def __init__(self, arch, descr):
+  def __init__(self, arch, descr, platform):
     self._arch = arch
     self._descr = descr
+    self._platform = platform
   
   def _pointer(self, cpp, targetName, baseName, term, loopIndices, const=True):
     indices = term.indices & loopIndices
@@ -74,9 +75,9 @@ class Generic(object):
     Ceqspp = self._reduce(d.result, C, CmemLayout)
 
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp),
-      result = TensorDescription(innerCname, CmemLayout, Ceqspp),
+      leftTerm=TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant),
+      rightTerm=TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant),
+      result=TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant),
       transA = d.transA,
       transB = d.transB,
       alpha = d.alpha,
@@ -104,7 +105,7 @@ class Generic(object):
           self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, const=False)
           if outerPrefetchName is not None:
             self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices)
-        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg)
+        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._platform)
         return generator.generate(cpp, routineCache)
 
     class InnerLoopBody(object):

@@ -8,10 +8,11 @@ from . import copyscaleadd, indexsum, log, product
 class KernelFactory(object):
   ERROR_NAME = '_error'
 
-  def __init__(self, cpp, arch):
+  def __init__(self, cpp, arch, platform):
     self._cpp = cpp
     self._arch = arch
     self._freeList = list()
+    self._platform = platform
     
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
@@ -26,32 +27,42 @@ class KernelFactory(object):
 
   def temporary(self, bufname, size, iniZero=False, memory=list()):
     assert(iniZero == False or len(memory) == 0)
-    if self._arch.onHeap(size):
-      if memory:
-        raise NotImplementedError('Direct temporary initialization is not supported for heap-allocated memory.')
-      if len(self._freeList) == 0:
-        self._cpp('int {};'.format(self.ERROR_NAME))
-      self._cpp('{}* {};'.format(self._arch.typename, bufname))
-      self._cpp('{} = posix_memalign(reinterpret_cast<void**>(&{}), {}, {}*sizeof({}));'.format(
-                  self.ERROR_NAME,
-                  bufname,
-                  self._arch.alignment,
-                  size,
-                  self._arch.typename))
-      if iniZero:
-        self._cpp.memset(bufname, size, self._arch.typename)
-      self._freeList.append(bufname)
+
+    if self._platform == 'cpu':
+      if self._arch.onHeap(size):
+        if memory:
+          raise NotImplementedError('Direct temporary initialization is not supported for heap-allocated memory.')
+        if len(self._freeList) == 0:
+          self._cpp('int {};'.format(self.ERROR_NAME))
+        self._cpp('{}* {};'.format(self._arch.typename, bufname))
+        self._cpp('{} = posix_memalign(reinterpret_cast<void**>(&{}), {}, {}*sizeof({}));'.format(
+                    self.ERROR_NAME,
+                    bufname,
+                    self._arch.alignment,
+                    size,
+                    self._arch.typename))
+        if iniZero:
+          self._cpp.memset(bufname, size, self._arch.typename)
+        self._freeList.append(bufname)
+      else:
+        ini = ''
+        if iniZero:
+          ini = ' = {}'
+        elif memory:
+          ini = ' = {{{}}}'.format(', '.join(memory))
+        self._cpp('{} {}[{}] __attribute__((aligned({}))){};'.format(self._arch.typename, bufname, size, self._arch.alignment, ini))
     else:
-      ini = ''
-      if iniZero:
-        ini = ' = {}'
-      elif memory:
-        ini = ' = {{{}}}'.format(', '.join(memory))
-      self._cpp('{} {}[{}] __attribute__((aligned({}))){};'.format(self._arch.typename, bufname, size, self._arch.alignment, ini))
+      delataion = f'{self._arch.typename}* {bufname}'
+      total_size = f'sizeof({self._arch.typename}) * NumElements * {size}'
+      self._cpp(f'{delataion} = ({self._arch.typename}*)device.api->getStackMemory({total_size});')
+      self._freeList.append(bufname)
 
   def freeTmp(self):
     for free in self._freeList:
-      self._cpp('free({});'.format(free))
+      if self._platform == "cpu":
+        self._cpp(f'free({free});')
+      else:
+        self._cpp('device.api->popStackMemory();')
     self._freeList = []
 
   def _indices(self, var):
@@ -59,8 +70,8 @@ class KernelFactory(object):
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
 class OptimisedKernelFactory(KernelFactory):
-  def __init__(self, cpp, arch):
-    super().__init__(cpp, arch)
+  def __init__(self, cpp, arch, platform):
+    super().__init__(cpp, arch, platform)
 
   def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
@@ -75,7 +86,7 @@ class OptimisedKernelFactory(KernelFactory):
       transB = node.transB(),
       prefetchName = prefetchName
     )
-    generator = log.generator(self._arch, description)
+    generator = log.generator(self._arch, description, self._platform)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
   
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -119,12 +130,12 @@ class OptimisedKernelFactory(KernelFactory):
       result = IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()),
       term = IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())
     )
-    generator = copyscaleadd.generator(self._arch, description)
+    generator = copyscaleadd.generator(self._arch, description, self._platform)
     return generator.generate(self._cpp, routineCache)
 
 class UnitTestFactory(KernelFactory):
   def __init__(self, cpp, arch, nameFun):
-    super().__init__(cpp, arch)
+    super().__init__(cpp, arch, platform='cpu')
     self._name = nameFun
     self._rand = 0
 

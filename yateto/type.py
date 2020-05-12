@@ -30,8 +30,14 @@ class Tensor(AbstractType):
   GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
 
-  def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False,
-               namespace=None):
+  def __init__(self,
+               name,
+               shape,
+               spp=None,
+               memoryLayoutClass=DenseMemoryLayout,
+               alignStride=False,
+               namespace=None,
+               is_compute_constant=False):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -49,6 +55,7 @@ class Tensor(AbstractType):
       self.namespace = ''
     else:
       self.namespace = namespace
+    self.is_compute_constant = is_compute_constant
     
     if spp is not None:
       if isinstance(spp, dict):

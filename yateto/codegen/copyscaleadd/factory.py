@@ -1,5 +1,6 @@
 from ..common import *
 from .generic import Generic
+from .csa_gen import CsaGen
 
 class Description(object):
   def __init__(self, alpha, beta, result: IndexedTensorDescription, term: IndexedTensorDescription):
@@ -19,6 +20,5 @@ class Description(object):
     self.loopRanges = rA
     
 
-def generator(arch, descr):
-  return Generic(arch, descr)
-
+def generator(arch, descr, platform):
+  return Generic(arch, descr) if platform == 'cpu' else CsaGen(arch, descr)

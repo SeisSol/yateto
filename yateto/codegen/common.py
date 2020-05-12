@@ -3,10 +3,11 @@ from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
 
 class TensorDescription(object):
-  def __init__(self, name, memoryLayout, eqspp):
+  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False):
     self.name = name
     self.memoryLayout = memoryLayout
     self.eqspp = eqspp
+    self.is_compute_constant = is_compute_constant
     BoundingBox(eqspp)
   
   @classmethod
@@ -14,13 +15,16 @@ class TensorDescription(object):
     return cls(name, node.memoryLayout(), node.eqspp())
 
 class IndexedTensorDescription(TensorDescription):
-  def __init__(self, name, indices, memoryLayout, eqspp):
-    super().__init__(name, memoryLayout, eqspp)
+  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False):
+    super().__init__(name, memoryLayout, eqspp, is_compute_constant)
     self.indices = indices
 
   @classmethod
   def fromNode(cls, var, node):
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp())
+    is_const = False
+    if hasattr(node, 'tensor'):
+      is_const = node.tensor.is_compute_constant
+    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):
   flops = 0

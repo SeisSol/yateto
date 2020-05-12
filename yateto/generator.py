@@ -20,8 +20,9 @@ from io import StringIO
 class Kernel(object):
   BASE_NAME = r'[a-zA-Z]\w*'
   VALID_NAME = r'^{}$'.format(BASE_NAME)
+  VALID_PLATFORMS = ['cpu', 'gpu']
 
-  def __init__(self, name, ast, prefetch=None, namespace=None):
+  def __init__(self, name, ast, prefetch=None, namespace=None, platform='cpu'):
     self.name = name
     if isinstance(ast, list):
       self.ast = ast
@@ -39,6 +40,12 @@ class Kernel(object):
       self.namespace = ''
     else:
       self.namespace = namespace
+
+    if not platform in self.VALID_PLATFORMS:
+      raise ValueError(f'target platform is incorrect. '
+                       f'Given: {platform}. Allowed: {", ".join(self.VALID_PLATFORMS)}')
+    self.platform = platform
+
     self.cfg = None
     self.nonZeroFlops = -1
 
@@ -140,7 +147,7 @@ class KernelFamily(object):
       index += p*stride[i]
     return index
 
-  def add(self, name, ast, prefetch=None, namespace=None):
+  def add(self, name, ast, prefetch=None, namespace=None, platform='cpu'):
     baseName = self.baseName(name)
     if not self.name:
       self.name = baseName
@@ -148,7 +155,7 @@ class KernelFamily(object):
     
     group = self.group(name)
     internalName = '_{}_{}'.format(baseName, group)
-    self._kernels[group] = Kernel(internalName, ast, prefetch, namespace)
+    self._kernels[group] = Kernel(internalName, ast, prefetch, namespace, platform)
 
     if namespace is None:
       self.namespace = ''
@@ -178,6 +185,7 @@ class Generator(object):
   TENSORS_FILE_NAME = 'tensor'
   KERNELS_FILE_NAME = 'kernel'
   ROUTINES_FILE_NAME = 'subroutine'
+  GPULIKE_ROUTINES_FILE_NAME = 'gpulike_subroutine'
   UNIT_TESTS_FILE_NAME = 'KernelTest.t'
   HEADER_GUARD_SUFFIX = 'H_'
   SUPPORT_LIBRARY_HEADER = 'yateto.h'
@@ -202,22 +210,29 @@ class Generator(object):
   def arch(self):
     return self._arch
   
-  def add(self, name: str, ast: Node, prefetch=None, namespace=None):
+  def add(self, name: str, ast: Node, prefetch=None, namespace=None, platform='cpu'):
     if KernelFamily.isValidName(name):
       baseName = KernelFamily.baseName(name)
       if baseName not in self._kernelFamilies:
         self._kernelFamilies[baseName] = KernelFamily()
-      self._kernelFamilies[baseName].add(name, ast, prefetch, namespace)
+      self._kernelFamilies[baseName].add(name, ast, prefetch, namespace, platform)
     else:      
       if not Kernel.isValidName(name):
-        raise ValueError('Kernel name invalid (must match regexp {}): {}'.format(Kernel.VALID_NAME, name))
-      kernel = Kernel(name, ast, prefetch, namespace=namespace)
+        raise ValueError(f'Kernel name invalid (must match regexp {Kernel.VALID_NAME}): {name}')
+      kernel = Kernel(name, ast, prefetch, namespace=namespace, platform=platform)
       self._kernels.append(kernel)
 
   def kernels(self):
     return [kernel for kernel in self._kernels] + [kernel for family in self._kernelFamilies.values() for kernel in family.kernels()]
 
-  def addFamily(self, name: str, parameterSpace, astGenerator, prefetchGenerator=None, namespace=None):
+  def addFamily(self,
+                name: str,
+                parameterSpace,
+                astGenerator,
+                prefetchGenerator=None,
+                namespace=None,
+                platform='cpu'):
+
     if name not in self._kernelFamilies:
       self._kernelFamilies[name] = KernelFamily(namespace=namespace)
     family = self._kernelFamilies[name]
@@ -231,7 +246,7 @@ class Generator(object):
       indexedName = '{}({})'.format(name, KernelFamily.linear(stride, p))
       ast = astGenerator(*p)
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
-      family.add(indexedName, ast, prefetch, namespace)
+      family.add(indexedName, ast, prefetch, namespace, platform=platform)
   
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
@@ -255,6 +270,7 @@ class Generator(object):
     fUT = self.FileNames(outputDir, self.UNIT_TESTS_FILE_NAME)
     fKernels = self.FileNames(outputDir, self.KERNELS_FILE_NAME)
     fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
+    fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
     fTensors = self.FileNames(outputDir, self.TENSORS_FILE_NAME)
     fInit = self.FileNames(outputDir, self.INIT_FILE_NAME)
 
@@ -308,10 +324,13 @@ class Generator(object):
 
     kernelSource = StringIO()
     kernelSourceContent = ''
-    with Cpp(kernelSource) as cpp:      
+    with Cpp(kernelSource) as cpp:
       cpp.includeSys('cassert')
       cpp.includeSys('cstring')
       cpp.includeSys('cstdlib')
+      if self._arch.name in ["nvidia"]:
+        cpp.includeSys("device.h")
+
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
@@ -323,15 +342,23 @@ class Generator(object):
               # Group kernels by namespace
               for kernel_namespace, kernels in kernel_dict.items():
                 for kernel in kernels:
-                  kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
+                  kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
+                                                                           kernel.cfg,
+                                                                           gemm_cfg,
+                                                                           kernel.platform)
                   with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
                     optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
+
               # Group families by namespace
               for family_namespace, families in kernel_family_dict.items():
                 for family in families:
                   kernelOutlines = [None] * len(family)
                   for group, kernel in family.items():
-                    kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
+                    kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
+                                                                                     kernel.cfg,
+                                                                                     gemm_cfg,
+                                                                                     kernel.platform)
+
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
       kernelSourceContent = kernelSource.getvalue()
@@ -347,7 +374,7 @@ class Generator(object):
     print('Calling external code generators...')
     with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
-        cache.generate(header, fRoutines.cpp)
+        cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
     
     # Mapping basename -> tensor
     tensors = dict()

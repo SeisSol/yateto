@@ -105,7 +105,7 @@ def getArchitectureIdentifiedBy(host_ident, compute_ident=None):
     'skx':    Architecture(compute_name, precision, 64, True),
     'knc':    Architecture(compute_name, precision, 64, False),
     'knl':    Architecture(compute_name, precision, 64, True), # Libxsmm currently supports prefetch only for KNL kernels
-    'nvidia': Architecture(compute_name, precision, 64, False, host_name)
+    'nvidia': Architecture(compute_name, precision, 32, False, host_name)
   }
   return arch[compute_name]
 

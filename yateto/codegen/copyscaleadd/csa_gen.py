@@ -1,5 +1,5 @@
 from ..common import *
-from ..cache import RoutineGenerator
+from ..cache import RoutineGenerator, GpuRoutineGenerator
 from gemmforge import DenseMatrix, CsaGenerator, GenerationError
 from gemmforge import arch as GemmForgeArch
 import re
@@ -60,8 +60,10 @@ class CsaGen(object):
     Returns:
 
     """
-    """
+
     d = self._descr  # type: copyscaleadd.Description
+    m = d.loopRanges[d.result.indices[0]]
+    n = d.loopRanges[d.result.indices[1]]
 
     # TODO:  implement initialization in the generator
     #if d.beta == 0.0:
@@ -89,13 +91,13 @@ class CsaGen(object):
     matrix_a = DenseMatrix(num_rows=d.term.memoryLayout._bbox[0].stop,
                            num_cols=d.term.memoryLayout._bbox[1].stop,
                            addressing=deduce_addresing(d.term),
-                           bbox=deduce_bbox(BoundingBox.fromSpp(d.term.eqspp)),
+                           bbox=deduce_bbox(m, n, False, d.term.memoryLayout._bbox),
                            transpose=False)
 
     matrix_b = DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
                            num_cols=d.result.memoryLayout._bbox[1].stop,
                            addressing=deduce_addresing(d.result),
-                           bbox=deduce_bbox(BoundingBox.fromSpp(d.result.eqspp)),
+                           bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
                            transpose=False)
     try:
       forge_generator = CsaGenerator(GemmForgeArch.produce("nvidia"), self._arch.typename)
@@ -116,10 +118,12 @@ class CsaGen(object):
 
 
     return flop * d.term.eqspp.size
-    """
 
+    """
     description = self._descr  # type: copyscaleadd.Description
 
+
+    print(type(description.result.indices))
     if description.beta == 0.0:
       # TODO: figure out how to do this trick on gpu
       # writeBB = boundingBoxFromLoopRanges(description.result.indices, description.loopRanges)
@@ -202,10 +206,10 @@ class CsaGen(object):
                     ranges=description.loopRanges,
                     body=CopyScaleAddBody(),
                     pragmaSimd=False)
-
+    """
 
 def deduce_addresing(term):
-  if term.is_const:
+  if term.is_compute_constant:
     return 'none'
   temp_variable_name = re.compile(r'_tmp*')
   if temp_variable_name.match(term.name):
@@ -214,24 +218,30 @@ def deduce_addresing(term):
     return 'pointer_based'
 
 
-def deduce_bbox(yateto_bbox):
-  gemmforge_bbox = [yateto_bbox[0].start,
-                    yateto_bbox[1].start,
-                    yateto_bbox[0].stop - 1,
-                    yateto_bbox[1].stop - 1]
-  return gemmforge_bbox
+def deduce_bbox(rows_range, cols_range, is_trans, ml_bbox):
+  if is_trans:
+    bbox = [cols_range.start - ml_bbox[0].start,
+            rows_range.start - ml_bbox[1].start,
+            cols_range.stop - ml_bbox[0].start - 1,
+            rows_range.stop - ml_bbox[1].start - 1]
+  else:
+    bbox = [rows_range.start - ml_bbox[0].start,
+            cols_range.start - ml_bbox[1].start,
+            rows_range.stop - ml_bbox[0].start - 1,
+            cols_range.stop - ml_bbox[1].start - 1]
+  return bbox
 
 
 def deduce_arg(term):
   temp_variable_name = re.compile(r'_tmp*')
-  if term.is_const or temp_variable_name.match(term.name):
+  if term.is_compute_constant or temp_variable_name.match(term.name):
     extra_offset = '0'
   else:
     extra_offset = f'ExtraOffset_{term.name}'
   return f'{term.name}, {extra_offset}'
 
 
-class GemmForgeWriter(RoutineGenerator):
+class GemmForgeWriter(GpuRoutineGenerator):
   def __init__(self, forge_generator):
     self._basename = forge_generator.get_base_name()
     self._declaration = forge_generator.get_launcher_header()

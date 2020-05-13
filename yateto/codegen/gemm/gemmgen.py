@@ -102,29 +102,37 @@ class GemmGen(object):
         else:
           return 'pointer_based'
 
-      def deduce_bbox(yateto_bbox):
-        gemmforge_bbox = [yateto_bbox[0].start,
-                          yateto_bbox[1].start,
-                          yateto_bbox[0].stop - 1,
-                          yateto_bbox[1].stop - 1]
-        return gemmforge_bbox
+      #TODO : ask Carsten what is a meaning of shape and bbox of memoryLayout
+      def deduce_bbox(rows_range, cols_range, is_trans, ml_bbox):
+        if is_trans:
+          bbox = [cols_range.start - ml_bbox[0].start,
+                  rows_range.start - ml_bbox[1].start,
+                  cols_range.stop - ml_bbox[0].start - 1,
+                  rows_range.stop - ml_bbox[1].start - 1]
+        else:
+          bbox = [rows_range.start - ml_bbox[0].start,
+                  cols_range.start - ml_bbox[1].start,
+                  rows_range.stop - ml_bbox[0].start - 1,
+                  cols_range.stop - ml_bbox[1].start - 1]
+        return bbox
+
 
       matrix_a = DenseMatrix(num_rows=d.leftTerm.memoryLayout._bbox[0].stop,
                              num_cols=d.leftTerm.memoryLayout._bbox[1].stop,
                              addressing=deduce_addresing(d.leftTerm),
-                             bbox=deduce_bbox(BoundingBox.fromSpp(d.leftTerm.eqspp)),
+                             bbox=deduce_bbox(m, k, d.transA, d.leftTerm.memoryLayout._bbox),
                              transpose=d.transA)
 
       matrix_b = DenseMatrix(num_rows=d.rightTerm.memoryLayout._bbox[0].stop,
                              num_cols=d.rightTerm.memoryLayout._bbox[1].stop,
                              addressing=deduce_addresing(d.rightTerm),
-                             bbox=deduce_bbox(BoundingBox.fromSpp(d.rightTerm.eqspp)),
+                             bbox=deduce_bbox(k, n, d.transB, d.rightTerm.memoryLayout._bbox),
                              transpose=d.transB)
 
       matrix_c = DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
                              num_cols=d.result.memoryLayout._bbox[1].stop,
-                             bbox=deduce_bbox(BoundingBox.fromSpp(d.result.eqspp)),
                              addressing=deduce_addresing(d.result),
+                             bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
                              transpose=False)
       try:
         forge_generator = GemmGenerator(GemmForgeArch.produce(self._arch.name), self._arch.typename)

@@ -5,8 +5,8 @@ set(EXAMPLES "matmul;minimal" CACHE STRING "a list of examples to run as tests")
 set(SAMPLES hosvd matmul minimal seissol_eqspp stock tce)
 set_property(CACHE EXAMPLES PROPERTY STRINGS ${SAMPLES})
 
-set(VARIANT "OpenBLAS" CACHE STRING "example-specific variant")
-set(VARIANTS OpenBLAS LIBXSMM)
+set(VARIANT "Eigen" CACHE STRING "example-specific variant")
+set(VARIANTS Eigen LIBXSMM OpenBLAS)
 set_property(CACHE VARIANT PROPERTY STRINGS ${VARIANTS})
 
 set(PRECISION "double" CACHE STRING "floating point type: double/single")
@@ -46,8 +46,10 @@ if (VARIANT STREQUAL "OpenBLAS")
     set(EXTRA_LIBS ${OpenBLAS_LIBRARIES})
 elseif(VARIANT STREQUAL "LIBSXSMM")
     find_package(Libxsmm_executable REQUIRED)
+elseif(VARIANT STREQUAL "Eigen")
+    find_package(Eigen3 REQUIRED)
+    set(EXTRA_INCLUDES ${EIGEN3_INCLUDE_DIRS})
 endif()
-
 
 enable_testing()
 # generate and add an interface test

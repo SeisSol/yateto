@@ -26,23 +26,15 @@ endif()
 
 
 # find appropriate compiler flags
-if (${ARCH} STREQUAL "snb")
-    set(CPU_FLAGS "-mavx")
-elseif (${ARCH} STREQUAL "hsw")
-    set(CPU_FLAGS "-march=core-avx2")
-elseif(${ARCH} STREQUAL "skx")
-    set(CPU_FLAGS "-xCORE-AVX512" "-fma")
-elseif(${ARCH} STREQUAL "thunderx2t99")
-    set(CPU_FLAGS "-mcpu=thunderx2t99")
-else()
-    message(FATAL_ERROR "Provided arch (${ARCH}) is not supported for uint-testing with cmake")
+set(CPU_FLAGS "-march=native" "-mtune=native")
+if (${ARCH} STREQUAL "thunderx2t99")
+    set(CPU_FLAGS ${CPU_FLAGS} "-mcpu=native")
 endif()
 
 
 find_package(CxxTest REQUIRED)
 # attach all necessary external libs
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
-message("** ${PROJECT_SOURCE_DIR}")
 if (VARIANT STREQUAL "OpenBLAS")
     find_package(OpenBLAS REQUIRED)
     set(EXTRA_INCLUDES ${OpenBLAS_INCLUDE_DIRS})
@@ -92,11 +84,11 @@ foreach(EXAMPLE ${EXAMPLES})
 
     # attach necessary include dirs
     target_include_directories(${EXAMPLE}-target PUBLIC ${CMAKE_SOURCE_DIR}/common
-                                                      ${CMAKE_SOURCE_DIR}/include
+                                                      ${CMAKE_SOURCE_DIR}/../../include
                                                       ${GEN_DIR}
                                                       ${CXXTEST_INCLUDE_DIRS}
                                                       ${OpenBLAS_INCLUDE_DIRS})
     target_link_libraries(${EXAMPLE}-target PUBLIC ${EXTRA_LIBS})
-    target_compile_options(${EXAMPLE}-target PUBLIC "-std=c++11" -march=native -mtune=native)
+    target_compile_options(${EXAMPLE}-target PUBLIC "-std=c++11" ${CPU_FLAGS})
     add_test(${EXAMPLE}-test ${EXAMPLE}-target)
 endforeach()

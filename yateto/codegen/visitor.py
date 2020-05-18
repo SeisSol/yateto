@@ -251,7 +251,7 @@ class OptimisedKernelGenerator(KernelGenerator):
 
         # containers with extra offsets for GPU-like computations
         if platform == 'gpu':
-          header(f'size_t {InitializerGenerator.NUM_ELEMENTS_NAME} = 0;')
+          header(f'unsigned {InitializerGenerator.NUM_ELEMENTS_NAME} = 0;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)

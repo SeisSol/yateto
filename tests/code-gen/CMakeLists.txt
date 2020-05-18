@@ -24,6 +24,7 @@ else()
     set(ARCH_STR s${ARCH})
 endif()
 
+
 # find appropriate compiler flags
 if (${ARCH} STREQUAL "snb")
     set(CPU_FLAGS "-mavx")
@@ -32,14 +33,16 @@ elseif (${ARCH} STREQUAL "hsw")
 elseif(${ARCH} STREQUAL "skx")
     set(CPU_FLAGS "-xCORE-AVX512" "-fma")
 elseif(${ARCH} STREQUAL "thunderx2t99")
-    set(CPU_FLAGS "-thunderx2t99")
+    set(CPU_FLAGS "-mcpu=thunderx2t99")
 else()
     message(FATAL_ERROR "Provided arch (${ARCH}) is not supported for uint-testing with cmake")
 endif()
 
+
 find_package(CxxTest REQUIRED)
 # attach all necessary external libs
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
+message("** ${PROJECT_SOURCE_DIR}")
 if (VARIANT STREQUAL "OpenBLAS")
     find_package(OpenBLAS REQUIRED)
     set(EXTRA_INCLUDES ${OpenBLAS_INCLUDE_DIRS})
@@ -52,15 +55,6 @@ elseif(VARIANT STREQUAL "Eigen")
 endif()
 
 enable_testing()
-# generate and add an interface test
- add_custom_command(COMMAND ${CXXTEST_PYTHON_TESTGEN_EXECUTABLE}
-                            --error-printer -o TensorView.t.cpp ${CMAKE_SOURCE_DIR}/TensorView.t.h
-                    OUTPUT  TensorView.t.cpp)
-add_executable(tensor-view-target TensorView.t.cpp)
-target_include_directories(tensor-view-target PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_compile_options(tensor-view-target PUBLIC "-std=c++11")
-add_test(tensor-view tensor-view-target)
-
 
 # generate, compile and add numeric tests
 foreach(EXAMPLE ${EXAMPLES})
@@ -93,14 +87,16 @@ foreach(EXAMPLE ${EXAMPLES})
                        OUTPUT  ${TEST_RUNNER}
                        DEPENDS ${GEN_DIR}/KernelTest.t.h)
 
-    # attach necessary include dirs
+    # compile source code
     add_executable(${EXAMPLE}-target ${TEST_RUNNER} ${GENERATED_SRC})
+
+    # attach necessary include dirs
     target_include_directories(${EXAMPLE}-target PUBLIC ${CMAKE_SOURCE_DIR}/common
                                                       ${CMAKE_SOURCE_DIR}/include
                                                       ${GEN_DIR}
                                                       ${CXXTEST_INCLUDE_DIRS}
                                                       ${OpenBLAS_INCLUDE_DIRS})
     target_link_libraries(${EXAMPLE}-target PUBLIC ${EXTRA_LIBS})
-    target_compile_options(${EXAMPLE}-target PUBLIC "-std=c++11" ${CPU_FLAGS})
+    target_compile_options(${EXAMPLE}-target PUBLIC "-std=c++11" -march=native -mtune=native)
     add_test(${EXAMPLE}-test ${EXAMPLE}-target)
 endforeach()

@@ -47,17 +47,15 @@ ctest
 ```
 
 ### Code-gen
-Code-gen allows a user to test yateto with one of the following GEMM  
-libraries/generators: Eigen, OpenBLAS,  LIBXSMM. Make sure that you have them 
-installed on your system and visible in your current working environment.
+Code-gen allows a user to test yateto with one of the following GEMM libraries/generators: Eigen, OpenBLAS,  LIBXSMM. Make sure that you have them installed on your system and visible in your current working environment.
 
 ##### CMake options
 | CMake Variable Name |  Type  |         Allowed Values         |
 |:-------------------:|:------:|:------------------------------:|
-| ARCH                | string |    snb/hsw/skx/thunderx2t99    |
-| EXAMPLES            |  list  | matmul/minimal/matmult;minimal |
-| PRECISION           | string |          double/single         |
-| VARIANT             | string |     Eigen/OpenBLAS/LIBXSMM     |
+| ARCH                | string |    snb / hsw / skx / thunderx2t99    |
+| EXAMPLES            |  list  | matmul / minimal / matmult;minimal |
+| PRECISION           | string |          double / single         |
+| VARIANT             | string |     Eigen / OpenBLAS / LIBXSMM     |
 
 ##### Default
 Uses: **haswell** architecture, **matmul** and **minimal** as examples, **Eigen** 

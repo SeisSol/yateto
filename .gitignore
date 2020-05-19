@@ -1,1 +1,6 @@
 *.pyc
+__pycache__
+.idea
+.vscode
+yateto.egg-info
+.spack-env/

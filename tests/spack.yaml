@@ -1,0 +1,20 @@
+spack:
+  specs:
+  - eigen@3.3.7
+  - openblas@0.3.9
+  - libxsmm@1.15
+  - cmake@3.16.0
+
+  container:
+    format: docker
+
+    base:
+      image: "ubuntu:18.04"
+      spack: develop
+
+    strip: true
+
+    os_packages:
+      - cxxtest
+      - python3
+      - make

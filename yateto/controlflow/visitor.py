@@ -66,7 +66,7 @@ class AST2ControlFlow(Visitor):
     return result
   
   def visit_Assign(self, node):
-    self._writable = self._writable | {node[0].name()}
+    self.updateWritable(node[0].name())
     variables = [self.visit(child) for child in node]
 
     rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), variables[1])
@@ -85,6 +85,13 @@ class AST2ControlFlow(Visitor):
     name = '{}{}'.format(self.TEMPORARY_RESULT, self._tmp)
     self._tmp += 1
     return Variable(name, True, self._ml(node), node.eqspp())
+
+  def updateWritable(self, name):
+    self._writable = self._writable | {name}
+    # Set variables writable that were added beforehand
+    for pp in self._cfg:
+      if pp.action:
+        pp.action.setVariablesWritable(name)
 
 class SortedGlobalsList(object):
   def visit(self, cfg):

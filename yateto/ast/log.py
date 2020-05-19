@@ -76,9 +76,9 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
 
   minCost = LoGCost()
   minLog = None
-  for m in MC:
-    for n in NC:
-      for k in KC:
+  for m in sorted(MC):
+    for n in sorted(NC):
+      for k in sorted(KC):
         log = LoopOverGEMM(I.indices, L, R, m, n, k)
         cost = log.cost()
         if cost < minCost:

@@ -40,6 +40,7 @@
 from .memory import DenseMemoryLayout
 
 class Architecture(object):
+  GPU_ARCHS = ['nvidia', 'amd_gpu']
   def __init__(self, name, precision, alignment, enablePrefetch=False, host_name=None):
     self.name = name
     self.precision = precision.upper()
@@ -53,7 +54,14 @@ class Architecture(object):
       self.epsilon = 1.19e-7
     else:
       raise ValueError('Unknown precision type ' + self.precision)
-    self.alignment = alignment
+
+    if self.name in self.GPU_ARCHS and self.precision == 'D':
+      # In case of GPUs, we adjust tensors sizes w.r.t. a length of a warp/wavefront.
+      self.alignment = 2 * alignment
+    else:
+      self.alignment = alignment
+
+
     assert self.alignment % self.bytesPerReal == 0
     self.alignedReals = self.alignment // self.bytesPerReal
     self.enablePrefetch = enablePrefetch
@@ -106,7 +114,9 @@ def getArchitectureIdentifiedBy(host_ident, compute_ident=None):
     'knc': Architecture(compute_name, precision, 64, False),
     'knl': Architecture(compute_name, precision, 64, True), # Libxsmm currently supports prefetch only for KNL kernels
     'thunderx2t99': Architecture(compute_name, precision, 16, False),
-    'nvidia': Architecture(compute_name, precision, 64, False, host_name)
+    'nvidia': Architecture(compute_name, precision, 128, False, host_name),
+    'amd_gpu': Architecture(compute_name, precision, 256, False, host_name),
+    'power9': Architecture(compute_name, precision, 16, False)
   }
   return arch[compute_name]
 

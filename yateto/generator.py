@@ -306,6 +306,34 @@ class Generator(object):
     cache = RoutineCache()
     optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
 
+    # Mapping basename -> tensor
+    tensors = dict()
+
+    # Mapping namespace -> (basename -> tensor)
+    tensors_dict = collections.defaultdict(dict)
+
+    for tensor in include_tensors:
+      tensors[tensor.name()] = tensor
+      tensors_dict[tensor.namespace][tensor.name()] = tensor
+    for kernel in self._kernels:
+        tensors.update( FindTensors().visit(kernel.ast) )
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+    for family in self._kernelFamilies.values():
+      for group, kernel in family.items():
+        tensors.update( FindTensors().visit(kernel.ast) )
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+
+    c_function_args = []
+    c_function_args_output = []
+    c_function_args_preset = []
+    for key in tensors.keys():
+      tensor = tensors[key]
+      if(tensor.values() == None):
+#        c_function_args[key]="{}* {}".format(self._arch.typename,tensors[key]._name)
+        c_function_args.append(key)
+      else:
+        c_function_args_preset.append(key)
+        
     kernelSource = StringIO()
     kernelSourceContent = ''
     with Cpp(kernelSource) as cpp:      
@@ -313,6 +341,7 @@ class Generator(object):
       cpp.includeSys('cstring')
       cpp.includeSys('cstdlib')
       cpp.include(fRoutines.hName)
+      cpp.include("init.h")
       with Cpp(fKernels.h) as header:
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
           header.includeSys('cmath')
@@ -334,37 +363,64 @@ class Generator(object):
                     kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
-      kernelSourceContent = kernelSource.getvalue()
+                  for outline in kernelOutlines:
+                    for tensor in outline.tensors:
+                      if tensor in c_function_args:
+                        if outline.writable[tensor]:
+                          c_function_args_output.append(tensor)
+                          c_function_args.remove(tensor)
 
+
+          c_function_args        = sorted(c_function_args)
+          c_function_args_output = sorted(c_function_args_output)
+          c_function_args_preset = sorted(c_function_args_preset)
+          header.emptyline()          
+          for family_namespace, families in kernel_family_dict.items():
+            for family in families:
+              args=[]
+              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_output])
+              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args])
+              args.append(typedNdArgs(len(family.stride()), optKernelGenerator._arch.uintTypename))
+              header('extern "C"{')
+              header("void {}_{}_{}({});".format("yateto",family.name,"execute",", ".join(args))) #add c function
+              header('}')
+      kernelSourceContent = kernelSource.getvalue()
+      
     with Cpp(fKernels.cpp) as cpp:
       for gemm_tool in gemm_cfg.selected:
         for inc in gemm_tool.includes:
           cpp.include(inc)
         if isinstance(gemm_tool, BLASlike):
           cpp(gemm_tool.c_code_init)
-      cpp.out.write(kernelSourceContent)      
+      cpp.out.write(kernelSourceContent)
+      
+      cpp.emptyline()
+      for family_namespace, families in kernel_family_dict.items():
+        for family in families:
+          args=[]
+          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_output])
+          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args])
+          family_args = typedNdArgs(len(family.stride()), optKernelGenerator._arch.uintTypename)
+          args.append(family_args)
+          cpp('extern "C"{')
+          cpp("void {}_{}_{}({}){{".format("yateto",family.name,"execute",", ".join(args))) #add c function
+          cpp("  {}::{}::{} kernel_{};".format("yateto","kernel",family.name,family.name))
+          for output_arg in c_function_args_preset:
+            cpp("  kernel_{}.{} = yateto::init::{}::Values{};\n".format(family.name,output_arg,output_arg[:output_arg.find("(")],output_arg[output_arg.find("(")+1:output_arg.find(")")]))
+          cpp.emptyline()
+
+          for output_arg in c_function_args_output+c_function_args:
+            cpp("  kernel_{}.{} = {};".format(family.name,output_arg,output_arg))
+          
+          cpp("  kernel_{}.{}({});".format(family.name,"execute",family_args.replace(optKernelGenerator._arch.uintTypename+" ",""))) #add c function
+          cpp("}") #add c function
+          cpp("}") #add c function
+
 
     print('Calling external code generators...')
     with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
-        cache.generate(header, fRoutines.cpp)
-    
-    # Mapping basename -> tensor
-    tensors = dict()
-
-    # Mapping namespace -> (basename -> tensor)
-    tensors_dict = collections.defaultdict(dict)
-
-    for tensor in include_tensors:
-      tensors[tensor.name()] = tensor
-      tensors_dict[tensor.namespace][tensor.name()] = tensor
-    for kernel in self._kernels:
-        tensors.update( FindTensors().visit(kernel.ast) )
-        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
-    for family in self._kernelFamilies.values():
-      for group, kernel in family.items():
-        tensors.update( FindTensors().visit(kernel.ast) )
-        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        cache.generate(header, fRoutines.cpp)    
     
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group

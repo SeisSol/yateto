@@ -244,6 +244,8 @@ class OptimisedKernelGenerator(KernelGenerator):
             funName = flopFun[:1].lower() + flopFun[1:]
             with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
               header('return {}[{}];'.format(flopFun, indexF))
+    # header("}") #close yateto namespace
+    # header("void {}_{}_{}();{{".format("yateto",name,self.EXECUTE_NAME)) #start c function 
 
     flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
     for fc in flopCounters:

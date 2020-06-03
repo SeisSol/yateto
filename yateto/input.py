@@ -39,6 +39,28 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
     matrices[name] = Tensor(name, shape, mtx, alignStride=alignStride(name), namespace=namespace)
   return matrices
 
+def __processTensor(name, rank, shape, entries, clones, transpose, alignStride, namespace=None):
+  tensor = dict()
+  for entry in entries:
+    
+    index = [0] * rank
+    for i in range(rank-1):
+      index[i] = entry[i]-1
+      
+    tensor[tuple(index)] = entry[rank]
+
+  tensors = dict()
+  names = clones[name] if name in clones else [name]
+  for name in names:
+    shape = tuple(shape)
+    #shape = (columns, rows) if transpose(name) else (rows, columns)
+    #if shape[1] == 1:
+    #  shape = (shape[0],)
+    #mtx = __transposeMatrix(matrix) if transpose(name) else matrix
+    tensors[name] = Tensor(name, shape, tensor, alignStride=alignStride(name), namespace=namespace)
+  return tensors
+
+
 def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
@@ -82,6 +104,21 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
       matrices.update( __processMatrix(m['name'], m['rows'], m['columns'], entries, clones, transpose, alignStride, namespace) )
 
   return create_collection(matrices)
+
+
+def parseJSONTensorFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
+  tensors = dict()
+
+  with open(jsonFile) as j:
+    content = json.load(j)
+    for m in content:
+      entries = m['entries']
+      if len(next(iter(entries))) == 2:
+        entries = [(entry[0], entry[1], True) for entry in entries]
+      tensors.update( __processTensor(m['name'], m['rank'], m['shape'], entries, clones, transpose, alignStride, namespace) )
+
+  return create_collection(tensors)
+
 
 def memoryLayoutFromFile(xmlFile, db, clones):
   tree = etree.parse(xmlFile)

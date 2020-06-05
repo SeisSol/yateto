@@ -406,7 +406,11 @@ class Generator(object):
           cpp("void {}_{}_{}({}){{".format("yateto",family.name,"execute",", ".join(args))) #add c function
           cpp("  {}::{}::{} kernel_{};".format("yateto","kernel",family.name,family.name))
           for output_arg in c_function_args_preset:
-            cpp("  kernel_{}.{} = yateto::init::{}::Values{};\n".format(family.name,output_arg,output_arg[:output_arg.find("(")],output_arg[output_arg.find("(")+1:output_arg.find(")")]))
+            if "(" in output_arg and ")" in output_arg:
+              cpp("  kernel_{}.{} = yateto::init::{}::Values{};\n".format(family.name,output_arg,output_arg[:output_arg.find("(")],output_arg[output_arg.find("(")+1:output_arg.find(")")]))
+            else:
+              cpp("  kernel_{}.{} = yateto::init::{}::Values;\n".format(family.name,output_arg,output_arg))
+            
           cpp.emptyline()
 
           for output_arg in c_function_args_output+c_function_args:

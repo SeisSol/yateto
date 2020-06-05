@@ -42,11 +42,11 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
 def __processTensor(name, rank, shape, entries, clones, transpose, alignStride, namespace=None):
   tensor = dict()
   for entry in entries:
-    
-    index = [0] * rank
-    for i in range(rank-1):
-      index[i] = entry[i]-1
-      
+    print(entry)
+    index = [0] * (rank)
+    for i in range(rank):
+      index[i] = int(entry[i])-1
+    print(index)
     tensor[tuple(index)] = entry[rank]
 
   tensors = dict()

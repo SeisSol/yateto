@@ -20,6 +20,12 @@ def __transposeMatrix(matrix):
     matrixT[(entry[1], entry[0])] = value
   return matrixT
 
+def __transposeTensor(tensor):
+  tensorT = dict()
+  for entry,value in tensor.items():
+    tensorT[entry[::-1]] = value
+  return tensorT
+
 def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride, namespace=None):
   matrix = dict()
   for entry in entries:
@@ -42,22 +48,17 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
 def __processTensor(name, rank, shape, entries, clones, transpose, alignStride, namespace=None):
   tensor = dict()
   for entry in entries:
-    print(entry)
     index = [0] * (rank)
     for i in range(rank):
       index[i] = int(entry[i])-1
-    print(index)
     tensor[tuple(index)] = entry[rank]
 
   tensors = dict()
   names = clones[name] if name in clones else [name]
   for name in names:
-    shape = tuple(shape)
-    #shape = (columns, rows) if transpose(name) else (rows, columns)
-    #if shape[1] == 1:
-    #  shape = (shape[0],)
-    #mtx = __transposeMatrix(matrix) if transpose(name) else matrix
-    tensors[name] = Tensor(name, shape, tensor, alignStride=alignStride(name), namespace=namespace)
+    shp = tuple(shape[::-1])        if transpose(name) else tuple(shape)
+    ten = __transposeTensor(tensor) if transpose(name) else tensor
+    tensors[name] = Tensor(name, shp, ten, alignStride=alignStride(name), namespace=namespace)
   return tensors
 
 

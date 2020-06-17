@@ -282,7 +282,6 @@ class OptimisedKernelGenerator(KernelGenerator):
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
-  CXXTEST_PREFIX = 'test'
   
   def __init__(self, arch):
     super().__init__(arch)
@@ -317,13 +316,13 @@ class UnitTestGenerator(KernelGenerator):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
   
-  def generate(self, cpp, namespace, testName, kernelClass, cfg, gemm_cfg, index=None):
+  def generate(self, cpp, namespace, testName, kernelClass, cfg, gemm_cfg, testFramework, index=None):
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
-    with cpp.Function(self.CXXTEST_PREFIX + testName):
-      factory = UnitTestFactory(cpp, self._arch, self._name)
+    with cpp.Function(**testFramework.functionArgs(testName)):
+      factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
 
       for i,scalar in enumerate(scalars):
         cpp('{} {} = {};'.format(self._arch.typename, scalar, float(i+2)))

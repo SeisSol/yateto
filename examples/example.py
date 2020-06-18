@@ -48,10 +48,11 @@ for kernel in g.kernels():
 
 printEqspp = example.printEqspp() if hasattr(example, 'printEqspp') else False
 if printEqspp:
-  for kernel in g.kernels():
-    d = os.path.join(outDir, kernel.name)
-    os.makedirs(d, exist_ok=True)
-    PrintEquivalentSparsityPatterns(d).visit(kernel.ast)
+    for kernel in g.kernels():
+        for i, ast in enumerate(kernel.ast):
+            d = os.path.join(outDir, '{}-{}'.format(kernel.name, i))
+            os.makedirs(d, exist_ok=True)
+            PrintEquivalentSparsityPatterns(d).visit(ast)
 
 formatArrayName = lambda tensor: '{0}__{1}'.format(tensor.baseName(), '_'.join([str(g) for g in tensor.group()]))
 formatGroup = lambda tensor: ','.join([str(g) for g in tensor.group()])

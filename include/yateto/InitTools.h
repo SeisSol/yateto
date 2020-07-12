@@ -162,7 +162,7 @@ namespace yateto {
             // copy data
             device::DeviceInstance::getInstance().api->copyTo(mem, first, bytes);
 
-            // increment memory poiter
+            // increment memory pointer
             mem += (last - first);
 
             // shift pointer

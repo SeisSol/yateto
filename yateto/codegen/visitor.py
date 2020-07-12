@@ -55,6 +55,10 @@ class KernelGenerator(object):
   
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
     hwFlops = 0
+    # temporary memory required (per element in case of gpu)
+    # NOTE: it is required to know in case if the memory is allocated on the heap
+    #       an provided by the user
+    required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
     localPtrs = list()
     for pp in cfg:
@@ -63,6 +67,7 @@ class KernelGenerator(object):
       cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
     for pp in cfg:
       for buf, size in pp.initBuffer.items():
+        required_tmp_mem += size * self._arch.bytesPerReal
         bufname = self._bufferName(buf)
         factory.temporary(bufname, size)
       for local, buf in pp.bufferMap.items():
@@ -75,7 +80,7 @@ class KernelGenerator(object):
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
-    return hwFlops
+    return hwFlops, required_tmp_mem
 
 class OptimisedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'
@@ -85,6 +90,9 @@ class OptimisedKernelGenerator(KernelGenerator):
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
+  TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
+  TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
+
   
   def __init__(self, arch, routineCache):
     super().__init__(arch)
@@ -99,6 +107,7 @@ class OptimisedKernelGenerator(KernelGenerator):
                  prefetch,
                  scalars,
                  function,
+                 tmp_mem_size,
                  is_compute_constant_tensors,
                  platform):
 
@@ -109,6 +118,7 @@ class OptimisedKernelGenerator(KernelGenerator):
       self.prefetch = prefetch
       self.scalars = scalars
       self.function = function
+      self.tmp_mem_size = tmp_mem_size
       self.is_compute_constant_tensors = is_compute_constant_tensors
       self.platform = platform
 
@@ -151,7 +161,7 @@ class OptimisedKernelGenerator(KernelGenerator):
     function = ''
     with Cpp(functionIO) as fcpp:
       factory = OptimisedKernelFactory(fcpp, self._arch, platform)
-      hwFlops = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
+      hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.freeTmp()
       function = functionIO.getvalue()    
     return self.KernelOutline(nonZeroFlops,
@@ -161,6 +171,7 @@ class OptimisedKernelGenerator(KernelGenerator):
                               prefetch,
                               scalars,
                               function,
+                              tmp_memory,
                               is_compute_constant_tensors,
                               platform)
 
@@ -223,11 +234,29 @@ class OptimisedKernelGenerator(KernelGenerator):
           brackets,
           formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
         ))
+
+        # tmp mem required by a kernel(s)
+        tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
+        header('{} {} const {}{} = {};'.format(MODIFIERS,
+                                               self._arch.ulongTypename,
+                                               self.TEMP_MEM_REQUIRED_NAME,
+                                               brackets,
+                                               formatArray(tmp_mem_list)))
+
+        header('{} {} const {} = {};'.format(MODIFIERS,
+                                             self._arch.ulongTypename,
+                                             self.TEMP_MAX_MEM_REQUIRED_NAME,
+                                             max(tmp_mem_list)))
+
+        if platform == 'gpu':
+          # TmpMemManager controls external extra mem. allocated on gpu for tmp. variables
+          header(f'yateto::TmpMemManagerT<{self._arch.typename}> TmpMemManager;')
+
         header.emptyline()
-        
+
         for scalar in scalars:
           header('{0} {1} = std::numeric_limits<{0}>::signaling_NaN();'.format(self._arch.typename, scalar))
-        
+
         def kernelArgs(base_name_with_namespace, groups, writable, is_constant, platform):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           typ = self._arch.typename
@@ -294,11 +323,11 @@ class OptimisedKernelGenerator(KernelGenerator):
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
             header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
-          flopFuns = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
-          for flopFun in flopFuns:
-            funName = flopFun[:1].lower() + flopFun[1:]
+          aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
+          for aux_functions in aux_functions:
+            funName = aux_functions[:1].lower() + aux_functions[1:]
             with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(flopFun, indexF))
+              header('return {}[{}];'.format(aux_functions, indexF))
 
     flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
     for fc in flopCounters:
@@ -336,7 +365,6 @@ class OptimisedKernelGenerator(KernelGenerator):
 
         if platform == 'gpu':
           cpp(f'assert({InitializerGenerator.NUM_ELEMENTS_NAME} != 0);')
-          cpp(f'device::DeviceInstance& device = device::DeviceInstance::getInstance();')
 
         cpp(kernelOutline.function)
 

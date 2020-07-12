@@ -328,14 +328,13 @@ class Generator(object):
       cpp.includeSys('cassert')
       cpp.includeSys('cstring')
       cpp.includeSys('cstdlib')
-      if self._arch.name in ["nvidia"]:
-        cpp.includeSys("device.h")
 
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
           header.includeSys('cmath')
           header.includeSys('limits')
+          header.include('yateto.h')
           header.include(fTensors.hName)
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace), header.Namespace(namespace):

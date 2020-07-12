@@ -20,6 +20,8 @@ class Description(object):
     self.sumLoopRange = loopRanges(self.term, self.sumIndex)[str(self.sumIndex)]
     
 
-def generator(arch, descr):
-  return Generic(arch, descr)
-
+def generator(arch, descr, platform):
+  if platform == 'cpu':
+    return Generic(arch, descr)
+  elif platform == 'gpu':
+    raise RuntimeError("IndexSum operation has not been implemented for GPU-like architectures")

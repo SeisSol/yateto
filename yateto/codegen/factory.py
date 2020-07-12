@@ -53,16 +53,19 @@ class KernelFactory(object):
         self._cpp('{} {}[{}] __attribute__((aligned({}))){};'.format(self._arch.typename, bufname, size, self._arch.alignment, ini))
     else:
       delataion = f'{self._arch.typename}* {bufname}'
-      total_size = f'sizeof({self._arch.typename}) * NumElements * {size}'
-      self._cpp(f'{delataion} = ({self._arch.typename}*)device.api->getStackMemory({total_size});')
-      self._freeList.append(bufname)
+      total_size = f'NumElements * {size}'
+      self._cpp(f'{delataion} = TmpMemManager.getMem({total_size});')
+
 
   def freeTmp(self):
-    for free in self._freeList:
-      if self._platform == "cpu":
+    if self._platform == 'cpu':
+      for free in self._freeList:
         self._cpp(f'free({free});')
-      else:
-        self._cpp('device.api->popStackMemory();')
+    elif self._platform == 'gpu':
+      self._cpp('TmpMemManager.flush();')
+    else:
+      raise RuntimeError('unknown compute platform')
+
     self._freeList = []
 
   def _indices(self, var):
@@ -97,7 +100,7 @@ class OptimisedKernelFactory(KernelFactory):
       result = IndexedTensorDescription.fromNode(result, node),
       term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     )
-    generator = indexsum.generator(self._arch, description)
+    generator = indexsum.generator(self._arch, description, self._platform)
     return generator.generate(self._cpp, routineCache)
   
   def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -109,7 +112,7 @@ class OptimisedKernelFactory(KernelFactory):
       leftTerm = IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()),
       rightTerm = IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())
     )
-    generator = product.generator(self._arch, description)
+    generator = product.generator(self._arch, description, self._platform)
     return generator.generate(self._cpp, routineCache)
 
   def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -120,7 +123,7 @@ class OptimisedKernelFactory(KernelFactory):
       result = IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()),
       term = IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())
     )
-    generator = copyscaleadd.generator(self._arch, description)
+    generator = copyscaleadd.generator(self._arch, description, self._platform)
     return generator.generate(self._cpp, routineCache)
   
   def simple(self, result, term, add, scalar, routineCache):

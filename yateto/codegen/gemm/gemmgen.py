@@ -135,7 +135,8 @@ class GemmGen(object):
                              bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
                              transpose=False)
       try:
-        forge_generator = GemmGenerator(GemmForgeArch.produce(self._arch.name), self._arch.typename)
+        forge_generator = GemmGenerator(GemmForgeArch.produce(self._arch.name, self._arch.sub_name),
+                                        self._arch.typename)
         forge_generator.generate(matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
         routine_name = forge_generator.get_base_name()
 

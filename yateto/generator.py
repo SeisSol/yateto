@@ -280,10 +280,8 @@ class Generator(object):
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
-      print(kernel.name)
       kernel.prepareUntilCodeGen(costEstimator)
     for family in self._kernelFamilies.values():
-      print(family.name)
       family.prepareUntilCodeGen(costEstimator)
 
 
@@ -323,16 +321,23 @@ class Generator(object):
         tensors.update( FindTensors().visit(kernel.ast) )
         tensors_dict[''].update( FindTensors().visit(kernel.ast) )
 
-    c_function_args = []
-    c_function_args_output = []
-    c_function_args_preset = []
+    c_function_args_preset_global = []
     for key in tensors.keys():
       tensor = tensors[key]
       if(tensor.values() == None):
-#        c_function_args[key]="{}* {}".format(self._arch.typename,tensors[key]._name)
-        c_function_args.append(key)
+        #        c_function_args.append(key)
+        pass
       else:
-        c_function_args_preset.append(key)
+        c_function_args_preset_global.append(key)
+
+    c_function_args_input = {}
+    c_function_args_output = {}
+    c_function_args_preset = {}
+    kernel_family_collection = []
+    for _,kernels in kernel_dict.items():
+      kernel_family_collection.extend(kernels)
+    for _, families in kernel_family_dict.items():
+      kernel_family_collection.extend(families)
         
     kernelSource = StringIO()
     kernelSourceContent = ''
@@ -352,38 +357,79 @@ class Generator(object):
               # Group kernels by namespace
               for kernel_namespace, kernels in kernel_dict.items():
                 for kernel in kernels:
+                  c_function_args_input[kernel.name] = []
+                  c_function_args_output[kernel.name] = []
+                  c_function_args_preset[kernel.name] = []
+                  
                   kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
+                  for tensor in kernelOutline.tensors:
+                    
+                    if kernelOutline.writable[tensor]:
+                      c_function_args_output[kernel.name].append(tensor)
+                    else:
+                      preset=False
+                      regex = re.compile(tensor+"(\(\d+\))?")
+                      for preset_arg in c_function_args_preset_global:
+                        if regex.match(preset_arg):
+                          c_function_args_preset[kernel.name].append(preset_arg)
+                          preset = True
+                      if(not preset):
+                        c_function_args_input[kernel.name].append(tensor)
+
+                      
                   with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
                     optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
               # Group families by namespace
               for family_namespace, families in kernel_family_dict.items():
                 for family in families:
+                  c_function_args_input[family.name] = []
+                  c_function_args_output[family.name] = []
+                  c_function_args_preset[family.name] = []
+
                   kernelOutlines = [None] * len(family)
                   for group, kernel in family.items():
                     kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops, kernel.cfg, gemm_cfg)
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
-                  for outline in kernelOutlines:
-                    for tensor in outline.tensors:
-                      if tensor in c_function_args:
-                        if outline.writable[tensor]:
-                          c_function_args_output.append(tensor)
-                          c_function_args.remove(tensor)
+                  outline = kernelOutlines[0]
+                  for tensor in outline.tensors:
+                    if outline.writable[tensor]:
+                      c_function_args_output[family.name].append(tensor)
+                    else:
+                      preset=False
+                      regex = re.compile(tensor+"(\(\d+\))?")
+                      for preset_arg in c_function_args_preset_global:
+                        if regex.match(preset_arg):
+                          c_function_args_preset[family.name].append(preset_arg)
+                          preset = True
+                      if(not preset):
+                        c_function_args_input[family.name].append(tensor)
 
-
-          c_function_args        = sorted(c_function_args)
-          c_function_args_output = sorted(c_function_args_output)
-          c_function_args_preset = sorted(c_function_args_preset)
-          header.emptyline()          
-          for family_namespace, families in kernel_family_dict.items():
+#          c_function_args        = sorted(c_function_args)
+#          c_function_args_output = sorted(c_function_args_output)
+#          c_function_args_preset = sorted(c_function_args_preset)
+          header.emptyline()
+          for _, kernels in kernel_dict.items():
+            for kernel in kernels:
+              args=[]
+              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_output[kernel.name]])
+              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_input[kernel.name]])
+              header('extern "C"{')
+              header("void {}_{}_{}({});".format("yateto",kernel.name,"execute",", ".join(args))) #add c function
+              header('}')
+              
+          header.emptyline()
+              
+          for _, families in kernel_family_dict.items():
             for family in families:
               args=[]
-              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_output])
-              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args])
+              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_output[family.name]])
+              args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_input[family.name]])
               args.append(typedNdArgs(len(family.stride()), optKernelGenerator._arch.uintTypename))
               header('extern "C"{')
               header("void {}_{}_{}({});".format("yateto",family.name,"execute",", ".join(args))) #add c function
               header('}')
+              
       kernelSourceContent = kernelSource.getvalue()
       
     with Cpp(fKernels.cpp) as cpp:
@@ -395,17 +441,42 @@ class Generator(object):
       cpp.out.write(kernelSourceContent)
       
       cpp.emptyline()
+      for _, kernels in kernel_dict.items():
+        for kernel in kernels:
+          args=[]
+          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in sorted(c_function_args_output[kernel.name])])
+          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in sorted(c_function_args_input[kernel.name])])
+          cpp('extern "C"{')
+          cpp("void {}_{}_{}({}){{".format("yateto",kernel.name,"execute",", ".join(args))) #add c function
+          cpp("  {}::{}::{} kernel_{};".format("yateto","kernel",kernel.name,kernel.name))
+          for output_arg in sorted(c_function_args_preset[kernel.name]):
+            if "(" in output_arg and ")" in output_arg:
+              cpp("  kernel_{}.{} = yateto::init::{}::Values{};\n".format(kernel.name,output_arg,output_arg[:output_arg.find("(")],output_arg[output_arg.find("(")+1:output_arg.find(")")]))
+            else:
+              cpp("  kernel_{}.{} = yateto::init::{}::Values;\n".format(kernel.name,output_arg,output_arg))
+            
+          cpp.emptyline()
+
+          for output_arg in c_function_args_output[kernel.name]+c_function_args_input[kernel.name]:
+            cpp("  kernel_{}.{} = {};".format(kernel.name,output_arg,output_arg))
+          
+          cpp("  kernel_{}.{}();".format(kernel.name,"execute")) #add c function
+          cpp("}") #add c function
+          cpp("}") #add c function
+
+      cpp.emptyline()
+      
       for family_namespace, families in kernel_family_dict.items():
         for family in families:
           args=[]
-          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args_output])
-          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in c_function_args])
+          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in sorted(c_function_args_output[family.name])])
+          args.extend(["{}* {}".format(self._arch.typename,tensor) for tensor in sorted(c_function_args_input[family.name])])
           family_args = typedNdArgs(len(family.stride()), optKernelGenerator._arch.uintTypename)
           args.append(family_args)
           cpp('extern "C"{')
           cpp("void {}_{}_{}({}){{".format("yateto",family.name,"execute",", ".join(args))) #add c function
           cpp("  {}::{}::{} kernel_{};".format("yateto","kernel",family.name,family.name))
-          for output_arg in c_function_args_preset:
+          for output_arg in sorted(c_function_args_preset[family.name]):
             if "(" in output_arg and ")" in output_arg:
               cpp("  kernel_{}.{} = yateto::init::{}::Values{};\n".format(family.name,output_arg,output_arg[:output_arg.find("(")],output_arg[output_arg.find("(")+1:output_arg.find(")")]))
             else:
@@ -413,7 +484,7 @@ class Generator(object):
             
           cpp.emptyline()
 
-          for output_arg in c_function_args_output+c_function_args:
+          for output_arg in c_function_args_output[family.name]+c_function_args_input[family.name]:
             cpp("  kernel_{}.{} = {};".format(family.name,output_arg,output_arg))
           
           cpp("  kernel_{}.{}({});".format(family.name,"execute",family_args.replace(optKernelGenerator._arch.uintTypename+" ",""))) #add c function

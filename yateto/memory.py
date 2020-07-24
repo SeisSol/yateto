@@ -1,9 +1,21 @@
 from .ast.indices import BoundingBox, Range
 import copy
+from enum import Enum
 import itertools
 import warnings
 import numpy as np
 from abc import ABC, abstractmethod
+
+class Alignment(Enum):
+  """Alignment mode.
+
+     Automatic: Assume aligned memory if stride is divisible by vector width.
+     Aligned:   Pad the leading dimension with zeros such that stride is divisible by memory width.
+     Unaligned: Always assume unaligned memory access.
+  """
+  Automatic = 0,
+  Aligned = 1,
+  Unaligned = 2
 
 class MemoryLayout(ABC):
   def __init__(self, shape):
@@ -55,7 +67,15 @@ class DenseMemoryLayout(MemoryLayout):
   def setAlignmentArch(cls, arch):
     cls.ALIGNMENT_ARCH = arch
   
-  def __init__(self, shape, boundingBox=None, stride=None, alignStride=False):
+  def __init__(self, shape, boundingBox=None, stride=None, alignStride=Alignment.Automatic):
+    """Construct DenseMemoryLayout.
+
+    :param shape: tensor shape (tuple of integers)
+    :param boundingBox: Non-zero BoundingBox, covers complete tensor if None
+    :param stride: Stride of the leading dimension, computed automatically if None
+    :param alignStride: Alignment mode. Passing False is equal to Alignment.Automatic and passing
+                        True is equal to Alignment.Aligned.
+    """
     super().__init__(shape)
 
     if boundingBox:
@@ -63,8 +83,16 @@ class DenseMemoryLayout(MemoryLayout):
     else:
       self._bbox = BoundingBox([Range(0, s) for s in self._shape])
 
+    if alignStride == True:
+        self._alignment = Alignment.Aligned
+    elif alignStride == False:
+        self._alignment = Alignment.Automatic
+    elif isinstance(alignStride, Alignment):
+        self._alignment = alignStride
+    else:
+        raise ValueError("Unknown type for option alignStride")
     self._range0 = None
-    if alignStride:
+    if self._alignment == Alignment.Aligned:
       self._alignBB()
 
     if stride:
@@ -86,8 +114,11 @@ class DenseMemoryLayout(MemoryLayout):
     else:
       warnings.warn('Set architecture with DenseMemoryLayout.setAlignmentArch(arch) if you want to use the align stride feature.', UserWarning)
   
+  def alignment(self):
+      return self._alignment
+
   def alignedStride(self):
-    if self.ALIGNMENT_ARCH is None:
+    if self.ALIGNMENT_ARCH is None or self._alignment == Alignment.Unaligned:
       return False
     offsetOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].start)
     ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
@@ -99,7 +130,7 @@ class DenseMemoryLayout(MemoryLayout):
     return self.ALIGNMENT_ARCH.checkAlignment(self._bbox[dim].size())
 
   @classmethod
-  def fromSpp(cls, spp, alignStride=False):
+  def fromSpp(cls, spp, alignStride=Alignment.Automatic):
     bbox = BoundingBox.fromSpp(spp)
     return cls(spp.shape, bbox, alignStride=alignStride)
 
@@ -111,7 +142,7 @@ class DenseMemoryLayout(MemoryLayout):
     
     originalBB = BoundingBox([self._range0] + self._bbox[1:]) if self._range0 else self._bbox
     newBB = BoundingBox([copy.copy(originalBB[p]) for p in permutation])
-    return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None)
+    return DenseMemoryLayout(newShape, newBB, alignStride=self._alignment)
 
   def address(self, entry):
     assert entry in self._bbox

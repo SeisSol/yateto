@@ -101,12 +101,11 @@ class Eigen(BLASlike):
           )
     code = ''
     if beta == 1.0:
-      code = '_mapC += {AxB};'.format(AxB=AxB)
+      code = '_mapC.noalias() += {AxB};'.format(AxB=AxB)
     elif beta == 0.0:
       code = '_mapC = {AxB};'.format(AxB=AxB)
     else:
-      code = '_mapC = {AxB} + {beta}*_mapC;'.format(AxB=AxB, beta=beta)
-
+      code = '_mapC *= {beta}; _mapC.noalias() += {AxB};'.format(AxB=AxB, beta=beta)
     code = """{{
   using Eigen::Matrix;
   using Eigen::Map;

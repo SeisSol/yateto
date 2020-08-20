@@ -137,10 +137,11 @@ class OptimisedKernelFactory(KernelFactory):
     return generator.generate(self._cpp, routineCache)
 
 class UnitTestFactory(KernelFactory):
-  def __init__(self, cpp, arch, nameFun):
+  def __init__(self, cpp, arch, nameFun, testFramework):
     super().__init__(cpp, arch, platform='cpu')
     self._name = nameFun
     self._rand = 0
+    self._testFramework = testFramework
 
   def _formatTerm(self, var, indices):
     address = var.memoryLayout().addressString(indices)
@@ -218,7 +219,7 @@ class UnitTestFactory(KernelFactory):
       self._cpp('double error = 0.0;')
       self._cpp('double refNorm = 0.0;')
       forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
-      self._cpp('TS_ASSERT_LESS_THAN(sqrt(error/refNorm), {});'.format(epsMult*self._arch.epsilon))
+      self._cpp(self._testFramework.assertLessThan('sqrt(error/refNorm)', epsMult*self._arch.epsilon))
 
   def tensor(self, node, resultName, maxValue = 512):
     ml = node.memoryLayout()

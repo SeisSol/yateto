@@ -10,6 +10,7 @@ from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTen
 from .ast.transformer import *
 from .codegen.cache import *
 from .codegen.code import Cpp
+from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
@@ -186,11 +187,10 @@ class Generator(object):
   KERNELS_FILE_NAME = 'kernel'
   ROUTINES_FILE_NAME = 'subroutine'
   GPULIKE_ROUTINES_FILE_NAME = 'gpulike_subroutine'
-  UNIT_TESTS_FILE_NAME = 'KernelTest.t'
+  CXXTEST_FILE_NAME = 'KernelTest.t'
+  DOCTEST_FILE_NAME = 'test-kernel'
   HEADER_GUARD_SUFFIX = 'H_'
   SUPPORT_LIBRARY_HEADER = 'yateto.h'
-  TEST_CLASS = 'KernelTestSuite'
-  TEST_NAMESPACE = 'unit_test'
   
   class FileNames(object):
     HEADER = 'h'
@@ -267,7 +267,8 @@ class Generator(object):
     for family in self._kernelFamilies.values():
       family.prepareUntilUnitTest()
 
-    fUT = self.FileNames(outputDir, self.UNIT_TESTS_FILE_NAME)
+    fUTdoctest = self.FileNames(outputDir, self.DOCTEST_FILE_NAME)
+    fUTcxxtest = self.FileNames(outputDir, self.CXXTEST_FILE_NAME)
     fKernels = self.FileNames(outputDir, self.KERNELS_FILE_NAME)
     fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
     fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
@@ -275,24 +276,17 @@ class Generator(object):
     fInit = self.FileNames(outputDir, self.INIT_FILE_NAME)
 
     print('Generating unit tests...')
-    with Cpp(fUT.h) as cpp:
-      with cpp.HeaderGuard(self._headerGuardName(namespace, self.UNIT_TESTS_FILE_NAME.replace('.', '_'))):
-        cpp.includeSys('cxxtest/TestSuite.h')
-        cpp.include(fKernels.hName)
-        cpp.include(fInit.hName)
-        with cpp.PPIfndef('NDEBUG'):
-          cpp('long long libxsmm_num_total_flops = 0;')
-          cpp('long long pspamm_num_total_flops = 0;')
-        with cpp.Namespace(namespace):
-          with cpp.Namespace(self.TEST_NAMESPACE):
-            cpp.classDeclaration(self.TEST_CLASS)
-        with cpp.Class('{}::{}::{} : public CxxTest::TestSuite'.format(namespace, self.TEST_NAMESPACE, self.TEST_CLASS)):
-          cpp.label('public')
-          for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg)
-          for family in self._kernelFamilies.values():
+    def unit_test_body(cpp, testFramework):
+        for kernel in self._kernels:
+            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg, testFramework)
+        for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-              UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, group)
+                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, testFramework, group)
+    with Cpp(fUTdoctest.cpp) as cpp:
+        Doctest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+    with Cpp(fUTcxxtest.h) as cpp:
+        with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
+            CxxTest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:

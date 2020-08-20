@@ -16,7 +16,7 @@ RUN mkdir /opt/spack-environment \
 &&   echo "  view: /opt/view") > /opt/spack-environment/spack.yaml
 
 # Install the software, remove unecessary deps
-RUN cd /opt/spack-environment && spack install && spack gc -y
+RUN cd /opt/spack-environment && spack env activate . && spack install --fail-fast && spack gc -y
 
 # Strip all the binaries
 RUN find -L /opt/view/* -type f -exec readlink -f '{}' \; | \
@@ -39,8 +39,14 @@ COPY --from=builder /opt/view /opt/view
 COPY --from=builder /etc/profile.d/z10_spack_environment.sh /etc/profile.d/z10_spack_environment.sh
 
 RUN apt-get -yqq update && apt-get -yqq upgrade                                   \
- && apt-get -yqq install cxxtest python3 make \
+ && apt-get -yqq install python3 python3-pip make gcc g++ git \
  && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
+RUN git clone https://github.com/CxxTest/cxxtest.git cxxtest && cd cxxtest/python && python setup.py install && cd ../../
+RUN echo "export PATH=\$PATH:/cxxtest" >> /root/.bashrc && echo "export CMAKE_PREFIX_PATH=\$CMAKE_PREFIX_PATH:/cxxtest" >> /root/.bashrc
+RUN mkdir folder
+WORKDIR /folder
 
 
 

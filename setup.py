@@ -4,7 +4,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 
-install_requires = ['numpy', 'scipy']
+install_requires = ['numpy']
 
 setuptools.setup(
     name="yateto",

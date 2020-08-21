@@ -68,12 +68,11 @@ namespace yateto {
         ~CopyManager() {};
 
 
-        /** Copies data from a tensor to a given memory chunch.
+        /** Copies data from a tensor to a given memory chunk.
          *
-         *  NOTE: The function shifts and aligns a pointer w.r.p. to a given vector register size.
-         *  TODO: say something about actual address assigned to ptr i.e. ptr = mem
+         *  NOTE: The function shifts and aligns a pointer w.r.t. to a given vector register size.
          *
-         *  @param mem an address to a chunck of memeory.
+         *  @param mem an address to a chunk of memory.
          *         NOTE: the address is going to be incremented every time
          *         when new information is written.
          *  @param alignment a size of a vector register (in bytes).
@@ -87,13 +86,13 @@ namespace yateto {
         }
 
 
-        /** Copies data from tensors from a tensor family to a given memory chunch.
+        /** Copies data from tensors from a tensor family to a given memory chunk.
          *
-         * NOTE: The function writes the acutual address (where aligned tensor data stored)
+         * NOTE: The function writes the actual address (where aligned tensor data stored)
          * back to a tensor family
          *
          *  @param container a reference to a container which contains tensor family data.
-         *  @param mem an address to an allocated chunck of memeory.
+         *  @param mem an address to an allocated chunk of memory.
          *         NOTE: the address is going to be incremented every time
          *         when new information is written.
          *  @param alignment a size of a vector register (in bytes).
@@ -116,15 +115,15 @@ namespace yateto {
         }
 
 
-    private:
-        /** Copies a tensor to a given memory chunch, and shifts a given poiter.
+    protected:
+        /** Copies a tensor to a given memory chunk, and shifts a given pointer.
          *
-         *  NOTE: The function shifts and aligns a pointer w.r.p. to a given vector register size.
+         *  NOTE: The function shifts and aligns a pointer w.r.t. to a given vector register size.
          *
-         *  @param mem an address to a chunck of memeory.
-         *         NOTE: the address is going to be incremented envry time
+         *  @param mem an address to a chunk of memory.
+         *         NOTE: the address is going to be incremented every time
          *         when new information is written.
-         *  @param first a pointer to the begining of tensor data.
+         *  @param first a pointer to the beginning of tensor data.
          *  @param last a pointer to the end of tensor data.
          *  @param alignment a size of a vector register (in bytes).
          * */
@@ -142,13 +141,13 @@ namespace yateto {
 #ifdef ACL_DEVICE
     template<class float_t>
     class DeviceCopyManager : public CopyManager<float_t> {
-    private:
-        /** Copies a tensor to a given memory chunch, and shifts a given poiter.
+    protected:
+        /** Copies a tensor to a given memory chunk, and shifts a given pointer.
           *
-          *  NOTE: The function shifts and aligns a pointer w.r.p. to a given vector register size.
+          *  NOTE: The function shifts and aligns a pointer w.r.t. to a given vector register size.
           *
-          *  @param mem an address to a chunck of memeory.
-          *         NOTE: the address is going to be incremented envry time
+          *  @param mem an address to a chunk of memory.
+          *         NOTE: the address is going to be incremented enery time
           *         when new information is written.
           *  @param first a pointer to the begining of tensor data.
           *  @param last a pointer to the end of tensor data.

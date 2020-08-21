@@ -4,7 +4,7 @@ It is **Y**et **A**nother **Te**nsor **To**olbox for discontinuous Galerkin meth
 applications. You can find much more information about the package 
 [here](https://arxiv.org/abs/1903.11521).
 
-## Instalation
+## Installation
 ```bash
 pip install -e .
 ```

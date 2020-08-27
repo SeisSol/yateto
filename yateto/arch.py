@@ -42,7 +42,9 @@ from .memory import DenseMemoryLayout
 class Architecture(object):
   def __init__(self, name, sub_name, precision, alignment, enablePrefetch=False, host_name=None):
     self.name = name
-    self.sub_name = 'same' if not sub_name else sub_name  # 'same' -> same as host
+    self.sub_name = sub_name
+    self.host_name = host_name
+
     self.precision = precision.upper()
     if self.precision == 'D':
       self.bytesPerReal = 8
@@ -63,8 +65,6 @@ class Architecture(object):
     self.ulongTypename = 'unsigned long'
 
     self._tmpStackLimit = 524288
-
-    self.host_name = host_name
 
   def setTmpStackLimit(self, tmpStackLimit):
     self._tmpStackLimit = tmpStackLimit
@@ -87,16 +87,8 @@ class Architecture(object):
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
 
-def getArchitectureIdentifiedBy(host_ident, compute_ident=None, compute_sub_arch=None):
-  if compute_ident == None:
-    compute_ident = host_ident
-
-  if compute_ident and compute_sub_arch == None:
-    raise ValueError('Compute sub arch. is not set.\n'
-                     'Examples 1) compute arch: skx; compute sub arch: \"same\"\n'
-                     '         2) compute arch: nvidia; compute sub arch: sm_61\n')
-
-  if host_ident[0].upper() != compute_ident[0].upper():
+def getArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident):
+  if compute_ident[0].upper() != host_ident[0].upper():
     raise RuntimeError(f'Precision of host and compute arch. must be the same. '
                        f'Given: {host_ident}, {compute_ident}')
 
@@ -117,7 +109,7 @@ def getArchitectureIdentifiedBy(host_ident, compute_ident=None, compute_sub_arch
   }
   return arch[compute_name]
 
-def useArchitectureIdentifiedBy(host_ident, compute_ident, compute_sub_arch):
-  arch = getArchitectureIdentifiedBy(host_ident, compute_ident, compute_sub_arch)
+def useArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident):
+  arch = getArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident)
   DenseMemoryLayout.setAlignmentArch(arch)
   return arch

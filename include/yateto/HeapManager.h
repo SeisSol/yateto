@@ -4,6 +4,12 @@
 #include <assert.h>
 
 namespace yateto {
+    /**
+     * \class TmpMemManagerT
+     *
+     * \brief A naive implementation of stack to handle memory for tmp. variables provided from the user
+     *
+     * */
     template<typename T>
     struct TmpMemManagerT {
         void attachMem(T* Ptr) {

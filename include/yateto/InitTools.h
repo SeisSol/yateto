@@ -1,15 +1,17 @@
 #ifndef YATETO_INITTOOLS_H_
 #define YATETO_INITTOOLS_H_
 
+#include "CopyPolicy.h"
 #include <algorithm>
 #include <cstdint>
 
+/*
 #ifdef ACL_DEVICE
 #include "device.h"
 #endif
+*/
 
 namespace yateto {
-
     /** Computes a number of tensors inside of a tensor family.
      *
      * @return a number of tensors.
@@ -59,14 +61,9 @@ namespace yateto {
     }
 
 
-
-    template<typename float_t>
-    class CopyManager{
+    template<typename float_t, typename CopyPolicyT>
+    class CopyManager {
     public:
-
-        CopyManager() {};
-        ~CopyManager() {};
-
 
         /** Copies data from a tensor to a given memory chunk.
          *
@@ -114,7 +111,6 @@ namespace yateto {
             }
         }
 
-
     protected:
         /** Copies a tensor to a given memory chunk, and shifts a given pointer.
          *
@@ -130,47 +126,18 @@ namespace yateto {
         virtual void copyValuesToMem(float_t*& mem, float_t const* first, float_t const* last, size_t alignment) {
 
             // copy data
-            mem = std::copy(first, last, mem);
+            mem = m_Copier.copy(first, last, mem);
 
             // shift pointer
             mem += (alignedUpper(reinterpret_cast<uintptr_t>(mem), alignment) - reinterpret_cast<uintptr_t>(mem)) / sizeof(float_t);
             assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);
         }
+
+    private:
+      CopyPolicyT m_Copier{};
     };
 
-#ifdef ACL_DEVICE
-    template<class float_t>
-    class DeviceCopyManager : public CopyManager<float_t> {
-    protected:
-        /** Copies a tensor to a given memory chunk, and shifts a given pointer.
-          *
-          *  NOTE: The function shifts and aligns a pointer w.r.t. to a given vector register size.
-          *
-          *  @param mem an address to a chunk of memory.
-          *         NOTE: the address is going to be incremented enery time
-          *         when new information is written.
-          *  @param first a pointer to the begining of tensor data.
-          *  @param last a pointer to the end of tensor data.
-          *  @param alignment a size of a vector register (in bytes).
-          * */
-        void copyValuesToMem(float_t*& mem, float_t const* first, float_t const* last, size_t alignment) {
-
-            // compute the amount of bytes to copy
-            const unsigned bytes = (last - first) * sizeof(float_t);
-
-            // copy data
-            device::DeviceInstance::getInstance().api->copyTo(mem, first, bytes);
-
-            // increment memory pointer
-            mem += (last - first);
-
-            // shift pointer
-            mem += (alignedUpper(reinterpret_cast<uintptr_t>(mem), alignment) - reinterpret_cast<uintptr_t>(mem)) / sizeof(float_t);
-            assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);
-        }
-    };
-
-#endif
+    template<class float_t> using DefaultCopyManager = CopyManager<float_t, SimpleCopyPolicy<float_t>>;
 }
 
 #endif

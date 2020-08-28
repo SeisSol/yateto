@@ -2,7 +2,7 @@ spack:
   specs:
   - eigen@3.3.7
   - openblas@0.3.9
-  - libxsmm@1.15
+  - libxsmm+generator
   - cmake@3.16.0
 
   container:
@@ -20,12 +20,14 @@ spack:
       - make
       - gcc
       - g++
+      - gfortran
       - git
 
     extra_instructions:
         final: |
             RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
             RUN git clone https://github.com/CxxTest/cxxtest.git cxxtest && cd cxxtest/python && python setup.py install && cd ../../
-            RUN echo "export PATH=\$PATH:/cxxtest" >> /root/.bashrc && echo "export CMAKE_PREFIX_PATH=\$CMAKE_PREFIX_PATH:/cxxtest" >> /root/.bashrc
-            RUN mkdir folder
-            WORKDIR /folder
+            RUN echo "export PATH=\$PATH:/cxxtest" >> /etc/profile.d/z20_additional_env.sh
+            RUN echo "export CMAKE_PREFIX_PATH=\$CMAKE_PREFIX_PATH:/cxxtest" >> /etc/profile.d/z20_additional_env.sh
+            RUN mkdir local_workspace
+            WORKDIR /local_workspace

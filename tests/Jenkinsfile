@@ -1,0 +1,81 @@
+properties([parameters([string(defaultValue: 'ravil/gpu_integration', description: 'branch to get tested', name: 'BRANCH', trim: true)])])
+
+pipeline {
+    agent any
+
+    stages {
+        stage('CleanWorkspace') {
+            steps {
+                deleteDir()
+            }
+        }
+        stage('Clone') {
+            steps {
+                git url: "https://github.com/SeisSol/yateto.git", branch: '$BRANCH'
+            }
+        }
+        stage('BuildTestImage') {
+            steps {
+                sh 'docker build --no-cache --file tests/Dockerfile-setup --build-arg TEST_BRANCH=$BRANCH --build-arg UID=$(id -u) --build-arg GID=$(id -g) --tag yateto:latest .'
+            }
+        }
+        stage('RunTest') {
+            steps {
+                script {
+                    def TestScript = '''
+#!bin/bash
+set -e pipefail
+
+cd code-gen && mkdir build && cd build
+env
+
+export CTEST_OUTPUT_ON_FAILURE=1
+for example in matmul minimal; do
+    for backend in Eigen LIBXSMM OpenBLAS; do
+        for precision in single double; do
+            for build_type in Debug Release; do
+                echo " ====== Test Config: ======"
+                echo " Build: ${build_type}"
+                echo " Precision: ${precision}"
+                echo " Beckend: ${backend}"
+                echo " Host Arch: ${ARCH}"
+                echo "==========================="
+                
+                cmake .. -DEXAMPLES=$example -DCMAKE_BUILD_TYPE=$build_type -DPRECISION=$precision -DVARIANT=$backend -DARCH=hsw
+                make
+                
+                STORAGE=/cache/$example-$backend-$precision-$build_type
+                echo $STORAGE
+                mkdir -p $STORAGE
+                cp -r ./$example/*/* $STORAGE
+                
+                make test
+                rm -rf ./*
+            done
+        done
+    done
+done
+                    '''
+                    writeFile(file: "run_tests.sh", text: TestScript)
+                }
+                sh "mkdir ./cache"
+                script {
+                    // define the runner arch.
+                    // NOTE: it is recommended to denote all your machines (master and slaves) with env. var. HOST_ARCH
+                    if (env.HOST_ARCH) {
+                        env.RUNNER_ARCH=env.HOST_ARCH
+                    }
+                    else {
+                        env.RUNNER_ARCH="noarch"
+                    }
+                }
+                sh 'docker container run --rm -e ARCH=$RUNNER_ARCH -v $(pwd)/cache:/cache -v $(pwd)/run_tests.sh:/local_workspace/yateto/tests/run_tests.sh yateto:latest run_tests.sh'
+            }
+        }
+    }
+    post { 
+        always {
+            sh "docker image rm yateto:latest"
+        }
+    }
+}

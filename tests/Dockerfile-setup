@@ -1,0 +1,19 @@
+# NOTE: Don't push this image to dockerhub or similar. Always build this image with: --no-cache
+# Example: docker build --no-cache --file ./Dockerfile-build --tag yateto:latest .
+
+FROM ravilmobile/yateto-env:latest
+
+RUN mkdir /cache
+
+ARG UID=1000
+ARG GID=1000
+
+RUN addgroup --gid $GID tester
+RUN adduser --disabled-password --gecos '' --uid $UID --gid $GID tester
+RUN chown $UID:$GID /local_workspace /cache 
+USER tester
+
+ARG TEST_BRANCH=master
+RUN git clone --branch $TEST_BRANCH https://github.com/SeisSol/yateto.git yateto 
+RUN cd yateto && pip3 install -e . && pip3 install gemmforge
+WORKDIR /local_workspace/yateto/tests

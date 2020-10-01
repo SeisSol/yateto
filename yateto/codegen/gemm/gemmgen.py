@@ -13,7 +13,7 @@ import re
 
 class GemmGen(object):
   NUM_ELEMENTS_NAME = 'NumElements'
-  EXTRA_OFFSET_NAME = "ExtraOffset"
+  EXTRA_OFFSET_NAME = 'ExtraOffset'
 
   def __init__(self, arch, descr, gemm_cfg):
     self._arch = arch
@@ -102,7 +102,6 @@ class GemmGen(object):
         else:
           return 'pointer_based'
 
-      #TODO : ask Carsten what is a meaning of shape and bbox of memoryLayout
       def deduce_bbox(rows_range, cols_range, is_trans, ml_bbox):
         if is_trans:
           bbox = [cols_range.start - ml_bbox[0].start,

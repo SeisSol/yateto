@@ -53,7 +53,7 @@ class Description(object):
   def setBeta(self, beta):
     self.beta = beta
 
-def generator(arch, descr, gemm_cfg, platform):
+def generator(arch, descr, gemm_cfg, target):
   AOk = descr.isACsc or descr.leftTerm.memoryLayout.stridei(0) == 1
   BOk = descr.isBCsc or descr.rightTerm.memoryLayout.stridei(0) == 1
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
@@ -69,7 +69,7 @@ def generator(arch, descr, gemm_cfg, platform):
                                     descr.transB,
                                     descr.alpha,
                                     descr.beta,
-                                    platform)
+                                    target)
     if gemmTool:
       return GemmGen(arch, descr, gemmTool)
   return Generic(arch, descr)

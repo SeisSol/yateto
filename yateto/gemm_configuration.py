@@ -19,7 +19,7 @@ class GemmTool(ABC):
     pass
 
   @abstractmethod
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
     pass
 
 class BLASlike(GemmTool):
@@ -30,8 +30,8 @@ class BLASlike(GemmTool):
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     return Preference.MODERATE
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
-    return (not sparseA and not sparseB and platform == 'cpu')
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return (not sparseA and not sparseB and target == 'cpu')
 
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
@@ -79,8 +79,8 @@ class Eigen(BLASlike):
     super().__init__(None, ['Eigen/Eigen'])
     self._arch = arch
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
-    return (not sparseA and not sparseB and platform == 'cpu')
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return (not sparseA and not sparseB and target == 'cpu')
 
   def bool2Trans(self, trans):
     return '.transpose()' if trans else ''
@@ -130,7 +130,7 @@ class CodeGenerator(GemmTool):
     self._arch = arch
 
   @abstractmethod
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
     pass
 
 class LIBXSMM(CodeGenerator):
@@ -144,13 +144,10 @@ class LIBXSMM(CodeGenerator):
     if self._arch.name.lower() in supported_set:
       return True
     else:
-      if self._arch.host_name and self._arch.host_name.lower() in supported_set:
-        return True
-      else:
-        return False
+      return self._arch.host_name and self._arch.host_name.lower() in supported_set
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
-    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and platform == 'cpu'
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     if sparseA:
@@ -171,14 +168,11 @@ class PSpaMM(CodeGenerator):
     if self._arch.name.lower() in supported_set:
       return True
     else:
-      if self._arch.host_name and self._arch.host_name.lower() in supported_set:
-        return True
-      else:
-        return False
+      return self._arch.host_name and self._arch.host_name.lower() in supported_set
 
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
-    return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB) and platform == 'cpu'
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB) and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     if sparseB:
@@ -203,12 +197,8 @@ class GemmForge(CodeGenerator):
   def _is_arch_supported(self):
     return self._arch.name.lower() in {'nvidia'}
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
-    if self._is_arch_supported():
-      if not (sparseA and sparseB):
-        if platform == 'gpu':
-          return True
-    return False
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return self._is_arch_supported() and not (sparseA or sparseB) and target == 'gpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     if sparseA and sparseB:
@@ -225,10 +215,10 @@ class GeneratorCollection(object):
     self.gemmTools = gemmTools
     self.selected = set()
 
-  def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
+  def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
     tools = dict()
     for gemmTool in reversed(self.gemmTools):
-      if gemmTool.supported(m, n, k, sparseA, sparseB, transA, transB, alpha, beta, platform):
+      if gemmTool.supported(m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
         tools[gemmTool.preference(m, n, k, sparseA, sparseB, transA, transB, alpha, beta)] = gemmTool
 
     select = None

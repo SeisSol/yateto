@@ -20,5 +20,5 @@ class Description(object):
     self.loopRanges = rA
     
 
-def generator(arch, descr, platform):
-  return Generic(arch, descr) if platform == 'cpu' else CsaGen(arch, descr)
+def generator(arch, descr, target):
+  return Generic(arch, descr) if target == 'cpu' else CsaGen(arch, descr)

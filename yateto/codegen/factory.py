@@ -8,11 +8,11 @@ from . import copyscaleadd, indexsum, log, product
 class KernelFactory(object):
   ERROR_NAME = '_error'
 
-  def __init__(self, cpp, arch, platform):
+  def __init__(self, cpp, arch, target):
     self._cpp = cpp
     self._arch = arch
     self._freeList = list()
-    self._platform = platform
+    self._target = target
     
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
@@ -28,7 +28,7 @@ class KernelFactory(object):
   def temporary(self, bufname, size, iniZero=False, memory=list()):
     assert(iniZero == False or len(memory) == 0)
 
-    if self._platform == 'cpu':
+    if self._target == 'cpu':
       if self._arch.onHeap(size):
         if memory:
           raise NotImplementedError('Direct temporary initialization is not supported for heap-allocated memory.')
@@ -58,13 +58,13 @@ class KernelFactory(object):
 
 
   def freeTmp(self):
-    if self._platform == 'cpu':
+    if self._target == 'cpu':
       for free in self._freeList:
         self._cpp(f'free({free});')
-    elif self._platform == 'gpu':
+    elif self._target == 'gpu':
       self._cpp('TmpMemManager.flush();')
     else:
-      raise RuntimeError('unknown compute platform')
+      raise RuntimeError('unknown compute target')
 
     self._freeList = []
 
@@ -73,8 +73,8 @@ class KernelFactory(object):
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
 class OptimisedKernelFactory(KernelFactory):
-  def __init__(self, cpp, arch, platform):
-    super().__init__(cpp, arch, platform)
+  def __init__(self, cpp, arch, target):
+    super().__init__(cpp, arch, target)
 
   def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
@@ -89,7 +89,7 @@ class OptimisedKernelFactory(KernelFactory):
       transB = node.transB(),
       prefetchName = prefetchName
     )
-    generator = log.generator(self._arch, description, self._platform)
+    generator = log.generator(self._arch, description, self._target)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
   
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -100,7 +100,7 @@ class OptimisedKernelFactory(KernelFactory):
       result = IndexedTensorDescription.fromNode(result, node),
       term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     )
-    generator = indexsum.generator(self._arch, description, self._platform)
+    generator = indexsum.generator(self._arch, description, self._target)
     return generator.generate(self._cpp, routineCache)
   
   def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -112,7 +112,7 @@ class OptimisedKernelFactory(KernelFactory):
       leftTerm = IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()),
       rightTerm = IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())
     )
-    generator = product.generator(self._arch, description, self._platform)
+    generator = product.generator(self._arch, description, self._target)
     return generator.generate(self._cpp, routineCache)
 
   def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -123,7 +123,7 @@ class OptimisedKernelFactory(KernelFactory):
       result = IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()),
       term = IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())
     )
-    generator = copyscaleadd.generator(self._arch, description, self._platform)
+    generator = copyscaleadd.generator(self._arch, description, self._target)
     return generator.generate(self._cpp, routineCache)
   
   def simple(self, result, term, add, scalar, routineCache):
@@ -133,12 +133,12 @@ class OptimisedKernelFactory(KernelFactory):
       result = IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()),
       term = IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())
     )
-    generator = copyscaleadd.generator(self._arch, description, self._platform)
+    generator = copyscaleadd.generator(self._arch, description, self._target)
     return generator.generate(self._cpp, routineCache)
 
 class UnitTestFactory(KernelFactory):
   def __init__(self, cpp, arch, nameFun, testFramework):
-    super().__init__(cpp, arch, platform='cpu')
+    super().__init__(cpp, arch, target='cpu')
     self._name = nameFun
     self._rand = 0
     self._testFramework = testFramework

@@ -1,4 +1,6 @@
-properties([parameters([string(defaultValue: 'ravil/gpu_integration', description: 'branch to get tested', name: 'BRANCH', trim: true)])])
+properties([parameters([string(defaultValue: 'https://github.com/SeisSol/yateto.git', description: 'remote (default) or local (provide local path)', name: 'REPO', trim: true),
+                        string(defaultValue: 'ravil/gpu_integration', description: 'branch to get tested', name: 'BRANCH', trim: true),
+                        string(defaultValue: 'dhsw', description: 'target architecture (according to yateto format)', name: 'ARCH', trim: true)])])
 
 pipeline {
     agent any
@@ -11,12 +13,12 @@ pipeline {
         }
         stage('Clone') {
             steps {
-                git url: "https://github.com/SeisSol/yateto.git", branch: '$BRANCH'
+                sh 'git clone --branch $BRANCH $REPO yateto'
             }
         }
         stage('BuildTestImage') {
             steps {
-                sh 'docker build --no-cache --file tests/Dockerfile-setup --build-arg TEST_BRANCH=$BRANCH --build-arg UID=$(id -u) --build-arg GID=$(id -g) --tag yateto:latest .'
+                sh 'docker build --no-cache --file yateto/tests/Dockerfile-setup --build-arg TEST_BRANCH=$BRANCH --build-arg UID=$(id -u) --build-arg GID=$(id -g) --tag yateto:latest .'
             }
         }
         stage('RunTest') {
@@ -25,10 +27,8 @@ pipeline {
                     def TestScript = '''
 #!bin/bash
 set -e pipefail
-
 cd code-gen && mkdir build && cd build
 env
-
 export CTEST_OUTPUT_ON_FAILURE=1
 for example in matmul minimal; do
     for backend in Eigen LIBXSMM OpenBLAS; do

@@ -109,7 +109,7 @@ class OptimisedKernelGenerator(KernelGenerator):
                  function,
                  tmp_mem_size,
                  is_compute_constant_tensors,
-                 platform):
+                 target):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
@@ -120,7 +120,7 @@ class OptimisedKernelGenerator(KernelGenerator):
       self.function = function
       self.tmp_mem_size = tmp_mem_size
       self.is_compute_constant_tensors = is_compute_constant_tensors
-      self.platform = platform
+      self.target = target
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -134,7 +134,7 @@ class OptimisedKernelGenerator(KernelGenerator):
       else:
         tensors[base_name] = {group}
   
-  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, platform):
+  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target):
     scalars = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
@@ -160,7 +160,7 @@ class OptimisedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = OptimisedKernelFactory(fcpp, self._arch, platform)
+      factory = OptimisedKernelFactory(fcpp, self._arch, target)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.freeTmp()
       function = functionIO.getvalue()    
@@ -173,7 +173,7 @@ class OptimisedKernelGenerator(KernelGenerator):
                               function,
                               tmp_memory,
                               is_compute_constant_tensors,
-                              platform)
+                              target)
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -198,14 +198,14 @@ class OptimisedKernelGenerator(KernelGenerator):
         self._addFromKO(ko.prefetch, prefetch)
         self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
 
-    platform = kernelOutlines[-1].platform
-    is_same_platform = True
+    target = kernelOutlines[-1].target
+    is_same_target = True
     for outline in kernelOutlines:
       if outline:
-        is_same_platform = True if outline.platform == platform else False
+        is_same_target = True if outline.target == target else False
 
-    if not is_same_platform:
-      raise RuntimeError("kernels with the same family belong to different compute platforms.")
+    if not is_same_target:
+      raise RuntimeError("kernels with the same family belong to different compute target.")
 
     scalars = sorted(list(scalars), key=str)
 
@@ -248,7 +248,7 @@ class OptimisedKernelGenerator(KernelGenerator):
                                              self.TEMP_MAX_MEM_REQUIRED_NAME,
                                              max(tmp_mem_list)))
 
-        if platform == 'gpu':
+        if target == 'gpu':
           # TmpMemManager controls external extra mem. allocated on gpu for tmp. variables
           header(f'yateto::TmpMemManagerT<{self._arch.typename}> TmpMemManager;')
 
@@ -257,10 +257,10 @@ class OptimisedKernelGenerator(KernelGenerator):
         for scalar in scalars:
           header('{0} {1} = std::numeric_limits<{0}>::signaling_NaN();'.format(self._arch.typename, scalar))
 
-        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, platform):
+        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, target):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           typ = self._arch.typename
-          ptr_type = '**' if not is_constant and platform == 'gpu' else '*'
+          ptr_type = '**' if not is_constant and target == 'gpu' else '*'
           if not writable:
             typ += ' const'
           if len(next(iter(groups))) > 0:
@@ -275,11 +275,11 @@ class OptimisedKernelGenerator(KernelGenerator):
                      groups,
                      writable[baseName],
                      is_compute_constant_tensors[baseName],
-                     platform)
+                     target)
         header.emptyline()
 
         # containers with extra offsets for GPU-like computations
-        if platform == 'gpu':
+        if target == 'gpu':
           header(f'unsigned {InitializerGenerator.NUM_ELEMENTS_NAME} = 0;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
@@ -300,7 +300,7 @@ class OptimisedKernelGenerator(KernelGenerator):
         if len(prefetch) > 0:
           with header.Struct(self.PREFETCHSTRUCT_NAME):
             for baseName, groups in prefetch.items():
-              kernelArgs(baseName, groups, False, False, platform='any')
+              kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
           header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
           header.emptyline()
 
@@ -363,7 +363,7 @@ class OptimisedKernelGenerator(KernelGenerator):
           else:
             cpp(f'assert({base_name} != nullptr);')
 
-        if platform == 'gpu':
+        if target == 'gpu':
           cpp(f'assert({InitializerGenerator.NUM_ELEMENTS_NAME} != 0);')
 
         cpp(kernelOutline.function)

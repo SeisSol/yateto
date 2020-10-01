@@ -65,11 +65,6 @@ class CsaGen(object):
     m = d.loopRanges[d.result.indices[0]]
     n = d.loopRanges[d.result.indices[1]]
 
-    # TODO:  implement initialization in the generator
-    #if d.beta == 0.0:
-    #  writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
-    #  initializeWithZero(cpp, self._arch, d.result, writeBB)
-
     # calculate FLOP per single operation
     flop = 0
     alpha = d.alpha

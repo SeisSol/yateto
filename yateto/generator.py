@@ -21,9 +21,9 @@ from io import StringIO
 class Kernel(object):
   BASE_NAME = r'[a-zA-Z]\w*'
   VALID_NAME = r'^{}$'.format(BASE_NAME)
-  VALID_PLATFORMS = ['cpu', 'gpu']
+  VALID_TARGETS = ['cpu', 'gpu']
 
-  def __init__(self, name, ast, prefetch=None, namespace=None, platform='cpu'):
+  def __init__(self, name, ast, prefetch=None, namespace=None, target='cpu'):
     self.name = name
     if isinstance(ast, list):
       self.ast = ast
@@ -42,10 +42,10 @@ class Kernel(object):
     else:
       self.namespace = namespace
 
-    if not platform in self.VALID_PLATFORMS:
+    if not target in self.VALID_TARGETS:
       raise ValueError(f'target platform is incorrect. '
-                       f'Given: {platform}. Allowed: {", ".join(self.VALID_PLATFORMS)}')
-    self.platform = platform
+                       f'Given: {target}. Allowed: {", ".join(self.VALID_TARGETS)}')
+    self.target = target
 
     self.cfg = None
     self.nonZeroFlops = -1
@@ -148,7 +148,7 @@ class KernelFamily(object):
       index += p*stride[i]
     return index
 
-  def add(self, name, ast, prefetch=None, namespace=None, platform='cpu'):
+  def add(self, name, ast, prefetch=None, namespace=None, target='cpu'):
     baseName = self.baseName(name)
     if not self.name:
       self.name = baseName
@@ -156,7 +156,7 @@ class KernelFamily(object):
     
     group = self.group(name)
     internalName = '_{}_{}'.format(baseName, group)
-    self._kernels[group] = Kernel(internalName, ast, prefetch, namespace, platform)
+    self._kernels[group] = Kernel(internalName, ast, prefetch, namespace, target)
 
     if namespace is None:
       self.namespace = ''
@@ -210,16 +210,16 @@ class Generator(object):
   def arch(self):
     return self._arch
   
-  def add(self, name: str, ast: Node, prefetch=None, namespace=None, platform='cpu'):
+  def add(self, name: str, ast: Node, prefetch=None, namespace=None, target='cpu'):
     if KernelFamily.isValidName(name):
       baseName = KernelFamily.baseName(name)
       if baseName not in self._kernelFamilies:
         self._kernelFamilies[baseName] = KernelFamily()
-      self._kernelFamilies[baseName].add(name, ast, prefetch, namespace, platform)
+      self._kernelFamilies[baseName].add(name, ast, prefetch, namespace, target)
     else:      
       if not Kernel.isValidName(name):
         raise ValueError(f'Kernel name invalid (must match regexp {Kernel.VALID_NAME}): {name}')
-      kernel = Kernel(name, ast, prefetch, namespace=namespace, platform=platform)
+      kernel = Kernel(name, ast, prefetch, namespace=namespace, target=target)
       self._kernels.append(kernel)
 
   def kernels(self):
@@ -231,7 +231,7 @@ class Generator(object):
                 astGenerator,
                 prefetchGenerator=None,
                 namespace=None,
-                platform='cpu'):
+                target='cpu'):
 
     if name not in self._kernelFamilies:
       self._kernelFamilies[name] = KernelFamily(namespace=namespace)
@@ -246,7 +246,7 @@ class Generator(object):
       indexedName = '{}({})'.format(name, KernelFamily.linear(stride, p))
       ast = astGenerator(*p)
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
-      family.add(indexedName, ast, prefetch, namespace, platform=platform)
+      family.add(indexedName, ast, prefetch, namespace, target=target)
   
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
@@ -338,7 +338,7 @@ class Generator(object):
                   kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
                                                                            kernel.cfg,
                                                                            gemm_cfg,
-                                                                           kernel.platform)
+                                                                           kernel.target)
                   with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
                     optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
 
@@ -350,7 +350,7 @@ class Generator(object):
                     kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
                                                                                      kernel.cfg,
                                                                                      gemm_cfg,
-                                                                                     kernel.platform)
+                                                                                     kernel.target)
 
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())

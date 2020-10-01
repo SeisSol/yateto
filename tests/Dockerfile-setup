@@ -5,6 +5,7 @@ FROM ravilmobile/yateto-env:latest
 
 RUN mkdir /cache
 
+# create a test user
 ARG UID=1000
 ARG GID=1000
 
@@ -13,7 +14,9 @@ RUN adduser --disabled-password --gecos '' --uid $UID --gid $GID tester
 RUN chown $UID:$GID /local_workspace /cache 
 USER tester
 
-ARG TEST_BRANCH=master
-RUN git clone --branch $TEST_BRANCH https://github.com/SeisSol/yateto.git yateto 
-RUN cd yateto && pip3 install -e . && pip3 install gemmforge
-WORKDIR /local_workspace/yateto/tests
+# copy repo from the local current directory (fetched with Jenkins) to the workdir of the image
+COPY --chown=tester:tester . .
+
+#install dependencies and change workdir to the tests dir
+RUN pip3 install -e . && pip3 install gemmforge
+WORKDIR /local_workspace/tests

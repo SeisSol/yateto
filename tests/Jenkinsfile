@@ -1,6 +1,9 @@
-properties([parameters([string(defaultValue: 'https://github.com/SeisSol/yateto.git', description: 'remote (default) or local (provide local path)', name: 'REPO', trim: true),
-                        string(defaultValue: 'ravil/gpu_integration', description: 'branch to get tested', name: 'BRANCH', trim: true),
-                        string(defaultValue: 'dhsw', description: 'target architecture (according to yateto format)', name: 'ARCH', trim: true)])])
+properties([parameters([string(defaultValue: '', description: 'target architecture (according to yateto format). If not given then taken from Jenkins env-vars', name: 'ARCH', trim: true),
+                        string(defaultValue: 'matmul minimal', description: 'whitespace separate list of examples', name: 'EXAMPLES', trim: true),
+                        string(defaultValue: 'Eigen LIBXSMM OpenBLAS', description: 'whitespace separate list of generators', name: 'GENERATORS', trim: true),
+                        booleanParam(defaultValue: false, description: 'if true the environment image will be build. Note: it will take a considerable amount of time', name: 'BUILD_ENV_IMAGE')
+                        ])])
+
 
 pipeline {
     agent any
@@ -12,13 +15,46 @@ pipeline {
             }
         }
         stage('Clone') {
+            environment {
+                TRIMMED_BRANCH = sh(script:'echo ${GIT_BRANCH##origin/}', returnStdout: true).trim()
+            }
+
             steps {
-                sh 'git clone --branch $BRANCH $REPO yateto'
+                git branch: "${env.TRIMMED_BRANCH}", url: "${GIT_URL}"
+            }
+        }
+        stage('BuildEnvImages') {
+            when {
+                expression {
+                    env.BUILD_ENV_IMAGE.toBoolean() == true
+                }
+            }
+            steps {
+                // Make sure that Jenkins knows the location of Spack. 
+                // You will need to add it to the Jenkins settings
+                dir("tests") {
+                    sh 'spack containerize > ./Dockerfile-env'
+                    sh 'cat ./Dockerfile-env'
+
+                    script {
+                        def customImage = docker.build("ravilmobile/yateto-env", "-f Dockerfile-env .")
+                        customImage.push("latest")
+                    }
+                }
             }
         }
         stage('BuildTestImage') {
+            environment {
+                USER_ID = sh(script:'id -u', returnStdout: true).trim()
+                GROUP_ID = sh(script:'id -g', returnStdout: true).trim()
+            }
             steps {
-                sh 'docker build --no-cache --file yateto/tests/Dockerfile-setup --build-arg TEST_BRANCH=$BRANCH --build-arg UID=$(id -u) --build-arg GID=$(id -g) --tag yateto:latest .'
+                script {
+                    def dockerFilePath = "tests/Dockerfile-setup"
+                    def buildParams = String.format("--no-cache --build-arg UID=%s --build-arg GID=%s --file %s .", 
+                                                    env.USER_ID, env.GROUP_ID, dockerFilePath)
+                    def customImage = docker.build("yateto:latest", buildParams)
+                }                
             }
         }
         stage('RunTest') {
@@ -30,8 +66,8 @@ set -e pipefail
 cd code-gen && mkdir build && cd build
 env
 export CTEST_OUTPUT_ON_FAILURE=1
-for example in matmul minimal; do
-    for backend in Eigen LIBXSMM OpenBLAS; do
+for example in ${EXAMPLES}; do
+    for backend in ${GENERATORS}; do
         for precision in single double; do
             for build_type in Debug Release; do
                 echo " ====== Test Config: ======"
@@ -39,9 +75,10 @@ for example in matmul minimal; do
                 echo " Precision: ${precision}"
                 echo " Beckend: ${backend}"
                 echo " Host Arch: ${ARCH}"
+                echo " Example: ${example}"
                 echo "==========================="
                 
-                cmake .. -DEXAMPLES=$example -DCMAKE_BUILD_TYPE=$build_type -DPRECISION=$precision -DVARIANT=$backend -DARCH=hsw
+                cmake .. -DEXAMPLES=$example -DCMAKE_BUILD_TYPE=$build_type -DPRECISION=$precision -DVARIANT=$backend -DARCH=$ARCH
                 make
                 
                 STORAGE=/cache/$example-$backend-$precision-$build_type
@@ -55,21 +92,30 @@ for example in matmul minimal; do
         done
     done
 done
+cd ../..
+
+cd interface && mkdir build && cd build
+cmake .. && make && make test
+
                     '''
                     writeFile(file: "run_tests.sh", text: TestScript)
                 }
                 sh "mkdir ./cache"
+                
                 script {
-                    // define the runner arch.
-                    // NOTE: it is recommended to denote all your machines (master and slaves) with env. var. HOST_ARCH
-                    if (env.HOST_ARCH) {
+                    // define runner arch. for testing
+                    //  if the user specifies ARCH as parameter it is going to be used for testing
+                    //  if not, we will try to get ARCH from the Jenkins env. variables 
+                    //  if the user didn't set env.HOST_ARCH in his/her Jenkins settings, then 'noarch' will be used
+                    env.RUNNER_ARCH="noarch"
+                    if (!env.ARCH.allWhitespace) {
+                        env.RUNNER_ARCH=env.ARCH
+                    }
+                    else if (env.HOST_ARCH) {
                         env.RUNNER_ARCH=env.HOST_ARCH
                     }
-                    else {
-                        env.RUNNER_ARCH="noarch"
-                    }
                 }
-                sh 'docker container run --rm -e ARCH=$RUNNER_ARCH -v $(pwd)/cache:/cache -v $(pwd)/run_tests.sh:/local_workspace/yateto/tests/run_tests.sh yateto:latest run_tests.sh'
+                sh 'docker container run --rm -e ARCH="${RUNNER_ARCH}" -e EXAMPLES="${EXAMPLES}" -e GENERATORS="${GENERATORS}" -v $(pwd)/cache:/cache -v $(pwd)/run_tests.sh:/local_workspace/tests/run_tests.sh yateto:latest run_tests.sh'
             }
         }
     }

@@ -52,9 +52,9 @@ class KernelFactory(object):
           ini = ' = {{{}}}'.format(', '.join(memory))
         self._cpp('{} {}[{}] __attribute__((aligned({}))){};'.format(self._arch.typename, bufname, size, self._arch.alignment, ini))
     else:
-      delataion = f'{self._arch.typename}* {bufname}'
+      declaration = f'{self._arch.typename}* {bufname}'
       total_size = f'NumElements * {size}'
-      self._cpp(f'{delataion} = TmpMemManager.getMem({total_size});')
+      self._cpp(f'{declaration} = TmpMemManager.getMem({total_size});')
 
 
   def freeTmp(self):

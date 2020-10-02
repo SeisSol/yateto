@@ -126,7 +126,7 @@ namespace yateto {
         virtual void copyValuesToMem(float_t*& mem, float_t const* first, float_t const* last, size_t alignment) {
 
             // copy data
-            mem = m_Copier.copy(first, last, mem);
+            mem = copier.copy(first, last, mem);
 
             // shift pointer
             mem += (alignedUpper(reinterpret_cast<uintptr_t>(mem), alignment) - reinterpret_cast<uintptr_t>(mem)) / sizeof(float_t);
@@ -134,7 +134,7 @@ namespace yateto {
         }
 
     private:
-      CopyPolicyT m_Copier{};
+      CopyPolicyT copier{};
     };
 
     template<class float_t> using DefaultCopyManager = CopyManager<float_t, SimpleCopyPolicy<float_t>>;

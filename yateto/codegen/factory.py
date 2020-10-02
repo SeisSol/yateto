@@ -54,7 +54,7 @@ class KernelFactory(object):
     else:
       declaration = f'{self._arch.typename}* {bufname}'
       total_size = f'NumElements * {size}'
-      self._cpp(f'{declaration} = TmpMemManager.getMem({total_size});')
+      self._cpp(f'{declaration} = LinearAllocator.allocate({total_size});')
 
 
   def freeTmp(self):
@@ -62,7 +62,7 @@ class KernelFactory(object):
       for free in self._freeList:
         self._cpp(f'free({free});')
     elif self._target == 'gpu':
-      self._cpp('TmpMemManager.flush();')
+      self._cpp('LinearAllocator.free();')
     else:
       raise RuntimeError('unknown compute target')
 

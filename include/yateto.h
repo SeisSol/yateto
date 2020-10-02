@@ -3,6 +3,6 @@
 
 #include "yateto/TensorView.h"
 #include "yateto/InitTools.h"
-#include "yateto/HeapManager.h"
+#include "yateto/LinearAllocator.h"
 
 #endif

@@ -1,30 +1,24 @@
-#ifndef YATETO_HEAP_MANAGER_H_
-#define YATETO_HEAP_MANAGER_H_
+#ifndef YATETO_LINEAR_ALLOCATED_H_
+#define YATETO_LINEAR_ALLOCATED_H_
 
 #include <assert.h>
 
 namespace yateto {
-    /**
-     * \class TmpMemManagerT
-     *
-     * \brief A naive implementation of stack to handle memory for tmp. variables provided from the user
-     *
-     * */
     template<typename T>
-    struct TmpMemManagerT {
-        void attachMemory(T* ptr) {
+    struct LinearAllocatorT {
+        void initialize(T* ptr) {
             isInit = true;
             userSpaceMem = ptr;
         }
 
-        T* getMem(size_t size) {
+        T* allocate(size_t size) {
             assert(isInit && "YATETO: Temporary-Memory manager hasn't been initialized");
             int currentByteCount = byteCount;
             byteCount += size;
             return &userSpaceMem[currentByteCount];
         }
 
-        void flush() {
+        void free() {
             isInit = false;
             byteCount = 0;
             userSpaceMem = nullptr;
@@ -35,5 +29,5 @@ namespace yateto {
         bool isInit{false};
         T *userSpaceMem{nullptr};
     };
-}  // YATETO_HEAP_MANAGER_H_
+}  // YATETO_LINEAR_ALLOCATED_H_
 #endif

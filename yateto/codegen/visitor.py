@@ -249,8 +249,8 @@ class OptimisedKernelGenerator(KernelGenerator):
                                              max(tmp_mem_list)))
 
         if target == 'gpu':
-          # TmpMemManager controls external extra mem. allocated on gpu for tmp. variables
-          header(f'yateto::TmpMemManagerT<{self._arch.typename}> TmpMemManager;')
+          # LinearAllocator controls external extra mem. allocated on gpu for tmp. variables
+          header(f'yateto::LinearAllocatorT<{self._arch.typename}> LinearAllocator;')
 
         header.emptyline()
 

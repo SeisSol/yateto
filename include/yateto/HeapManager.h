@@ -12,28 +12,28 @@ namespace yateto {
      * */
     template<typename T>
     struct TmpMemManagerT {
-        void attachMem(T* Ptr) {
-            m_IsInit = true;
-            m_UserSpaceMem = Ptr;
+        void attachMemory(T* ptr) {
+            isInit = true;
+            userSpaceMem = ptr;
         }
 
-        T* getMem(size_t Size) {
-            assert(m_IsInit && "YATETO: Temporary-Memory manager hasn't been initialized");
-            int CurrentCount = m_ByteCount;
-            m_ByteCount += Size;
-            return &m_UserSpaceMem[CurrentCount];
+        T* getMem(size_t size) {
+            assert(isInit && "YATETO: Temporary-Memory manager hasn't been initialized");
+            int currentByteCount = byteCount;
+            byteCount += size;
+            return &userSpaceMem[currentByteCount];
         }
 
         void flush() {
-            m_IsInit = false;
-            m_ByteCount = 0;
-            m_UserSpaceMem = nullptr;
+            isInit = false;
+            byteCount = 0;
+            userSpaceMem = nullptr;
         }
 
         private:
-        size_t m_ByteCount{0};
-        bool m_IsInit{false};
-        T *m_UserSpaceMem{nullptr};
+        size_t byteCount{0};
+        bool isInit{false};
+        T *userSpaceMem{nullptr};
     };
 }  // YATETO_HEAP_MANAGER_H_
 #endif

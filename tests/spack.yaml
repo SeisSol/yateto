@@ -25,9 +25,9 @@ spack:
 
     extra_instructions:
         final: |
-            RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
-            RUN git clone https://github.com/CxxTest/cxxtest.git cxxtest && cd cxxtest/python && python setup.py install && cd ../../
-            RUN echo "export PATH=\$PATH:/cxxtest" >> /etc/profile.d/z20_additional_env.sh
-            RUN echo "export CMAKE_PREFIX_PATH=\$CMAKE_PREFIX_PATH:/cxxtest" >> /etc/profile.d/z20_additional_env.sh
-            RUN mkdir local_workspace
+            RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10 \
+                && git clone https://github.com/CxxTest/cxxtest.git cxxtest && cd cxxtest/python && python setup.py install && cd ../.. \
+                && echo "export PATH=\$PATH:/cxxtest" >> /etc/profile.d/z20_additional_env.sh \
+                && echo "export CMAKE_PREFIX_PATH=\$CMAKE_PREFIX_PATH:/cxxtest" >> /etc/profile.d/z20_additional_env.sh \
+                && mkdir local_workspace
             WORKDIR /local_workspace

@@ -6,8 +6,10 @@ import re
 
 from yateto.type import Tensor
 
-
 class CsaGen(object):
+  """Copy-Add-Scale Generator (Csa): B = beta * B + alpha * A
+
+  """
   def __init__(self, arch, descr):
     self._arch = arch
     self._descr = descr
@@ -64,23 +66,7 @@ class CsaGen(object):
     d = self._descr  # type: copyscaleadd.Description
     m = d.loopRanges[d.result.indices[0]]
     n = d.loopRanges[d.result.indices[1]]
-
-    # calculate FLOP per single operation
-    flop = 0
     alpha = d.alpha
-
-    if alpha not in [-1.0, 1.0]:
-      flop += 1
-
-    if d.beta == 1.0 and alpha == -1.0:
-      alpha = 1.0
-      flop += 1
-
-    elif d.beta == 1.0:
-      flop += 1
-
-    elif d.beta != 0.0:
-      raise NotImplementedError
 
     # convert data for gemmforge
     matrix_a = DenseMatrix(num_rows=d.term.memoryLayout._bbox[0].stop,
@@ -112,7 +98,7 @@ class CsaGen(object):
       print("ERROR: {}".format(err))
       raise err
 
-    return flop * m.size() * n.size()
+    return m.size() * n.size()
 
 def deduce_addresing(term):
   if term.is_compute_constant:
@@ -125,6 +111,19 @@ def deduce_addresing(term):
 
 
 def deduce_bbox(rows_range, cols_range, is_trans, ml_bbox):
+  """Converts yateto memory layoyt (bounding boxes) and ranges to Gemmforge bounding boxes i.e.,
+     a box is a list of rows and columns indices where the actual data is located within
+     a memory patch
+
+  Args:
+    rows_range (loopRanges): a range of rows to operate on
+    cols_range (loopRanges): a range of columns to operate on
+    is_trans (bool): if true then a GemmForge bonding box needs to be transposed
+    ml_bbox (BoundingBox): yateto bounding box (memory layout)
+
+  Returns:
+    (list): bounding box in GemmForge format
+  """
   if is_trans:
     bbox = [cols_range.start - ml_bbox[0].start,
             rows_range.start - ml_bbox[1].start,

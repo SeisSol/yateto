@@ -324,10 +324,10 @@ class OptimisedKernelGenerator(KernelGenerator):
             header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
           aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
-          for aux_functions in aux_functions:
-            funName = aux_functions[:1].lower() + aux_functions[1:]
+          for function in aux_functions:
+            funName = function[:1].lower() + function[1:]
             with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(aux_functions, indexF))
+              header('return {}[{}];'.format(function, indexF))
 
     flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
     for fc in flopCounters:

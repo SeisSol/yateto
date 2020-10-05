@@ -22,7 +22,7 @@ def __transposeMatrix(matrix):
 
 def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride, namespace=None):
   matrix = dict()
-  is_values_booleans = False
+  are_values_booleans = True
 
   # traverse a list of matrix entries and generate a matrix description
   # as a hash table
@@ -37,7 +37,7 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
     # if all entries given as booleans it means that the matrix has the same
     # sparsity pattern for all mesh elements but different values for each
     # In other words, the matrix is not constant
-    is_values_booleans = isinstance(entry[2], bool)
+    are_values_booleans = are_values_booleans and isinstance(entry[2], bool)
 
   # allocate an empty hash table to hold tensors (matrices) which are going to be generated
   # using the matrix description
@@ -61,12 +61,16 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
       mtx = {(i[0],): val for i,val in mtx.items()}
 
     # Create an tensor(matrix) using the matrix description and append the hash table
+    if name in matrices:
+      raise RuntimeError(f'{name} cannot be added to a collection a second time. '
+                         'Please, check your input file and rename')
+
     matrices[name] = Tensor(name=name,
                             shape=shape,
                             spp=mtx,
                             alignStride=alignStride(name),
                             namespace=namespace,
-                            is_compute_constant=False if is_values_booleans else True)
+                            is_compute_constant=False if are_values_booleans else True)
   return matrices
 
 def __complain(child):

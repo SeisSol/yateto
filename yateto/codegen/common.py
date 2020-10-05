@@ -4,6 +4,15 @@ from ..ast.log import splitByDistance
 
 class TensorDescription(object):
   def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False):
+    """
+
+    Args:
+      name (str): tensor's symbol name
+      memoryLayout:
+      eqspp:
+      is_compute_constant (bool): If true then sparsity patterns and numerical values of tensor
+          elements are known at compile time
+    """
     self.name = name
     self.memoryLayout = memoryLayout
     self.eqspp = eqspp

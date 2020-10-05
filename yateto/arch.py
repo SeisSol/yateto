@@ -41,6 +41,19 @@ from .memory import DenseMemoryLayout
 
 class Architecture(object):
   def __init__(self, name, sub_name, precision, alignment, enablePrefetch=False, host_name=None):
+    """
+
+    Args:
+      name (str): name of the compute (main) architecture.
+      sub_name (str): name of sub. architecture type e.g., a model of Nvidia streaming
+          multiprocessor (sm_60, sm_61, etc). In case of CPU, the field is equal to None
+      precision (str): either 'd' or 's' character which stands for 'double' or 'single' precision
+      alignment (int): length of a vector register (unit) in bytes
+      enablePrefetch (bool): indicates whether the compute (main) architecture supports
+          data prefetching
+      host_name (str): name of the host (CPU) architecture. If the code is intentend to be generated
+          to CPU-like architecture then the field should be equal to None
+    """
     self.name = name
     self.sub_name = sub_name
     self.host_name = host_name

@@ -50,7 +50,7 @@ class KernelFactory(object):
           ini = ' = {}'
         elif memory:
           ini = ' = {{{}}}'.format(', '.join(memory))
-        self._cpp('{} {}[{}] __attribute__((aligned({}))){};'.format(self._arch.typename, bufname, size, self._arch.alignment, ini))
+        self._cpp(f'alignas({self._arch.alignment}) {self._arch.typename} {bufname}[{size}] {ini};')
     else:
       declaration = f'{self._arch.typename}* {bufname}'
       total_size = f'NumElements * {size}'

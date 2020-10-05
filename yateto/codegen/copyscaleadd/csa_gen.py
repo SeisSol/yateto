@@ -1,10 +1,25 @@
 from ..common import *
 from ..cache import RoutineGenerator, GpuRoutineGenerator
-from gemmforge import DenseMatrix, CsaGenerator, GenerationError
-from gemmforge import arch as GemmForgeArch
+from yateto.type import Tensor
 import re
 
-from yateto.type import Tensor
+
+# Optional modules
+import importlib.util
+gf_spec = importlib.util.find_spec('gemmforge')
+gf_dense_spec = importlib.util.find_spec('gemmforge.DenseMatrix') if gf_spec else None
+gf_csa_spec = importlib.util.find_spec('gemmforge.CsaGenerator') if gf_spec else None
+gf_error_spec = importlib.util.find_spec('gemmforge.GenerationError') if gf_spec else None
+gf_arch_spec = importlib.util.find_spec('gemmforge.GemmForgeArch') if gf_spec else None
+
+try:
+  if gf_spec:
+    DenseMatrix = gf_csa_spec.loader.load_module()
+    CsaGenerator = gf_csa_spec.loader.load_module()
+    GenerationError = gf_error_spec.loader.load_module()
+    GemmForgeArch = gf_arch_spec.loader.load_module()
+except:
+  pass
 
 class CsaGen(object):
   """Copy-Add-Scale Generator (Csa): B = beta * B + alpha * A
@@ -62,43 +77,47 @@ class CsaGen(object):
     Returns:
 
     """
+    if (gf_spec):
+      d = self._descr  # type: copyscaleadd.Description
+      m = d.loopRanges[d.result.indices[0]]
+      n = d.loopRanges[d.result.indices[1]]
+      alpha = d.alpha
 
-    d = self._descr  # type: copyscaleadd.Description
-    m = d.loopRanges[d.result.indices[0]]
-    n = d.loopRanges[d.result.indices[1]]
-    alpha = d.alpha
+      # convert data for gemmforge
+      matrix_a = DenseMatrix(num_rows=d.term.memoryLayout._bbox[0].stop,
+                             num_cols=d.term.memoryLayout._bbox[1].stop,
+                             addressing=deduce_addresing(d.term),
+                             bbox=deduce_bbox(m, n, False, d.term.memoryLayout._bbox),
+                             transpose=False)
 
-    # convert data for gemmforge
-    matrix_a = DenseMatrix(num_rows=d.term.memoryLayout._bbox[0].stop,
-                           num_cols=d.term.memoryLayout._bbox[1].stop,
-                           addressing=deduce_addresing(d.term),
-                           bbox=deduce_bbox(m, n, False, d.term.memoryLayout._bbox),
-                           transpose=False)
+      matrix_b = DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
+                             num_cols=d.result.memoryLayout._bbox[1].stop,
+                             addressing=deduce_addresing(d.result),
+                             bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
+                             transpose=False)
+      try:
+        forge_generator = CsaGenerator(GemmForgeArch.produce(self._arch.name, self._arch.sub_name),
+                                       self._arch.typename)
+        forge_generator.generate(matrix_a, matrix_b, alpha, d.beta)
+        routine_name = forge_generator.get_base_name()
 
-    matrix_b = DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
-                           num_cols=d.result.memoryLayout._bbox[1].stop,
-                           addressing=deduce_addresing(d.result),
-                           bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
-                           transpose=False)
-    try:
-      forge_generator = CsaGenerator(GemmForgeArch.produce(self._arch.name, self._arch.sub_name),
-                                     self._arch.typename)
-      forge_generator.generate(matrix_a, matrix_b, alpha, d.beta)
-      routine_name = forge_generator.get_base_name()
+        args = [str(alpha),
+                deduce_arg(d.term),
+                deduce_arg(d.result),
+                'NumElements']
+        cpp("{}({});".format(routine_name, ', '.join(args)))
 
-      args = [str(alpha),
-              deduce_arg(d.term),
-              deduce_arg(d.result),
-              'NumElements']
-      cpp("{}({});".format(routine_name, ', '.join(args)))
+        routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))
 
-      routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))
+      except GenerationError as err:
+        print("ERROR: {}".format(err))
+        raise err
 
-    except GenerationError as err:
-      print("ERROR: {}".format(err))
-      raise err
+      return m.size() * n.size()
 
-    return m.size() * n.size()
+    else:
+      raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
+                         'e.g., pip3 install gemmforge')
 
 def deduce_addresing(term):
   if term.is_compute_constant:

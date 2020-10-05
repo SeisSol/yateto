@@ -7,19 +7,12 @@ import re
 # Optional modules
 import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
-gf_dense_spec = importlib.util.find_spec('gemmforge.DenseMatrix') if gf_spec else None
-gf_csa_spec = importlib.util.find_spec('gemmforge.CsaGenerator') if gf_spec else None
-gf_error_spec = importlib.util.find_spec('gemmforge.GenerationError') if gf_spec else None
-gf_arch_spec = importlib.util.find_spec('gemmforge.GemmForgeArch') if gf_spec else None
-
 try:
   if gf_spec:
-    DenseMatrix = gf_csa_spec.loader.load_module()
-    CsaGenerator = gf_csa_spec.loader.load_module()
-    GenerationError = gf_error_spec.loader.load_module()
-    GemmForgeArch = gf_arch_spec.loader.load_module()
+    gf = gf_spec.loader.load_module()
 except:
-  pass
+  raise ('Cannot load gemmforge.')
+
 
 class CsaGen(object):
   """Copy-Add-Scale Generator (Csa): B = beta * B + alpha * A
@@ -84,19 +77,19 @@ class CsaGen(object):
       alpha = d.alpha
 
       # convert data for gemmforge
-      matrix_a = DenseMatrix(num_rows=d.term.memoryLayout._bbox[0].stop,
-                             num_cols=d.term.memoryLayout._bbox[1].stop,
-                             addressing=deduce_addresing(d.term),
-                             bbox=deduce_bbox(m, n, False, d.term.memoryLayout._bbox),
-                             transpose=False)
+      matrix_a = gf.DenseMatrix(num_rows=d.term.memoryLayout._bbox[0].stop,
+                                num_cols=d.term.memoryLayout._bbox[1].stop,
+                                addressing=deduce_addresing(d.term),
+                                bbox=deduce_bbox(m, n, False, d.term.memoryLayout._bbox),
+                                transpose=False)
 
-      matrix_b = DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
-                             num_cols=d.result.memoryLayout._bbox[1].stop,
-                             addressing=deduce_addresing(d.result),
-                             bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
-                             transpose=False)
+      matrix_b = gf.DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
+                                num_cols=d.result.memoryLayout._bbox[1].stop,
+                                addressing=deduce_addresing(d.result),
+                                bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
+                                transpose=False)
       try:
-        forge_generator = CsaGenerator(GemmForgeArch.produce(self._arch.name, self._arch.sub_name),
+        forge_generator = gf.CsaGenerator(gf.arch.produce(self._arch.name, self._arch.sub_name),
                                        self._arch.typename)
         forge_generator.generate(matrix_a, matrix_b, alpha, d.beta)
         routine_name = forge_generator.get_base_name()
@@ -109,7 +102,7 @@ class CsaGen(object):
 
         routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))
 
-      except GenerationError as err:
+      except gf.GenerationError as err:
         print("ERROR: {}".format(err))
         raise err
 

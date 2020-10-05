@@ -18,5 +18,5 @@ USER tester
 COPY --chown=tester:tester . .
 
 #install dependencies and change workdir to the tests dir
-RUN pip3 install -e . && pip3 install gemmforge
+RUN pip3 install -e .
 WORKDIR /local_workspace/tests

@@ -1,6 +1,6 @@
 from ..common import *
 from .generic import Generic
-from .csa_gen import CsaGen
+from .csa_gen import CopyScaleAddGenerator
 
 class Description(object):
   def __init__(self, alpha, beta, result: IndexedTensorDescription, term: IndexedTensorDescription):
@@ -21,4 +21,4 @@ class Description(object):
     
 
 def generator(arch, descr, target):
-  return Generic(arch, descr) if target == 'cpu' else CsaGen(arch, descr)
+  return Generic(arch, descr) if target == 'cpu' else CopyScaleAddGenerator(arch, descr)

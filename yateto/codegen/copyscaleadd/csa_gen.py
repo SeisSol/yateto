@@ -14,10 +14,7 @@ except:
   raise ('Cannot load gemmforge.')
 
 
-class CsaGen(object):
-  """Copy-Add-Scale Generator (Csa): B = beta * B + alpha * A
-
-  """
+class CopyScaleAddGenerator(object):
   def __init__(self, arch, descr):
     self._arch = arch
     self._descr = descr

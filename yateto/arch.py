@@ -40,7 +40,14 @@
 from .memory import DenseMemoryLayout
 
 class Architecture(object):
-  def __init__(self, name, sub_name, precision, alignment, enablePrefetch=False, host_name=None):
+  def __init__(self,
+               name,
+               precision,
+               alignment,
+               enablePrefetch=False,
+               sub_name=None,
+               host_name=None):
+  #def __init__(self, name, sub_name, precision, alignment, enablePrefetch=False, host_name=None):
     """
 
     Args:
@@ -100,29 +107,50 @@ class Architecture(object):
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
 
-def getArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident):
-  if compute_ident[0].upper() != host_ident[0].upper():
-    raise RuntimeError(f'Precision of host and compute arch. must be the same. '
-                       f'Given: {host_ident}, {compute_ident}')
 
-  precision = compute_ident[0].upper()
-  compute_name = compute_ident[1:]
-  host_name = host_ident[1:]
+def _get_name_and_precision(ident):
+  return ident[1:], ident[0].upper()
+
+
+def getArchitectureIdentifiedBy(ident):
+  name, precision = _get_name_and_precision(ident)
   arch = {
-    'noarch': Architecture(compute_name, compute_sub_arch, precision, 16, False),
-    'wsm': Architecture(compute_name, compute_sub_arch, precision, 16, False),
-    'snb': Architecture(compute_name, compute_sub_arch, precision, 32, False),
-    'hsw': Architecture(compute_name, compute_sub_arch, precision, 32, False),
-    'skx': Architecture(compute_name, compute_sub_arch, precision, 64, True),
-    'knc': Architecture(compute_name, compute_sub_arch, precision, 64, False),
-    'knl': Architecture(compute_name, compute_sub_arch, precision, 64, True), # Libxsmm currently supports prefetch only for KNL kernels
-    'thunderx2t99': Architecture(compute_name, compute_sub_arch, precision, 16, False),
-    'power9': Architecture(compute_name, compute_sub_arch, precision, 16, False),
-    'nvidia': Architecture(compute_name, compute_sub_arch, precision, 64, False, host_name)
+    'noarch': Architecture(name, precision, 16, False),
+    'wsm': Architecture(name, precision, 16, False),
+    'snb': Architecture(name, precision, 32, False),
+    'hsw': Architecture(name, precision, 32, False),
+    'skx': Architecture(name, precision, 64, True),
+    'knc': Architecture(name, precision, 64, False),
+    'knl': Architecture(name, precision, 64, True), # Libxsmm currently supports prefetch only for KNL kernels
+    'thunderx2t99': Architecture(name, precision, 16, False),
+    'power9': Architecture(name, precision, 16, False)
+  }
+  return arch[name]
+
+
+def getHeterogeneousArchitectureIdentifiedBy(compute_ident, compute_sub_arch=None, host_ident=None):
+  compute_name, compute_precision = _get_name_and_precision(compute_ident)
+  host_name, host_precision = _get_name_and_precision(host_ident)
+
+  if (compute_precision != host_precision):
+    raise ValueError(f'Precision of host and compute arch. must be the same. '
+                     f'Given: {host_ident}, {compute_ident}')
+
+  arch = {
+    'nvidia': Architecture(compute_name, compute_precision, 64, False, compute_sub_arch, host_name)
   }
   return arch[compute_name]
 
-def useArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident):
-  arch = getArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident)
+
+def useArchitectureIdentifiedBy(compute_ident, compute_sub_arch=None, host_ident=None):
+  if not (compute_sub_arch or host_ident):
+    arch = getArchitectureIdentifiedBy(compute_ident)
+
+  elif (compute_sub_arch and host_ident):
+    arch = getHeterogeneousArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident)
+  else:
+    raise ValueError(f'given an incomplete set of input parameters: '
+                     f'{compute_ident}, {compute_sub_arch}, {host_ident}')
+
   DenseMemoryLayout.setAlignmentArch(arch)
   return arch

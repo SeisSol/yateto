@@ -22,7 +22,6 @@ def __transposeMatrix(matrix):
 
 def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride, namespace=None):
   matrix = dict()
-  are_values_booleans = True
 
   # traverse a list of matrix entries and generate a matrix description
   # as a hash table
@@ -33,11 +32,6 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
 
     # allocate a matrix element inside of a table
     matrix[(row, col)] = entry[2]
-
-    # if all entries given as booleans it means that the matrix has the same
-    # sparsity pattern for all mesh elements but different values for each
-    # In other words, the matrix is not constant
-    are_values_booleans = are_values_booleans and isinstance(entry[2], bool)
 
   # allocate an empty hash table to hold tensors (matrices) which are going to be generated
   # using the matrix description
@@ -69,8 +63,7 @@ def __processMatrix(name, rows, columns, entries, clones, transpose, alignStride
                             shape=shape,
                             spp=mtx,
                             alignStride=alignStride(name),
-                            namespace=namespace,
-                            is_compute_constant=False if are_values_booleans else True)
+                            namespace=namespace)
   return matrices
 
 def __complain(child):

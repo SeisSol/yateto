@@ -32,7 +32,7 @@ class IndexedTensorDescription(TensorDescription):
   def fromNode(cls, var, node):
     is_const = False
     if hasattr(node, 'tensor'):
-      is_const = node.tensor.is_compute_constant
+      is_const = node.tensor.is_compute_constant()
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):

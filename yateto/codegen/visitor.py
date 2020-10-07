@@ -150,7 +150,7 @@ class OptimisedKernelGenerator(KernelGenerator):
       else:
         writable[bn] = var.writable
 
-      is_compute_constant_tensors[bn] = var.tensor.is_compute_constant
+      is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
 
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()

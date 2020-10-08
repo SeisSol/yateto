@@ -3,8 +3,7 @@ import subprocess
 import tempfile
 from ..cache import RoutineGenerator, GpuRoutineGenerator
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge
-from ...ast.indices import BoundingBox
-import re
+from ..common import BatchedOperationsAux
 import importlib.util
 
 
@@ -18,9 +17,6 @@ except:
 
 
 class GemmGen(object):
-  NUM_ELEMENTS_NAME = 'NumElements'
-  EXTRA_OFFSET_NAME = 'ExtraOffset'
-
   def __init__(self, arch, descr, gemm_cfg):
     self._arch = arch
     self._descr = descr
@@ -100,71 +96,33 @@ class GemmGen(object):
     elif isinstance(self._gemm_cfg, GemmForge):
 
       if gf_spec:
-        def deduce_addresing(term):
-          if term.is_compute_constant:
-            return 'none'
-          temp_variable_name = re.compile(r'_tmp*')
-          if temp_variable_name.match(term.name):
-            return 'strided'
-          else:
-            return 'pointer_based'
+        aux = BatchedOperationsAux(self._arch.typename)
 
-        def deduce_bbox(rows_range, cols_range, is_trans, ml_bbox):
-          if is_trans:
-            bbox = [cols_range.start - ml_bbox[0].start,
-                    rows_range.start - ml_bbox[1].start,
-                    cols_range.stop - ml_bbox[0].start - 1,
-                    rows_range.stop - ml_bbox[1].start - 1]
-          else:
-            bbox = [rows_range.start - ml_bbox[0].start,
-                    cols_range.start - ml_bbox[1].start,
-                    rows_range.stop - ml_bbox[0].start - 1,
-                    cols_range.stop - ml_bbox[1].start - 1]
-          return bbox
+        matrix_a = gf.YatetoInterface.produce_dense_matrix((m, k),
+                                                           d.leftTerm.memoryLayout.bbox(),
+                                                           addressing=aux.deduce_addresing(d.leftTerm),
+                                                           transpose=d.transA)
 
+        matrix_b = gf.YatetoInterface.produce_dense_matrix((k, n),
+                                                           d.rightTerm.memoryLayout.bbox(),
+                                                           addressing=aux.deduce_addresing(d.rightTerm),
+                                                           transpose=d.transB)
 
-        matrix_a = gf.DenseMatrix(num_rows=d.leftTerm.memoryLayout._bbox[0].stop,
-                                  num_cols=d.leftTerm.memoryLayout._bbox[1].stop,
-                                  addressing=deduce_addresing(d.leftTerm),
-                                  bbox=deduce_bbox(m, k, d.transA, d.leftTerm.memoryLayout._bbox),
-                                  transpose=d.transA)
+        matrix_c = gf.YatetoInterface.produce_dense_matrix((m, n),
+                                                           d.result.memoryLayout.bbox(),
+                                                           addressing=aux.deduce_addresing(d.result),
+                                                           transpose=False)
 
-        matrix_b = gf.DenseMatrix(num_rows=d.rightTerm.memoryLayout._bbox[0].stop,
-                                  num_cols=d.rightTerm.memoryLayout._bbox[1].stop,
-                                  addressing=deduce_addresing(d.rightTerm),
-                                  bbox=deduce_bbox(k, n, d.transB, d.rightTerm.memoryLayout._bbox),
-                                  transpose=d.transB)
-
-        matrix_c = gf.DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
-                                  num_cols=d.result.memoryLayout._bbox[1].stop,
-                                  addressing=deduce_addresing(d.result),
-                                  bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
-                                  transpose=False)
         try:
           forge_generator = gf.GemmGenerator(gf.arch.produce(self._arch.name, self._arch.sub_name),
                                              self._arch.typename)
           forge_generator.generate(matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
-          def deduce_arg(term, as_const=False):
-            temp_variable_name = re.compile(r'_tmp*')
-            if term.is_compute_constant or temp_variable_name.match(term.name):
-              extra_offset = '0'
-            else:
-              extra_offset = f'{self.EXTRA_OFFSET_NAME}_{term.name}'
-
-            if as_const:
-              addressing = deduce_addresing(term)
-              ptr = '**' if addressing == 'pointer_based' else '*'
-              const_ptr_type = f'const {self._arch.typename} {ptr}'
-              return f'const_cast<{const_ptr_type}>({term.name}), {extra_offset}'
-            else:
-              return f'{term.name}, {extra_offset}'
-
-          args = [deduce_arg(d.leftTerm, as_const=True),
-                  deduce_arg(d.rightTerm, as_const=True),
-                  deduce_arg(d.result, as_const=False),
-                  self.NUM_ELEMENTS_NAME]
+          args = [aux.deduce_arg(d.leftTerm, as_const=True),
+                  aux.deduce_arg(d.rightTerm, as_const=True),
+                  aux.deduce_arg(d.result, as_const=False),
+                  BatchedOperationsAux.NUM_ELEMENTS_NAME]
           args_str = ', '.join(args)
 
           if not isinstance(d.alpha, float):

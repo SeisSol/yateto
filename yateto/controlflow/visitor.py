@@ -84,7 +84,7 @@ class AST2ControlFlow(Visitor):
   def _nextTemporary(self, node):
     name = '{}{}'.format(self.TEMPORARY_RESULT, self._tmp)
     self._tmp += 1
-    return Variable(name, True, self._ml(node), node.eqspp())
+    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True)
 
   def updateWritable(self, name):
     self._writable = self._writable | {name}

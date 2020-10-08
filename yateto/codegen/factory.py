@@ -2,7 +2,7 @@ import string
 from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
-from .common import forLoops, TensorDescription, IndexedTensorDescription
+from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from . import copyscaleadd, indexsum, log, product
 
 class KernelFactory(object):
@@ -53,7 +53,7 @@ class KernelFactory(object):
         self._cpp(f'alignas({self._arch.alignment}) {self._arch.typename} {bufname}[{size}] {ini};')
     else:
       declaration = f'{self._arch.typename}* {bufname}'
-      total_size = f'NumElements * {size}'
+      total_size = f'{BatchedOperationsAux.NUM_ELEMENTS_NAME} * {size}'
       self._cpp(f'{declaration} = linearAllocator.allocate({total_size});')
 
 

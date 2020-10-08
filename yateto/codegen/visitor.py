@@ -9,6 +9,7 @@ from ..controlflow.graph import Variable
 from ..type import Tensor
 from .code import Cpp
 from .factory import *
+from .common import BatchedOperationsAux
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
@@ -280,12 +281,12 @@ class OptimisedKernelGenerator(KernelGenerator):
 
         # containers with extra offsets for GPU-like computations
         if target == 'gpu':
-          header(f'unsigned {InitializerGenerator.NUM_ELEMENTS_NAME} = 0;')
+          header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
             offset_type = 'int'
-            offset_name = f'{InitializerGenerator.EXTRA_OFFSET_NAME}_{base_name}'
+            offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{base_name}'
             if len(next(iter(groups))) > 0:
               class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
               container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{offset_type}>'
@@ -364,7 +365,7 @@ class OptimisedKernelGenerator(KernelGenerator):
             cpp(f'assert({base_name} != nullptr);')
 
         if target == 'gpu':
-          cpp(f'assert({InitializerGenerator.NUM_ELEMENTS_NAME} != 0);')
+          cpp(f'assert({BatchedOperationsAux.NUM_ELEMENTS_NAME} != 0);')
 
         cpp(kernelOutline.function)
 
@@ -475,8 +476,6 @@ class InitializerGenerator(object):
   VIEW_STRUCT_NAME = 'view'
   VIEW_FUN_NAME = 'create'
   VIEW_TYPE_NAME = 'type'
-  EXTRA_OFFSET_NAME = 'ExtraOffset'
-  NUM_ELEMENTS_NAME = 'NumElements'
   
   class TensorView(object):
     ARGUMENT_NAME = 'values'

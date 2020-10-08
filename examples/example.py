@@ -33,9 +33,7 @@ except OSError as e:
     pass
 
 # explicitly force CPU target
-arch = useArchitectureIdentifiedBy(compute_ident=cmdLineArgs.arch,
-                                   compute_sub_arch='none',
-                                   host_ident=cmdLineArgs.arch)
+arch = useArchitectureIdentifiedBy(cmdLineArgs.arch)
 
 g = Generator(arch)
 example.add(g)

@@ -1,7 +1,6 @@
 from ..common import *
 from ..cache import RoutineGenerator, GpuRoutineGenerator
-from yateto.type import Tensor
-import re
+from ..common import BatchedOperationsAux
 
 
 # Optional modules
@@ -73,18 +72,17 @@ class CopyScaleAddGenerator(object):
       n = d.loopRanges[d.result.indices[1]]
       alpha = d.alpha
 
-      # convert data for gemmforge
-      matrix_a = gf.DenseMatrix(num_rows=d.term.memoryLayout._bbox[0].stop,
-                                num_cols=d.term.memoryLayout._bbox[1].stop,
-                                addressing=deduce_addresing(d.term),
-                                bbox=deduce_bbox(m, n, False, d.term.memoryLayout._bbox),
-                                transpose=False)
+      aux = BatchedOperationsAux(self._arch.typename)
+      matrix_a = gf.YatetoInterface.produce_dense_matrix((m, n),
+                                                         d.term.memoryLayout.bbox(),
+                                                         addressing=aux.deduce_addresing(d.term),
+                                                         transpose=False)
 
-      matrix_b = gf.DenseMatrix(num_rows=d.result.memoryLayout._bbox[0].stop,
-                                num_cols=d.result.memoryLayout._bbox[1].stop,
-                                addressing=deduce_addresing(d.result),
-                                bbox=deduce_bbox(m, n, False, d.result.memoryLayout._bbox),
-                                transpose=False)
+      matrix_b = gf.YatetoInterface.produce_dense_matrix((m, n),
+                                                         d.result.memoryLayout.bbox(),
+                                                         addressing=aux.deduce_addresing(d.result),
+                                                         transpose=False)
+
       try:
         forge_generator = gf.CsaGenerator(gf.arch.produce(self._arch.name, self._arch.sub_name),
                                        self._arch.typename)
@@ -92,9 +90,9 @@ class CopyScaleAddGenerator(object):
         routine_name = forge_generator.get_base_name()
 
         args = [str(alpha),
-                deduce_arg(d.term),
-                deduce_arg(d.result),
-                'NumElements']
+                aux.deduce_arg(d.term),
+                aux.deduce_arg(d.result),
+                BatchedOperationsAux.NUM_ELEMENTS_NAME]
         cpp("{}({});".format(routine_name, ', '.join(args)))
 
         routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))
@@ -108,51 +106,6 @@ class CopyScaleAddGenerator(object):
     else:
       raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                          'e.g., pip3 install gemmforge')
-
-def deduce_addresing(term):
-  if term.is_compute_constant:
-    return 'none'
-  temp_variable_name = re.compile(r'_tmp*')
-  if temp_variable_name.match(term.name):
-    return 'strided'
-  else:
-    return 'pointer_based'
-
-
-def deduce_bbox(rows_range, cols_range, is_trans, ml_bbox):
-  """Converts yateto memory layoyt (bounding boxes) and ranges to Gemmforge bounding boxes i.e.,
-     a box is a list of rows and columns indices where the actual data is located within
-     a memory patch
-
-  Args:
-    rows_range (loopRanges): a range of rows to operate on
-    cols_range (loopRanges): a range of columns to operate on
-    is_trans (bool): if true then a GemmForge bonding box needs to be transposed
-    ml_bbox (BoundingBox): yateto bounding box (memory layout)
-
-  Returns:
-    (list): bounding box in GemmForge format
-  """
-  if is_trans:
-    bbox = [cols_range.start - ml_bbox[0].start,
-            rows_range.start - ml_bbox[1].start,
-            cols_range.stop - ml_bbox[0].start - 1,
-            rows_range.stop - ml_bbox[1].start - 1]
-  else:
-    bbox = [rows_range.start - ml_bbox[0].start,
-            cols_range.start - ml_bbox[1].start,
-            rows_range.stop - ml_bbox[0].start - 1,
-            cols_range.stop - ml_bbox[1].start - 1]
-  return bbox
-
-
-def deduce_arg(term):
-  temp_variable_name = re.compile(r'_tmp*')
-  if term.is_compute_constant or temp_variable_name.match(term.name):
-    extra_offset = '0'
-  else:
-    extra_offset = f'ExtraOffset_{term.name}'
-  return f'{term.name}, {extra_offset}'
 
 
 class GemmForgeWriter(GpuRoutineGenerator):

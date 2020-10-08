@@ -34,7 +34,7 @@ except OSError as e:
     if e.errno == errno.EEXIST:
       pass
 
-arch = useArchitectureIdentifiedBy(cmdLineArgs.arch, None, cmdLineArgs.arch)
+arch = useArchitectureIdentifiedBy(cmdLineArgs.arch)
 
 g = Generator(arch)
 example.add(g)

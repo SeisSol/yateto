@@ -55,7 +55,7 @@ class Generic(object):
     hasOuterLoops = len(d.outerLoopIndices) > 0
 
     if hasOuterLoops and self._target == 'gpu':
-      raise RuntimeError("Loop over GEMM with the outter loop hasn't been implemented yet "
+      raise RuntimeError("Loop over GEMM with the outer loop hasn't been implemented yet "
                          "for the GPU-like architectures")
 
     outerAname = '_A' if hasOuterLoops else d.leftTerm.name
@@ -80,9 +80,9 @@ class Generic(object):
     Ceqspp = self._reduce(d.result, C, CmemLayout)
 
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant),
-      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary),
+      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary),
       transA = d.transA,
       transB = d.transB,
       alpha = d.alpha,

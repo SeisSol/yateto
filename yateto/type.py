@@ -30,7 +30,12 @@ class Tensor(AbstractType):
   GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
 
-  def __init__(self, name, shape, spp=None, memoryLayoutClass=DenseMemoryLayout, alignStride=False,
+  def __init__(self,
+               name,
+               shape,
+               spp=None,
+               memoryLayoutClass=DenseMemoryLayout,
+               alignStride=False,
                namespace=None):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
@@ -49,7 +54,7 @@ class Tensor(AbstractType):
       self.namespace = ''
     else:
       self.namespace = namespace
-    
+
     if spp is not None:
       if isinstance(spp, dict):
         if not isinstance(next(iter(spp.values())), bool):
@@ -145,6 +150,18 @@ class Tensor(AbstractType):
       for multiIndex, value in self._values.items():
         A[multiIndex] = value
     return A
+
+  def is_compute_constant(self):
+    """Tells whether both values and sparsity pattern were provided.
+
+    The condition indicates that all information about the tensor is known at compiler time. It
+    implicitly tells us that the same tensor will be used many DG elements which helps us to
+    decide when to generate many-to-one or one-to-many code for batched computations
+
+    Returns:
+      bool: true if a tensor contains values. Otherwise false
+    """
+    return True if self._values else False
 
   def __eq__(self, other):
     equal = self._name == other._name

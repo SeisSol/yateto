@@ -11,6 +11,6 @@ enable_testing()
                     COMMENT "Generating a test runner")
 
 add_executable(tensor-view-target TensorView.t.cpp)
-target_include_directories(tensor-view-target PUBLIC ${CMAKE_SOURCE_DIR}/../../include)
+target_include_directories(tensor-view-target PUBLIC ${CMAKE_SOURCE_DIR}/../../include ${CXXTEST_INCLUDE_DIRS})
 target_compile_options(tensor-view-target PUBLIC "-std=c++11")
 add_test(tensor-view tensor-view-target)

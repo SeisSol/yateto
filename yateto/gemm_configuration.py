@@ -19,7 +19,7 @@ class GemmTool(ABC):
     pass
 
   @abstractmethod
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
     pass
 
 class BLASlike(GemmTool):
@@ -30,8 +30,8 @@ class BLASlike(GemmTool):
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     return Preference.MODERATE
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
-    return (not sparseA and not sparseB)
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return (not sparseA and not sparseB and target == 'cpu')
 
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
@@ -79,8 +79,8 @@ class Eigen(BLASlike):
     super().__init__(None, ['Eigen/Eigen'])
     self._arch = arch
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
-    return (not sparseA and not sparseB)
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return (not sparseA and not sparseB and target == 'cpu')
 
   def bool2Trans(self, trans):
     return '.transpose()' if trans else ''
@@ -130,7 +130,7 @@ class CodeGenerator(GemmTool):
     self._arch = arch
 
   @abstractmethod
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
     pass
 
 class LIBXSMM(CodeGenerator):
@@ -139,10 +139,15 @@ class LIBXSMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    return self._arch.name.lower() in {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl'}
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
-    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0]
+    if self._arch.name.lower() in supported_set:
+      return True
+    else:
+      return self._arch.host_name and self._arch.host_name.lower() in supported_set
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     if sparseA:
@@ -159,10 +164,15 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    return self._arch.name.lower() in {'thunderx2t99', 'knl', 'skx'}
+    supported_set = {'thunderx2t99', 'knl', 'skx'}
+    if self._arch.name.lower() in supported_set:
+      return True
+    else:
+      return self._arch.host_name and self._arch.host_name.lower() in supported_set
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
-    return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB)
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return self._archSupported() and self._arch.checkAlignment(m) and not sparseA and (not transA and not transB) and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
     if sparseB:
@@ -178,15 +188,37 @@ class PSpaMM(CodeGenerator):
   def blockSize(self, m, n, k):
     return dict()
 
+
+class GemmForge(CodeGenerator):
+  def __init__(self, arch, threshold: int = 256):
+    super().__init__('', ['gemmgen_aux.h'], '', arch)
+    self._threshold = threshold
+
+  def _is_arch_supported(self):
+    return self._arch.name.lower() in {'nvidia'}
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
+    return self._is_arch_supported() and not (sparseA or sparseB) and target == 'gpu'
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+    if sparseA and sparseB:
+      return Preference.LOWEST
+    if not transA:
+      return Preference.HIGHEST
+    if m < 16:
+      return Preference.LOWEST
+    return Preference.HIGH
+
+
 class GeneratorCollection(object):
   def __init__(self, gemmTools: List[GemmTool]):
     self.gemmTools = gemmTools
     self.selected = set()
 
-  def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+  def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
     tools = dict()
     for gemmTool in reversed(self.gemmTools):
-      if gemmTool.supported(m, n, k, sparseA, sparseB, transA, transB, alpha, beta):
+      if gemmTool.supported(m, n, k, sparseA, sparseB, transA, transB, alpha, beta, target):
         tools[gemmTool.preference(m, n, k, sparseA, sparseB, transA, transB, alpha, beta)] = gemmTool
 
     select = None
@@ -207,15 +239,19 @@ class DefaultGeneratorCollection(GeneratorCollection):
     blis = BLIS(arch)
     openblas = OpenBLAS(arch)
     eigen = Eigen(arch)
+    forge = GemmForge(arch)
     defaults = {
       'snb' : [libxsmm, mkl, blis, eigen],
       'hsw' : [libxsmm, mkl, blis, eigen],
       'knl' : [libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm, pspamm, mkl, blis, eigen],
-      'thunderx2t99' : [pspamm, openblas, blis, eigen]
+      'thunderx2t99' : [pspamm, openblas, blis, eigen],
+      'nvidia': [forge]
     }
 
     if arch.name in defaults:
       self.gemmTools = defaults[arch.name]
+      if arch.host_name:
+        self.gemmTools.extend(defaults[arch.host_name])
     else:
       raise Exception("Default generator collection for architecture {} is missing.".format(arch))

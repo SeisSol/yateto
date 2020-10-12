@@ -45,6 +45,6 @@ class Description(object):
       self.assignLoopRanges = None
       
 
-def generator(arch, descr):
-  return Generic(arch, descr)
+def generator(arch, descr, target):
+  return Generic(arch, descr, target)
 

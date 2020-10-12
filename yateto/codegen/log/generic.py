@@ -4,9 +4,10 @@ from .. import gemm
 from ...memory import DenseMemoryLayout
 
 class Generic(object):
-  def __init__(self, arch, descr):
+  def __init__(self, arch, descr, target):
     self._arch = arch
     self._descr = descr
+    self._target = target
   
   def _pointer(self, cpp, targetName, baseName, term, loopIndices, const=True):
     indices = term.indices & loopIndices
@@ -52,6 +53,11 @@ class Generic(object):
     Ik = set(A) & set(B)
     
     hasOuterLoops = len(d.outerLoopIndices) > 0
+
+    if hasOuterLoops and self._target == 'gpu':
+      raise RuntimeError("Loop over GEMM with the outer loop hasn't been implemented yet "
+                         "for the GPU-like architectures")
+
     outerAname = '_A' if hasOuterLoops else d.leftTerm.name
     outerBname = '_B' if hasOuterLoops else d.rightTerm.name
     outerCname = '_C' if hasOuterLoops else d.result.name
@@ -74,9 +80,9 @@ class Generic(object):
     Ceqspp = self._reduce(d.result, C, CmemLayout)
 
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp),
-      result = TensorDescription(innerCname, CmemLayout, Ceqspp),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary),
+      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary),
       transA = d.transA,
       transB = d.transB,
       alpha = d.alpha,
@@ -104,7 +110,7 @@ class Generic(object):
           self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, const=False)
           if outerPrefetchName is not None:
             self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices)
-        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg)
+        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target)
         return generator.generate(cpp, routineCache)
 
     class InnerLoopBody(object):

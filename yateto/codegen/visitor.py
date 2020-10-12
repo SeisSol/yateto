@@ -9,6 +9,7 @@ from ..controlflow.graph import Variable
 from ..type import Tensor
 from .code import Cpp
 from .factory import *
+from .common import BatchedOperationsAux
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
@@ -55,6 +56,10 @@ class KernelGenerator(object):
   
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
     hwFlops = 0
+    # temporary memory required (per element in case of gpu)
+    # NOTE: it is required to know in case if the memory is allocated on the heap
+    #       an provided by the user
+    required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
     localPtrs = list()
     for pp in cfg:
@@ -63,6 +68,7 @@ class KernelGenerator(object):
       cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
     for pp in cfg:
       for buf, size in pp.initBuffer.items():
+        required_tmp_mem += size * self._arch.bytesPerReal
         bufname = self._bufferName(buf)
         factory.temporary(bufname, size)
       for local, buf in pp.bufferMap.items():
@@ -75,7 +81,7 @@ class KernelGenerator(object):
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
-    return hwFlops
+    return hwFlops, required_tmp_mem
 
 class OptimisedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'
@@ -85,13 +91,27 @@ class OptimisedKernelGenerator(KernelGenerator):
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
+  TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
+  TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
+
   
   def __init__(self, arch, routineCache):
     super().__init__(arch)
     self._routineCache = routineCache
   
   class KernelOutline(object):
-    def __init__(self, nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function):
+    def __init__(self,
+                 nonZeroFlops,
+                 hwFlops,
+                 tensors,
+                 writable,
+                 prefetch,
+                 scalars,
+                 function,
+                 tmp_mem_size,
+                 is_compute_constant_tensors,
+                 target):
+
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
       self.tensors = tensors
@@ -99,6 +119,9 @@ class OptimisedKernelGenerator(KernelGenerator):
       self.prefetch = prefetch
       self.scalars = scalars
       self.function = function
+      self.tmp_mem_size = tmp_mem_size
+      self.is_compute_constant_tensors = is_compute_constant_tensors
+      self.target = target
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -112,19 +135,23 @@ class OptimisedKernelGenerator(KernelGenerator):
       else:
         tensors[base_name] = {group}
   
-  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg):
+  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target):
     scalars = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     writable = dict()
+    is_compute_constant_tensors = dict()
     for var in variables:
       self.KernelOutline._addTensor(var.tensor, tensors)
       bn = var.tensor.baseNameWithNamespace()
+
       if bn in writable:
         if var.writable:
           writable[bn] = True
       else:
         writable[bn] = var.writable
+
+      is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
 
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()
@@ -134,11 +161,20 @@ class OptimisedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = OptimisedKernelFactory(fcpp, self._arch)
-      hwFlops = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
+      factory = OptimisedKernelFactory(fcpp, self._arch, target)
+      hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.freeTmp()
       function = functionIO.getvalue()    
-    return self.KernelOutline(nonZeroFlops, hwFlops, tensors, writable, prefetch, scalars, function)
+    return self.KernelOutline(nonZeroFlops,
+                              hwFlops,
+                              tensors,
+                              writable,
+                              prefetch,
+                              scalars,
+                              function,
+                              tmp_memory,
+                              is_compute_constant_tensors,
+                              target)
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -154,12 +190,23 @@ class OptimisedKernelGenerator(KernelGenerator):
     prefetch = collections.OrderedDict()
     writable = dict()
     scalars = set()
+    is_compute_constant_tensors = dict()
     for ko in kernelOutlines:
       if ko:
         scalars = scalars | ko.scalars
         self._addFromKO(ko.tensors, tensors)
         self._addFromKO(ko.writable, writable)
         self._addFromKO(ko.prefetch, prefetch)
+        self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
+
+    target = kernelOutlines[-1].target
+    is_same_target = True
+    for outline in kernelOutlines:
+      if outline:
+        is_same_target = True if outline.target == target else False
+
+    if not is_same_target:
+      raise RuntimeError("kernels with the same family belong to different compute target.")
 
     scalars = sorted(list(scalars), key=str)
 
@@ -188,35 +235,73 @@ class OptimisedKernelGenerator(KernelGenerator):
           brackets,
           formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
         ))
+
+        # tmp mem required by a kernel(s)
+        tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
+        header('{} {} const {}{} = {};'.format(MODIFIERS,
+                                               self._arch.ulongTypename,
+                                               self.TEMP_MEM_REQUIRED_NAME,
+                                               brackets,
+                                               formatArray(tmp_mem_list)))
+
+        header('{} {} const {} = {};'.format(MODIFIERS,
+                                             self._arch.ulongTypename,
+                                             self.TEMP_MAX_MEM_REQUIRED_NAME,
+                                             max(tmp_mem_list)))
+
+        if target == 'gpu':
+          # LinearAllocatorT controls external extra mem. allocated on gpu for tmp. variables
+          header(f'yateto::LinearAllocatorT<{self._arch.typename}> linearAllocator;')
+
         header.emptyline()
-        
+
         for scalar in scalars:
           header('{0} {1} = std::numeric_limits<{0}>::signaling_NaN();'.format(self._arch.typename, scalar))
-        
-        def kernelArgs(base_name_with_namespace, groups, writable):
+
+        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, target):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           typ = self._arch.typename
+          ptr_type = '**' if not is_constant and target == 'gpu' else '*'
           if not writable:
             typ += ' const'
           if len(next(iter(groups))) > 0:
-            header('{prefix}{tensor_namespace}::{base_name}::{container}<{typ}*> {base_name};'.format(
-              tensor_namespace=InitializerGenerator.TENSOR_NAMESPACE,
-              prefix=prefix,
-              base_name=base_name,
-              container=InitializerGenerator.CONTAINER_CLASS_NAME,
-              typ=typ
-            ))
+            class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
+            container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
+            header(f'{class_name}::{container_type} {base_name};')
           else:
-            header('{}* {}{{}};'.format(typ, base_name))
+            header(f'{typ}{ptr_type} {base_name}{{}};')
         
         for baseName, groups in tensors.items():
-          kernelArgs(baseName, groups, writable[baseName])
+          kernelArgs(baseName,
+                     groups,
+                     writable[baseName],
+                     is_compute_constant_tensors[baseName],
+                     target)
+        header.emptyline()
+
+        # containers with extra offsets for GPU-like computations
+        if target == 'gpu':
+          header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
+
+          def generate_extra_offset_args(base_name_with_namespace, groups):
+            prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+            offset_type = 'int'
+            offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{base_name}'
+            if len(next(iter(groups))) > 0:
+              class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
+              container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{offset_type}>'
+              header(f'{class_name}::{container_type} {offset_name};')
+            else:
+              header(f'{offset_type} {offset_name}{{}};')
+
+          for base_name, groups in tensors.items():
+            generate_extra_offset_args(base_name, groups)
         header.emptyline()
 
         if len(prefetch) > 0:
           with header.Struct(self.PREFETCHSTRUCT_NAME):
             for baseName, groups in prefetch.items():
-              kernelArgs(baseName, groups, False)
+              kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
           header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
           header.emptyline()
 
@@ -239,11 +324,11 @@ class OptimisedKernelGenerator(KernelGenerator):
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
             header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
-          flopFuns = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
-          for flopFun in flopFuns:
-            funName = flopFun[:1].lower() + flopFun[1:]
+          aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
+          for function in aux_functions:
+            funName = function[:1].lower() + function[1:]
             with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(flopFun, indexF))
+              header('return {}[{}];'.format(function, indexF))
 
     flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
     for fc in flopCounters:
@@ -277,7 +362,11 @@ class OptimisedKernelGenerator(KernelGenerator):
             for gis in groups:
               cpp('assert({}({}) != nullptr);'.format(base_name, ','.join(str(gi) for gi in gis)))
           else:
-            cpp('assert({} != nullptr);'.format(base_name))
+            cpp(f'assert({base_name} != nullptr);')
+
+        if target == 'gpu':
+          cpp(f'assert({BatchedOperationsAux.NUM_ELEMENTS_NAME} != 0);')
+
         cpp(kernelOutline.function)
 
 class UnitTestGenerator(KernelGenerator):

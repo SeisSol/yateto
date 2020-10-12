@@ -1,0 +1,127 @@
+properties([parameters([string(defaultValue: '', description: 'target architecture (according to yateto format). If not given then taken from Jenkins env-vars', name: 'ARCH', trim: true),
+                        string(defaultValue: 'matmul minimal', description: 'whitespace separate list of examples', name: 'EXAMPLES', trim: true),
+                        string(defaultValue: 'Eigen LIBXSMM OpenBLAS', description: 'whitespace separate list of generators', name: 'GENERATORS', trim: true),
+                        booleanParam(defaultValue: false, description: 'if true the environment image will be build. Note: it will take a considerable amount of time', name: 'BUILD_ENV_IMAGE')
+                        ])])
+
+
+pipeline {
+    agent any
+
+    stages {
+        stage('CleanWorkspace') {
+            steps {
+                deleteDir()
+            }
+        }
+        stage('Clone') {
+            environment {
+                TRIMMED_BRANCH = sh(script:'echo ${GIT_BRANCH##origin/}', returnStdout: true).trim()
+            }
+
+            steps {
+                git branch: "${env.TRIMMED_BRANCH}", url: "${GIT_URL}"
+            }
+        }
+        stage('BuildEnvImages') {
+            when {
+                expression {
+                    env.BUILD_ENV_IMAGE.toBoolean() == true
+                }
+            }
+            steps {
+                // Make sure that Jenkins knows the location of Spack. 
+                // You will need to add it to the Jenkins settings
+                dir("tests") {
+                    sh 'spack containerize > ./Dockerfile-env'
+                    sh 'cat ./Dockerfile-env'
+
+                    script {
+                        def customImage = docker.build("ravilmobile/yateto-env", "-f Dockerfile-env .")
+                        customImage.push("latest")
+                    }
+                }
+            }
+        }
+        stage('BuildTestImage') {
+            environment {
+                USER_ID = sh(script:'id -u', returnStdout: true).trim()
+                GROUP_ID = sh(script:'id -g', returnStdout: true).trim()
+            }
+            steps {
+                script {
+                    def dockerFilePath = "tests/Dockerfile-setup"
+                    def buildParams = String.format("--no-cache --build-arg UID=%s --build-arg GID=%s --file %s .", 
+                                                    env.USER_ID, env.GROUP_ID, dockerFilePath)
+                    def customImage = docker.build("yateto:latest", buildParams)
+                }                
+            }
+        }
+        stage('RunTest') {
+            steps {
+                script {
+                    def TestScript = '''
+#!bin/bash
+set -e pipefail
+cd code-gen && mkdir build && cd build
+env
+export CTEST_OUTPUT_ON_FAILURE=1
+for example in ${EXAMPLES}; do
+    for backend in ${GENERATORS}; do
+        for precision in single double; do
+            for build_type in Debug Release; do
+                echo " ====== Test Config: ======"
+                echo " Build: ${build_type}"
+                echo " Precision: ${precision}"
+                echo " Beckend: ${backend}"
+                echo " Host Arch: ${ARCH}"
+                echo " Example: ${example}"
+                echo "==========================="
+                
+                cmake .. -DEXAMPLES=$example -DCMAKE_BUILD_TYPE=$build_type -DPRECISION=$precision -DVARIANT=$backend -DARCH=$ARCH
+                make
+                
+                STORAGE=/cache/$example-$backend-$precision-$build_type
+                echo $STORAGE
+                mkdir -p $STORAGE
+                cp -r ./$example/*/* $STORAGE
+                
+                make test
+                rm -rf ./*
+            done
+        done
+    done
+done
+cd ../..
+
+cd interface && mkdir build && cd build
+cmake .. && make && make test
+
+                    '''
+                    writeFile(file: "run_tests.sh", text: TestScript)
+                }
+                sh "mkdir ./cache"
+                
+                script {
+                    // define runner arch. for testing
+                    //  if the user specifies ARCH as parameter it is going to be used for testing
+                    //  if not, we will try to get ARCH from the Jenkins env. variables 
+                    //  if the user didn't set env.HOST_ARCH in his/her Jenkins settings, then 'noarch' will be used
+                    env.RUNNER_ARCH="noarch"
+                    if (!env.ARCH.allWhitespace) {
+                        env.RUNNER_ARCH=env.ARCH
+                    }
+                    else if (env.HOST_ARCH) {
+                        env.RUNNER_ARCH=env.HOST_ARCH
+                    }
+                }
+                sh 'docker container run --rm -e ARCH="${RUNNER_ARCH}" -e EXAMPLES="${EXAMPLES}" -e GENERATORS="${GENERATORS}" -v $(pwd)/cache:/cache -v $(pwd)/run_tests.sh:/local_workspace/tests/run_tests.sh yateto:latest run_tests.sh'
+            }
+        }
+    }
+    post { 
+        always {
+            sh "docker image rm yateto:latest"
+        }
+    }
+}

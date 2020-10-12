@@ -4,6 +4,10 @@ class RoutineGenerator(object):
   def __call__(self, routineName, fileName):
     pass
 
+class GpuRoutineGenerator(object):
+  def __call__(self, routineName, fileName):
+    pass
+
 class RoutineCache(object):
   def __init__(self):
     self._routines = dict()
@@ -18,11 +22,18 @@ class RoutineCache(object):
     if generatorName not in self._generators:
       self._generators[generatorName] = generator
   
-  def generate(self, header, cppFileName):
-    with Cpp(cppFileName) as cpp:
-      for generator in self._generators.values():
-        generator.header(cpp)
+  def generate(self, header, cppFileName, gpuFileName):
+    with Cpp(gpuFileName) as gpucpp:
+      with Cpp(cppFileName) as cpp:
+        for generator in self._generators.values():
+          if isinstance(generator, GpuRoutineGenerator):
+            generator.header(gpucpp)
+          else:
+            generator.header(cpp)
 
     for name, generator in self._routines.items():
-      declaration = generator(name, cppFileName)
+      if isinstance(generator, GpuRoutineGenerator):
+        declaration = generator(name, gpuFileName)
+      else:
+        declaration = generator(name, cppFileName)
       header(declaration)

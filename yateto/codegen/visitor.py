@@ -164,6 +164,7 @@ class OptimisedKernelGenerator(KernelGenerator):
       factory = OptimisedKernelFactory(fcpp, self._arch, target)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.freeTmp()
+      factory.reset_stream()
       function = functionIO.getvalue()    
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,

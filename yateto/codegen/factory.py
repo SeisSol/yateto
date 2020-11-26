@@ -68,6 +68,14 @@ class KernelFactory(object):
 
     self._freeList = []
 
+  def reset_stream(self):
+    if self._target == 'cpu':
+      pass
+    elif self._target == 'gpu':
+      self._cpp(f'{BatchedOperationsAux.STREAM_PTR_NAME} = nullptr;')
+    else:
+      raise RuntimeError('unknown compute target')
+
   def _indices(self, var):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)

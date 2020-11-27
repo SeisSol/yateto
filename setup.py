@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 
 install_requires = ['numpy']
 
-extras = {'with_gpu_support': ['gemmforge==0.0.200']}
+extras = {'with_gpu_support': ['gemmforge==0.0.202']}
 
 setup(
     name="yateto",

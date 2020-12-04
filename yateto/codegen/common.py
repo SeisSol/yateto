@@ -90,7 +90,7 @@ def initializeWithZero(cpp, arch, result: TensorDescription, writeBB = None):
 class BatchedOperationsAux:
   NUM_ELEMENTS_NAME = 'numElements'
   EXTRA_OFFSET_NAME = 'extraOffset'
-
+  STREAM_PTR_NAME = 'streamPtr'
 
   def __init__(self, underlying_data_type):
     self.underlying_data_type = underlying_data_type

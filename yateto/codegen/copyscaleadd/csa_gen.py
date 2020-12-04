@@ -92,7 +92,8 @@ class CopyScaleAddGenerator(object):
         args = [str(alpha),
                 aux.deduce_arg(d.term),
                 aux.deduce_arg(d.result),
-                BatchedOperationsAux.NUM_ELEMENTS_NAME]
+                BatchedOperationsAux.NUM_ELEMENTS_NAME,
+                BatchedOperationsAux.STREAM_PTR_NAME]
         cpp("{}({});".format(routine_name, ', '.join(args)))
 
         routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))

@@ -164,6 +164,7 @@ class OptimisedKernelGenerator(KernelGenerator):
       factory = OptimisedKernelFactory(fcpp, self._arch, target)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.freeTmp()
+      factory.reset_stream()
       function = functionIO.getvalue()    
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
@@ -282,6 +283,7 @@ class OptimisedKernelGenerator(KernelGenerator):
         # containers with extra offsets for GPU-like computations
         if target == 'gpu':
           header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
+          header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = nullptr;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)

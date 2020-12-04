@@ -122,7 +122,8 @@ class GemmGen(object):
           args = [aux.deduce_arg(d.leftTerm, as_const=True),
                   aux.deduce_arg(d.rightTerm, as_const=True),
                   aux.deduce_arg(d.result, as_const=False),
-                  BatchedOperationsAux.NUM_ELEMENTS_NAME]
+                  BatchedOperationsAux.NUM_ELEMENTS_NAME,
+                  BatchedOperationsAux.STREAM_PTR_NAME]
           args_str = ', '.join(args)
 
           if not isinstance(d.alpha, float):

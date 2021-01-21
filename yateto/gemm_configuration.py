@@ -233,7 +233,11 @@ class GeneratorCollection(object):
 class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
-    libxsmm = LIBXSMM(arch)
+    if arch == 'rome':
+      # Fall back to Haswell backend of libxsmm as no official support for rome
+      libxsmm = LIBXSMM('hsw')
+    else: 
+      libxsmm = LIBXSMM(arch)
     pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)
@@ -243,6 +247,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
     defaults = {
       'snb' : [libxsmm, mkl, blis, eigen],
       'hsw' : [libxsmm, mkl, blis, eigen],
+      'rome' : [libxsmm, eigen],
       'knl' : [libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [pspamm, openblas, blis, eigen],

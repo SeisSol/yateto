@@ -139,7 +139,7 @@ class LIBXSMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome'}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -233,11 +233,7 @@ class GeneratorCollection(object):
 class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
-    if arch == 'rome':
-      # Fall back to Haswell backend of libxsmm as no official support for rome
-      libxsmm = LIBXSMM('hsw')
-    else: 
-      libxsmm = LIBXSMM(arch)
+    libxsmm = LIBXSMM(arch)
     pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)

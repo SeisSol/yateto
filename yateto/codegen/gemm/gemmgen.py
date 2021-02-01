@@ -254,7 +254,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['beta'],
         self._gemmDescr['alignedA'],
         self._gemmDescr['alignedC'],
-        'hsw' if cpu_arch == 'rome' else cpu_arch,
+        'hsw' if cpu_arch == 'rome' else cpu_arch, # libxsmm has no support for rome, hsw works well in practice
         self._gemmDescr['prefetch'],
         self._arch.precision + 'P'
       ]

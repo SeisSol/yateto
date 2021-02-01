@@ -138,7 +138,7 @@ class LIBXSMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome'}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -249,6 +249,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
     defaults = {
       'snb' : [libxsmm, mkl, blis, eigen],
       'hsw' : [libxsmm, mkl, blis, eigen],
+      'rome' : [libxsmm, blis, eigen],
       'knl' : [libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [pspamm, openblas, blis, eigen],

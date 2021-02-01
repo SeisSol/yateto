@@ -243,7 +243,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
     defaults = {
       'snb' : [libxsmm, mkl, blis, eigen],
       'hsw' : [libxsmm, mkl, blis, eigen],
-      'rome' : [libxsmm, eigen],
+      'rome' : [libxsmm, blis, eigen],
       'knl' : [libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [pspamm, openblas, blis, eigen],

@@ -15,7 +15,8 @@ class RoutineCache(object):
   
   def addRoutine(self, name, generator):
     if name in self._routines and not self._routines[name] == generator:
-      raise RuntimeError('{} is already in RoutineCache but the generator is not equal. (That is, a name was given twice for different routines.)')
+      raise RuntimeError(f'`{name}` is already in RoutineCache but the generator is not equal. '
+                         f'(That is, a name was given twice for different routines.)')
     self._routines[name] = generator
     
     generatorName = type(generator).__name__

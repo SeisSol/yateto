@@ -38,7 +38,7 @@ class BLASlike(GemmTool):
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, alignedA, B, ldB, beta, C, ldC, alignedC):
     parameters = [
       'CblasColMajor',
       self.bool2Trans(transA),
@@ -65,7 +65,7 @@ class BLIS(BLASlike):
   def bool2Trans(self, trans):
     return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, alignedA, B, ldB, beta, C, ldC, alignedC):
     init = '_blis_alpha = {}; _blis_beta = {};'.format(alpha, beta)
     parameters = [
       self.bool2Trans(transA),
@@ -91,13 +91,13 @@ class Eigen(BLASlike):
   def sizeTrans(self, rows, cols, trans):
     return '{},{}'.format(cols,rows) if trans else '{},{}'.format(rows,cols)
 
-  def align(self, ld):
+  def align(self, ld, is_aligned):
     aligned = 'Unaligned'
-    if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
+    if is_aligned and self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
       aligned = 'Aligned{}'.format(self._arch.alignment)
     return aligned
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, alignedA, B, ldB, beta, C, ldC, alignedC):
     AxB = '{alpha}_mapA{transA}*_mapB{transB}'.format(
             alpha=str(alpha) + '*' if alpha != 1.0 else '',
             transA=self.bool2Trans(transA), transB=self.bool2Trans(transB),
@@ -122,7 +122,7 @@ class Eigen(BLASlike):
                sizeA=self.sizeTrans(M,K,transA),
                sizeB=self.sizeTrans(K,N,transB),
                ldA=ldA, ldB=ldB, ldC=ldC, A=A, B=B, C=C,
-               alignA=self.align(ldA), alignC=self.align(ldC),
+               alignA=self.align(ldA, alignedA), alignC=self.align(ldC, alignedC),
                code=code)
     return code
 

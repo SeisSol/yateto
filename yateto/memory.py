@@ -57,7 +57,7 @@ class MemoryLayout(ABC):
     pass
 
   @abstractmethod
-  def isCompatible(self, spp):
+  def isCompatible(self, other, eqspp):
     pass
 
 class DenseMemoryLayout(MemoryLayout):
@@ -271,11 +271,15 @@ class DenseMemoryLayout(MemoryLayout):
       stop -= B*s
     return ranges
 
-  def isCompatible(self, spp):
-    return BoundingBox.fromSpp(spp) in self.bbox()
+  def isCompatible(self, other, eqspp):
+    bb_contained = BoundingBox.fromSpp(eqspp) in self.bbox()
+    alignment_ok = self.alignedStride() == other.alignedStride()
+    return bb_contained and alignment_ok
+
 
   def __eq__(self, other):
-    return self._stride == other._stride and self._bbox == other._bbox and self._stride == other._stride
+    return self._stride == other._stride and self._bbox == other._bbox and self._alignment == other._alignment
+
 
   def __str__(self):
     return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)
@@ -355,8 +359,8 @@ class CSCMemoryLayout(MemoryLayout):
   def __contains__(self, entry):
     return entry in self._bbox
 
-  def isCompatible(self, spp):
-    return self.fromSpp(spp) == self
+  def isCompatible(self, other, eqspp):
+    return other == self
 
   def __eq__(self, other):
     return self._bbox == other._bbox and np.array_equal(self._rowIndex, other._rowIndex) and np.array_equal(self._colPtr, other._colPtr)

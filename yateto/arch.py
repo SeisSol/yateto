@@ -40,8 +40,31 @@
 from .memory import DenseMemoryLayout
 
 class Architecture(object):
-  def __init__(self, name, precision, alignment, enablePrefetch=False):
+  def __init__(self,
+               name,
+               precision,
+               alignment,
+               enablePrefetch=False,
+               sub_name=None,
+               host_name=None):
+  #def __init__(self, name, sub_name, precision, alignment, enablePrefetch=False, host_name=None):
+    """
+
+    Args:
+      name (str): name of the compute (main) architecture.
+      sub_name (str): name of sub. architecture type e.g., a model of Nvidia streaming
+          multiprocessor (sm_60, sm_61, etc). In case of CPU, the field is equal to None
+      precision (str): either 'd' or 's' character which stands for 'double' or 'single' precision
+      alignment (int): length of a vector register (unit) in bytes
+      enablePrefetch (bool): indicates whether the compute (main) architecture supports
+          data prefetching
+      host_name (str): name of the host (CPU) architecture. If the code is intentend to be generated
+          to CPU-like architecture then the field should be equal to None
+    """
     self.name = name
+    self.sub_name = sub_name
+    self.host_name = host_name
+
     self.precision = precision.upper()
     if self.precision == 'D':
       self.bytesPerReal = 8
@@ -84,9 +107,13 @@ class Architecture(object):
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
 
+
+def _get_name_and_precision(ident):
+  return ident[1:], ident[0].upper()
+
+
 def getArchitectureIdentifiedBy(ident):
-  precision = ident[0].upper()
-  name = ident[1:]
+  name, precision = _get_name_and_precision(ident)
   arch = {
     'noarch': Architecture(name, precision, 16, False),
     'wsm': Architecture(name, precision, 16, False),
@@ -95,11 +122,36 @@ def getArchitectureIdentifiedBy(ident):
     'skx': Architecture(name, precision, 64, True),
     'knc': Architecture(name, precision, 64, False),
     'knl': Architecture(name, precision, 64, True), # Libxsmm currently supports prefetch only for KNL kernels
-    'thunderx2t99': Architecture(name, precision, 16, False)
+    'rome': Architecture(name, precision, 32, False),
+    'thunderx2t99': Architecture(name, precision, 16, False),
+    'power9': Architecture(name, precision, 16, False)
   }
   return arch[name]
 
-def useArchitectureIdentifiedBy(ident):
-  arch = getArchitectureIdentifiedBy(ident)
+
+def getHeterogeneousArchitectureIdentifiedBy(compute_ident, compute_sub_arch=None, host_ident=None):
+  compute_name, compute_precision = _get_name_and_precision(compute_ident)
+  host_name, host_precision = _get_name_and_precision(host_ident)
+
+  if (compute_precision != host_precision):
+    raise ValueError(f'Precision of host and compute arch. must be the same. '
+                     f'Given: {host_ident}, {compute_ident}')
+
+  arch = {
+    'nvidia': Architecture(compute_name, compute_precision, 64, False, compute_sub_arch, host_name)
+  }
+  return arch[compute_name]
+
+
+def useArchitectureIdentifiedBy(compute_ident, compute_sub_arch=None, host_ident=None):
+  if not (compute_sub_arch or host_ident):
+    arch = getArchitectureIdentifiedBy(compute_ident)
+
+  elif (compute_sub_arch and host_ident):
+    arch = getHeterogeneousArchitectureIdentifiedBy(compute_ident, compute_sub_arch, host_ident)
+  else:
+    raise ValueError(f'given an incomplete set of input parameters: '
+                     f'{compute_ident}, {compute_sub_arch}, {host_ident}')
+
   DenseMemoryLayout.setAlignmentArch(arch)
   return arch

@@ -32,6 +32,7 @@ except OSError as e:
   if e.errno == errno.EEXIST:
     pass
 
+# explicitly force CPU target
 arch = useArchitectureIdentifiedBy(cmdLineArgs.arch)
 
 g = Generator(arch)

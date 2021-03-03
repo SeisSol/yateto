@@ -4,3 +4,7 @@ __pycache__
 .vscode
 yateto.egg-info
 .spack-env/
+build
+
+*.swo
+*.swp

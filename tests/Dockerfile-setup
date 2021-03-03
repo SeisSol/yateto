@@ -1,0 +1,22 @@
+# NOTE: Don't push this image to dockerhub or similar. Always build this image with: --no-cache
+# Example: docker build --no-cache --file ./Dockerfile-build --tag yateto:latest .
+
+FROM ravilmobile/yateto-env:latest
+
+RUN mkdir /cache
+
+# create a test user
+ARG UID=1000
+ARG GID=1000
+
+RUN addgroup --gid $GID tester
+RUN adduser --disabled-password --gecos '' --uid $UID --gid $GID tester
+RUN chown $UID:$GID /local_workspace /cache 
+USER tester
+
+# copy repo from the local current directory (fetched with Jenkins) to the workdir of the image
+COPY --chown=tester:tester . .
+
+#install dependencies and change workdir to the tests dir
+RUN pip3 install -e .
+WORKDIR /local_workspace/tests

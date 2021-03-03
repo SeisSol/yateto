@@ -53,18 +53,25 @@ class Description(object):
   def setBeta(self, beta):
     self.beta = beta
 
-def generator(arch, descr, gemm_cfg):
+def generator(arch, descr, gemm_cfg, target):
   AOk = descr.isACsc or descr.leftTerm.memoryLayout.stridei(0) == 1
   BOk = descr.isBCsc or descr.rightTerm.memoryLayout.stridei(0) == 1
   strideOneC = descr.result.memoryLayout.stridei(0) == 1
   memLayoutOk = AOk and BOk and strideOneC
   if memLayoutOk:
     m, n, k = descr.mnk()
-    gemmTool = gemm_cfg.getGemmTool(
-      m.size(), n.size(), k.size(),
-      descr.isACsc, descr.isBCsc,
-      descr.transA, descr.transB,
-      descr.alpha, descr.beta)
+    gemmTool = gemm_cfg.getGemmTool(m.size(),
+                                    n.size(),
+                                    k.size(),
+                                    descr.isACsc,
+                                    descr.isBCsc,
+                                    descr.transA,
+                                    descr.transB,
+                                    descr.alpha,
+                                    descr.beta,
+                                    descr.alignedA,
+                                    descr.alignedC,
+                                    target)
     if gemmTool:
       return GemmGen(arch, descr, gemmTool)
   return Generic(arch, descr)

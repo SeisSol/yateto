@@ -1,8 +1,20 @@
 import hashlib
 import subprocess
 import tempfile
-from ..cache import RoutineGenerator
-from ...gemm_configuration import BLASlike, CodeGenerator
+from ..cache import RoutineGenerator, GpuRoutineGenerator
+from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge
+from ..common import BatchedOperationsAux
+import importlib.util
+
+
+# Optional modules
+gf_spec = importlib.util.find_spec('gemmforge')
+try:
+  if gf_spec:
+    gf = gf_spec.loader.load_module()
+except:
+  raise ('Cannot load gemmforge.')
+
 
 class GemmGen(object):
   def __init__(self, arch, descr, gemm_cfg):
@@ -74,13 +86,60 @@ class GemmGen(object):
       flops = 2 * m.size() * n.size() * k.size()
     
     if isinstance(self._gemm_cfg, BLASlike):
-      cpp(  self._gemm_cfg.call(  d.transA, \
-                                  d.transB, \
-                                  m.size(), n.size(), k.size(), \
-                                  d.alpha, self._pointer(d.leftTerm, (m.start, k.start), d.transA), ldA, \
-                                  self._pointer(d.rightTerm, (k.start, n.start), d.transB), ldB, \
-                                  d.beta, self._pointer(d.result, (m.start, n.start), False), ldC
-                                ))
+      cpp(  self._gemm_cfg.call(d.transA,
+                                d.transB,
+                                m.size(), n.size(), k.size(),
+                                d.alpha, self._pointer(d.leftTerm, (m.start, k.start), d.transA), ldA,
+                                self._pointer(d.rightTerm, (k.start, n.start), d.transB), ldB,
+                                d.beta, self._pointer(d.result, (m.start, n.start), False), ldC))
+
+    elif isinstance(self._gemm_cfg, GemmForge):
+
+      if gf_spec:
+        aux = BatchedOperationsAux(self._arch.typename)
+
+        matrix_a = gf.YatetoInterface.produce_dense_matrix((m, k),
+                                                           d.leftTerm.memoryLayout.bbox(),
+                                                           addressing=aux.deduce_addresing(d.leftTerm),
+                                                           transpose=d.transA)
+
+        matrix_b = gf.YatetoInterface.produce_dense_matrix((k, n),
+                                                           d.rightTerm.memoryLayout.bbox(),
+                                                           addressing=aux.deduce_addresing(d.rightTerm),
+                                                           transpose=d.transB)
+
+        matrix_c = gf.YatetoInterface.produce_dense_matrix((m, n),
+                                                           d.result.memoryLayout.bbox(),
+                                                           addressing=aux.deduce_addresing(d.result),
+                                                           transpose=False)
+
+        try:
+          forge_generator = gf.GemmGenerator(gf.arch.produce(self._arch.name, self._arch.sub_name),
+                                             self._arch.typename)
+          forge_generator.generate(matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
+          routine_name = forge_generator.get_base_name()
+
+          args = [aux.deduce_arg(d.leftTerm, as_const=True),
+                  aux.deduce_arg(d.rightTerm, as_const=True),
+                  aux.deduce_arg(d.result, as_const=False),
+                  BatchedOperationsAux.NUM_ELEMENTS_NAME,
+                  BatchedOperationsAux.STREAM_PTR_NAME]
+          args_str = ', '.join(args)
+
+          if not isinstance(d.alpha, float):
+            args_str = f'{d.alpha}, {args_str}'
+
+          cpp("{}({});".format(routine_name, args_str))
+
+          routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))
+
+        except gf.GenerationError as err:
+          print(f'ERROR from GemmForge: {err}')
+          raise err
+      else:
+        raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
+                           'e.g., pip3 install gemmforge')
+
 
     else:
       assert not (d.transA or d.transB)
@@ -153,6 +212,8 @@ class ExecuteGemmGen(RoutineGenerator):
       raise RuntimeError('GEMM code generator executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(self._cmd))
   
   def __call__(self, routineName, fileName):
+    cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
+
     if self._mode == 'pspamm':
       argList = [
         self._cmd,
@@ -165,7 +226,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        self._arch.name,
+        cpu_arch,
         '--prefetching',
         self._gemmDescr['prefetch'],
         '--output_funcname',
@@ -193,7 +254,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['beta'],
         self._gemmDescr['alignedA'],
         self._gemmDescr['alignedC'],
-        self._arch.name,
+        'hsw' if cpu_arch == 'rome' else cpu_arch, # libxsmm has no support for rome, hsw works well in practice
         self._gemmDescr['prefetch'],
         self._arch.precision + 'P'
       ]
@@ -224,3 +285,25 @@ class ExecuteGemmGen(RoutineGenerator):
     return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
   
 
+class GemmForgeWriter(GpuRoutineGenerator):
+  def __init__(self, forge_generator):
+    self._basename = forge_generator.get_base_name()
+    self._declaration = forge_generator.get_launcher_header()
+    self._launcher = forge_generator.get_launcher()
+    self._kernel = forge_generator.get_kernel()
+
+  def __eq__(self, other):
+    if isinstance(other, GemmForgeWriter):
+      return self._basename == other._basename
+    else:
+      return False
+
+  def header(self, cpp):
+    cpp.include('gemmgen_aux.h')
+
+  def __call__(self, routineName, fileName):
+    with open(fileName, "a") as file:
+      file.write(self._kernel)
+      file.write(self._launcher)
+
+    return self._declaration

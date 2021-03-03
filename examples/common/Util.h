@@ -10,7 +10,7 @@ typedef float real;
 #  error REAL_SIZE not supported.
 #endif
 
-real fillWithStuff(real* A, unsigned reals) {
+void fillWithStuff(real* A, unsigned reals) {
   for (unsigned j = 0; j < reals; ++j) {
       A[j] = drand48();
   }

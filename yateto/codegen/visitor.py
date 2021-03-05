@@ -61,9 +61,9 @@ class KernelGenerator(object):
     #       an provided by the user
     required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
-    localPtrs = list()
+    localPtrs = set()
     for pp in cfg:
-      localPtrs.extend(pp.bufferMap.keys())
+      localPtrs.update(pp.bufferMap.keys())
     if localPtrs:
       cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
     for pp in cfg:

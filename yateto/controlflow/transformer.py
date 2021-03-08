@@ -124,7 +124,9 @@ class DetermineLocalInitialization(object):
       ua = cfg[i].action
       # assign buffer
       if ua and not ua.isCompound() and ua.result.isLocal():
-        if len(freeBuffers) > 0:
+        if ua.result in usedBuffers:
+            buf = usedBuffers[ua.result]
+        elif len(freeBuffers) > 0:
           buf = freeBuffers.pop()
         else:
           buf = numBuffers

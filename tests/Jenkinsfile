@@ -1,12 +1,34 @@
-properties([parameters([string(defaultValue: '', description: 'target architecture (according to yateto format). If not given then taken from Jenkins env-vars', name: 'ARCH', trim: true),
-                        string(defaultValue: 'matmul minimal', description: 'whitespace separate list of examples', name: 'EXAMPLES', trim: true),
-                        string(defaultValue: 'Eigen LIBXSMM OpenBLAS', description: 'whitespace separate list of generators', name: 'GENERATORS', trim: true),
-                        booleanParam(defaultValue: false, description: 'if true the environment image will be build. Note: it will take a considerable amount of time', name: 'BUILD_ENV_IMAGE')
-                        ])])
+properties([
+    parameters([string(
+                    defaultValue: 'runner', 
+                    description: 'agent name which tells where to run a job', 
+                    name: 'AGENT',
+                    trim: true),
+                string(
+                    defaultValue: '', 
+                    description: 'target architecture (according to yateto format). If not given then taken from Jenkins env-vars', 
+                    name: 'ARCH', 
+                    trim: true),
+                string(
+                    defaultValue: 'matmul minimal', 
+                    description: 'whitespace separate list of examples', 
+                    name: 'EXAMPLES', 
+                    trim: true),
+                string(
+                    defaultValue: 'Eigen LIBXSMM OpenBLAS', 
+                    description: 'whitespace separate list of generators', 
+                    name: 'GENERATORS', 
+                    trim: true),
+                booleanParam(
+                    defaultValue: false, 
+                    description: 'if true the environment image will be build. Note: it will take a considerable amount of time', 
+                    name: 'BUILD_ENV_IMAGE')
+    ])
+])
 
 
 pipeline {
-    agent any
+    agent {label "${params.AGENT}"}
 
     stages {
         stage('CleanWorkspace') {
@@ -33,12 +55,18 @@ pipeline {
                 // Make sure that Jenkins knows the location of Spack. 
                 // You will need to add it to the Jenkins settings
                 dir("tests") {
-                    sh 'spack containerize > ./Dockerfile-env'
-                    sh 'cat ./Dockerfile-env'
-
-                    script {
-                        def customImage = docker.build("ravilmobile/yateto-env", "-f Dockerfile-env .")
-                        customImage.push("latest")
+                     script {
+                        withCredentials([usernamePassword(credentialsId: 'docker-hub', 
+                                                      usernameVariable: 'USERNAME', 
+                                                      passwordVariable: 'PASSWORD')]) {
+                            sh """
+                            docker run --rm -v \$(pwd):/home -w /home ${USERNAME}/spack-ubuntu-1804:latest containerize > ./Dockerfile-env
+                            cat ./Dockerfile-env
+                            docker login -u ${USERNAME} -p ${PASSWORD}
+                            """
+                            def customImage = docker.build("${USERNAME}/yateto-env", "-f Dockerfile-env .")
+                            customImage.push("latest")
+                        }
                     }
                 }
             }
@@ -103,19 +131,19 @@ cmake .. && make && make test
                 sh "mkdir ./cache"
                 
                 script {
-                    // define runner arch. for testing
+                    // define test arch. for testing
                     //  if the user specifies ARCH as parameter it is going to be used for testing
                     //  if not, we will try to get ARCH from the Jenkins env. variables 
                     //  if the user didn't set env.HOST_ARCH in his/her Jenkins settings, then 'noarch' will be used
-                    env.RUNNER_ARCH="noarch"
+                    env.TEST_ARCH="noarch"
                     if (!env.ARCH.allWhitespace) {
-                        env.RUNNER_ARCH=env.ARCH
+                        env.TEST_ARCH=env.ARCH
                     }
-                    else if (env.HOST_ARCH) {
-                        env.RUNNER_ARCH=env.HOST_ARCH
+                    else if (env.RUNNER_HOST_ARCH) {
+                        env.TEST_ARCH=env.RUNNER_HOST_ARCH
                     }
                 }
-                sh 'docker container run --rm -e ARCH="${RUNNER_ARCH}" -e EXAMPLES="${EXAMPLES}" -e GENERATORS="${GENERATORS}" -v $(pwd)/cache:/cache -v $(pwd)/run_tests.sh:/local_workspace/tests/run_tests.sh yateto:latest run_tests.sh'
+                sh 'docker container run --rm -e ARCH="${TEST_ARCH}" -e EXAMPLES="${EXAMPLES}" -e GENERATORS="${GENERATORS}" -v $(pwd)/cache:/cache -v $(pwd)/run_tests.sh:/local_workspace/tests/run_tests.sh yateto:latest run_tests.sh'
             }
         }
     }

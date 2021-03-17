@@ -1,10 +1,10 @@
 from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from ...ast.indices import BoundingBox
 from ..cache import RoutineGenerator, GpuRoutineGenerator
-from gemmboost.interfaces import YatetoInterface as yi
-from gemmboost.common import GemmDescr, Addressing, FloatingPointType, DataFlowDirection
-from gemmboost.common import vm_factory, generate_tmp_matrix
-from gemmboost.backend.generator import Generator as GemmBoostGenerator
+from chainforge.interfaces import YatetoInterface as yi
+from chainforge.common import GemmDescr, Addressing, FloatingPointType, DataFlowDirection
+from chainforge.common import vm_factory, generate_tmp_matrix
+from chainforge.backend.generator import Generator as ChainForgeGenerator
 
 
 class FusedGemms:
@@ -38,12 +38,12 @@ class FusedGemms:
                     sub_name=self._arch.sub_name,
                     fp_type=FloatingPointType.str2enum(self._arch.typename))
 
-    gemmboost_generator = GemmBoostGenerator(gemm_list, vm)
-    gemmboost_generator.register()
+    chainforge_generator = ChainForgeGenerator(gemm_list, vm)
+    chainforge_generator.register()
 
-    cpp(f'{self._gen_call_size(gemmboost_generator)}')
-    routine_name = gemmboost_generator.get_base_name()
-    routineCache.addRoutine(routine_name, GemmBoostWriter(gemmboost_generator))
+    cpp(f'{self._gen_call_size(chainforge_generator)}')
+    routine_name = chainforge_generator.get_base_name()
+    routineCache.addRoutine(routine_name, ChainForgeWriter(chainforge_generator))
     return flops
 
   def _get_matrices(self, node, res, op1, op2):
@@ -55,16 +55,16 @@ class FusedGemms:
                                        op2=op2_tensor,
                                        trans_op2=node.transB())
 
-    matrix = self._get_gemmboost_matrix(tensor=op1_tensor,
-                                        tensor_variable=op1,
-                                        range=(m, k))
+    matrix = self._get_chainforge_matrix(tensor=op1_tensor,
+                                         tensor_variable=op1,
+                                         range=(m, k))
 
     if not (op1.name in self._cache and matrix.is_same(self._cache[op1.name])):
       self._cache[op1.name] = matrix
 
-    matrix = self._get_gemmboost_matrix(tensor=op2_tensor,
-                                        tensor_variable=op2,
-                                        range=(k, n))
+    matrix = self._get_chainforge_matrix(tensor=op2_tensor,
+                                         tensor_variable=op2,
+                                         range=(k, n))
 
     if not (op2.name in self._cache and matrix.is_same(self._cache[op2.name])):
       self._cache[op2.name] = matrix
@@ -72,11 +72,11 @@ class FusedGemms:
     if res.is_temporary:
       self._cache[res.name] = self._gen_tmp_matix(op1, op2, node, res.name)
     else:
-      self._cache[res.name] = self._get_gemmboost_matrix(tensor=res_tensor,
-                                                         tensor_variable=res,
-                                                         range=(m, n))
+      self._cache[res.name] = self._get_chainforge_matrix(tensor=res_tensor,
+                                                          tensor_variable=res,
+                                                          range=(m, n))
 
-  def _get_gemmboost_matrix(self, tensor, tensor_variable, range):
+  def _get_chainforge_matrix(self, tensor, tensor_variable, range):
     addr_mode = self._batch_aux.deduce_addresing(tensor)
     if tensor_variable.is_temporary:
       if not tensor_variable.name in self._tmp_matrices:
@@ -136,19 +136,19 @@ class FusedGemms:
     return m, n, k
 
 
-class GemmBoostWriter(GpuRoutineGenerator):
-  def __init__(self, gemmboost_generator):
-    self._generator = gemmboost_generator
+class ChainForgeWriter(GpuRoutineGenerator):
+  def __init__(self, chainforge_generator):
+    self._generator = chainforge_generator
     self._basename = self._generator.get_base_name()
 
   def __eq__(self, other):
-    if isinstance(other, GemmBoostWriter):
+    if isinstance(other, ChainForgeWriter):
       return self._basename == other._basename
     else:
       return False
 
   def header(self, cpp):
-    #cpp.include('gemmboost_aux.h')
+    #cpp.include('chainforge_aux.h')
     pass
 
   def __call__(self, routineName, fileName):

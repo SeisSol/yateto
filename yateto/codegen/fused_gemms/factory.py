@@ -1,11 +1,11 @@
 import importlib.util
-gb_spec = importlib.util.find_spec('gemmboost')
+gb_spec = importlib.util.find_spec('chainforge')
 try:
   if gb_spec:
     gb = gb_spec.loader.load_module()
     from .external_generator import FusedGemms
 except:
-  raise ('Found gemmbost speck but cannot load. Please, check installation of gemmboost')
+  raise ('Found chainforge speck but cannot load. Please, check installation of chainforge')
 
 
 class Description(object):

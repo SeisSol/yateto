@@ -5,7 +5,7 @@ try:
     gb = gb_spec.loader.load_module()
     from .external_generator import FusedGemms
 except:
-  raise ('Found chainforge speck but cannot load. Please, check installation of chainforge')
+  raise ('Found chainforge spec but cannot load. Please, check installation of chainforge')
 
 
 class Description(object):

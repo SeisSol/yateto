@@ -89,13 +89,13 @@ class GpuBoundingBoxCostEstimator(BoundingBoxCostEstimator):
   """
   def __init__(self):
     super().__init__()
-    self._lid_dim = 0
+    self._lead_dim = 0
     self._loaded_to_gpu_cache = set()
 
   def estimate_Product(self, node):
     cost = super().estimate_Product(node)
     bb = self._cache[node]
-    cost /= bb[self._lid_dim].size()
+    cost /= bb[self._lead_dim].size()
 
     extra_cost = 0
     if not node.rightTerm() in self._loaded_to_gpu_cache:
@@ -103,7 +103,7 @@ class GpuBoundingBoxCostEstimator(BoundingBoxCostEstimator):
       rbb = self._cache[node.rightTerm()]
       extra_cost += rbb.size()
 
-    if node.indices[self._lid_dim] != node.leftTerm().indices[self._lid_dim]:
+    if node.indices[self._lead_dim] != node.leftTerm().indices[self._lead_dim]:
       if not node.leftTerm in self._loaded_to_gpu_cache:
         self._loaded_to_gpu_cache.add(node.leftTerm())
         lbb = self._cache[node.leftTerm()]
@@ -114,7 +114,7 @@ class GpuBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     cost = super().estimate_IndexSum(node)
     bb = self._cache[node]
     self._loaded_to_gpu_cache.add(node)
-    return cost / bb[self._lid_dim].size()
+    return cost / bb[self._lead_dim].size()
 
 class ExactCost(CachedCostEstimator):
   def __init__(self):

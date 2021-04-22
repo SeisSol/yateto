@@ -47,11 +47,11 @@ class State(ABC):
     pass
 
   @classmethod
-  def is_gemm(cls, program_point) -> bool:
+  def is_pure_gemm(cls, program_point) -> bool:
     if program_point.action and program_point.action.isRHSExpression():
       node = program_point.action.term.node
       if isinstance(node, LoopOverGEMM):
-        return True if node.is_gemm() else False
+        return True if node.is_pure_gemm() else False
       else:
         return False
     else:
@@ -63,7 +63,7 @@ class StartState(State):
     super().__init__(context)
 
   def process(self, program_point):
-    if State.is_gemm(program_point):
+    if State.is_pure_gemm(program_point):
       self._context.create_fused_action()
       self._context.append_to_fused_action(program_point.action)
       self._context.change_state(ProcessState(context=self._context))
@@ -76,7 +76,7 @@ class ProcessState(State):
     super().__init__(context)
 
   def process(self, program_point):
-    if State.is_gemm(program_point):
+    if State.is_pure_gemm(program_point):
       self._context.append_to_fused_action(program_point.action)
     else:
       fused_action = self._context.get_fused_action()

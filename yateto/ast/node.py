@@ -447,7 +447,7 @@ class LoopOverGEMM(BinOp):
     Cstr = self.indexString('C', [self._m, self._n], self.indices)
     return '{} [{}]: {} = {} {}'.format(type(self).__name__, self.indices, Cstr, Astr, Bstr)
 
-  def is_gemm(self):
+  def is_pure_gemm(self):
     left_indices = self.leftTerm().indices
     right_indices = self.rightTerm().indices
     if not (len(left_indices) == 2 and len(right_indices) == 2):

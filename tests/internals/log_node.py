@@ -16,7 +16,7 @@ class LogNode(unittest.TestCase):
                                         shape=(10, 40)),
                           indexNames='jk')
 
-    contraction_shape = {30, 40}
+    contraction_shape = (30, 40)
     contraction = Contraction(indices=Indices(indexNames='ik', shape=contraction_shape),
                               lTerm=left,
                               rTerm=right,
@@ -24,7 +24,7 @@ class LogNode(unittest.TestCase):
     contraction.setMemoryLayout(DenseMemoryLayout(shape=contraction_shape))
 
     log = LoG(contraction)
-    self.assertTrue(log.is_gemm())
+    self.assertTrue(log.is_pure_gemm())
 
   def test_log_is_not_gemm(self):
     left = IndexedTensor(tensor=Tensor(name='A',
@@ -35,7 +35,7 @@ class LogNode(unittest.TestCase):
                                         shape=(40, 10, 30)),
                          indexNames='lji')
 
-    contraction_shape = {20, 40}
+    contraction_shape = (20, 40)
     contraction = Contraction(indices=Indices(indexNames='kl', shape=contraction_shape),
                               lTerm=left,
                               rTerm=right,
@@ -43,4 +43,4 @@ class LogNode(unittest.TestCase):
     contraction.setMemoryLayout(DenseMemoryLayout(shape=contraction_shape))
 
     log = LoG(contraction)
-    self.assertFalse(log.is_gemm())
+    self.assertFalse(log.is_pure_gemm())

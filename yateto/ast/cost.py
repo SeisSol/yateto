@@ -41,6 +41,7 @@ class CachedCostEstimator(CostEstimator):
     self._cost[node] = cost
     return cost
 
+
 class BoundingBoxCostEstimator(CachedCostEstimator):
   def __init__(self):
     super().__init__()
@@ -71,13 +72,49 @@ class BoundingBoxCostEstimator(CachedCostEstimator):
     self._cache[node] = bb
 
     return bb.size()
-  
+
   def estimate_IndexSum(self, node):
     tbb = self._cache[node.term()]
     pos = node.term().indices.find(str(node.sumIndex()))
     bb = BoundingBox([r for i,r in enumerate(tbb) if i != pos])
     self._cache[node] = bb
     return tbb.size() - bb.size()
+
+
+class GpuBoundingBoxCostEstimator(BoundingBoxCostEstimator):
+  """Estimates num. of hardware flops for a tensor operation per GPU thread.
+  Therefore, results of BoundingBoxCostEstimator are divided by a size
+  of the first dimension of lhs because this dimension is fully parallelized.
+  Note, the estimator includes GPU caching.
+  """
+  def __init__(self):
+    super().__init__()
+    self._lead_dim = 0
+    self._loaded_to_gpu_cache = set()
+
+  def estimate_Product(self, node):
+    cost = super().estimate_Product(node)
+    bb = self._cache[node]
+    cost /= bb[self._lead_dim].size()
+
+    extra_cost = 0
+    if not node.rightTerm() in self._loaded_to_gpu_cache:
+      self._loaded_to_gpu_cache.add(node.rightTerm())
+      rbb = self._cache[node.rightTerm()]
+      extra_cost += rbb.size()
+
+    if node.indices[self._lead_dim] != node.leftTerm().indices[self._lead_dim]:
+      if not node.leftTerm in self._loaded_to_gpu_cache:
+        self._loaded_to_gpu_cache.add(node.leftTerm())
+        lbb = self._cache[node.leftTerm()]
+        extra_cost += lbb.size()
+    return cost + extra_cost
+
+  def estimate_IndexSum(self, node):
+    cost = super().estimate_IndexSum(node)
+    bb = self._cache[node]
+    self._loaded_to_gpu_cache.add(node)
+    return cost / bb[self._lead_dim].size()
 
 class ExactCost(CachedCostEstimator):
   def __init__(self):

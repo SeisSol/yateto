@@ -53,7 +53,19 @@ class KernelGenerator(object):
   @classmethod
   def _bufferName(cls, buf):
     return cls.BUFFER_NAME + str(buf)
-  
+
+  def deduce_single_scalar(self, scalar):
+    return 1.0 if scalar is None else scalar
+
+  def deduce_scalar_list(self, action):
+    return [self.deduce_single_scalar(scalar) for scalar in action.scalar]
+
+  def deduce_scalar(self, action):
+    if isinstance(action.scalar, list):
+      return self.deduce_scalar_list(action)
+    else:
+      return self.deduce_single_scalar(action.scalar)
+
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
     hwFlops = 0
     # temporary memory required (per element in case of gpu)
@@ -75,7 +87,7 @@ class KernelGenerator(object):
         cpp('{} = {};'.format(local, self._bufferName(buf)))
       action = pp.action
       if action:
-        scalar = 1.0 if action.scalar is None else action.scalar
+        scalar = self.deduce_scalar(action)
         if action.isRHSExpression():
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)

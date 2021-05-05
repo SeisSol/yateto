@@ -4,7 +4,7 @@ import re
 import os
 from functools import wraps
 from yateto import Tensor
-from .ast.cost import BoundingBoxCostEstimator
+from .ast.cost import BoundingBoxCostEstimator, GpuBoundingBoxCostEstimator
 from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors, FindPrefetchCapabilities
 from .ast.transformer import *
@@ -53,7 +53,7 @@ class Kernel(object):
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
-  
+
   def prepareUntilUnitTest(self):
     self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
@@ -62,12 +62,13 @@ class Kernel(object):
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
   
-  def prepareUntilCodeGen(self, costEstimator):
+  def prepareUntilCodeGen(self, cost_estimators):
+    cost_estimator = cost_estimators[self.target]
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
       ast = EquivalentSparsityPattern(groupSpp=False).visit(ast)
-      ast = StrengthReduction(costEstimator).visit(ast)
+      ast = StrengthReduction(cost_estimator).visit(ast)
       ast = SetSparsityPattern().visit(ast)
       self.nonZeroFlops += ComputeOptimalFlopCount().visit(ast)
 
@@ -75,7 +76,7 @@ class Kernel(object):
     prefetch = copy.copy(self._prefetch)
     for ast in self.ast:
       ast = EquivalentSparsityPattern().visit(ast)
-      ast = StrengthReduction(costEstimator).visit(ast)
+      ast = StrengthReduction(cost_estimator).visit(ast)
       ast = FindContractions().visit(ast)
       ast = ComputeMemoryLayout().visit(ast)
       permutationVariants = FindIndexPermutations().visit(ast)
@@ -99,7 +100,10 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
-    
+    if self.target == 'gpu':
+      self.cfg = FindFusedGemms().visit(self.cfg)
+      self.cfg = LivenessAnalysis().visit(self.cfg)
+
 class KernelFamily(object):
   GROUP_INDEX = r'\((0|[1-9]\d*)\)'
   VALID_NAME = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX)
@@ -209,7 +213,7 @@ class Generator(object):
 
   def arch(self):
     return self._arch
-  
+
   def add(self, name: str, ast: Node, prefetch=None, namespace=None, target='cpu'):
     if KernelFamily.isValidName(name):
       baseName = KernelFamily.baseName(name)
@@ -252,12 +256,17 @@ class Generator(object):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
 
-  def generate( self,
-                outputDir: str,
-                namespace = 'yateto',
-                gemm_cfg: GeneratorCollection = None,
-                costEstimator = BoundingBoxCostEstimator,
-                include_tensors = set()):
+  def generate(self,
+               outputDir: str,
+               namespace='yateto',
+               gemm_cfg: GeneratorCollection = None,
+               cpu_cost_estimator=BoundingBoxCostEstimator,
+               gpu_cost_estimator=GpuBoundingBoxCostEstimator,
+               include_tensors=set()):
+
+    cost_estimators = {'cpu': cpu_cost_estimator,
+                       'gpu': gpu_cost_estimator}
+
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
@@ -291,10 +300,10 @@ class Generator(object):
     print('Optimizing ASTs...')
     for kernel in self._kernels:
       print(kernel.name)
-      kernel.prepareUntilCodeGen(costEstimator)
+      kernel.prepareUntilCodeGen(cost_estimators)
     for family in self._kernelFamilies.values():
       print(family.name)
-      family.prepareUntilCodeGen(costEstimator)
+      family.prepareUntilCodeGen(cost_estimators)
 
 
     # Create mapping from namespace to kernel/family

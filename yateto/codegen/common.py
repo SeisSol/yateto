@@ -98,7 +98,6 @@ class BatchedOperationsAux:
   def _get_ptr_type(self, addressing):
     return '**' if addressing == 'pointer_based' else '*'
 
-
   def deduce_addresing(self, term):
     if term.is_compute_constant:
       return 'none'
@@ -106,7 +105,6 @@ class BatchedOperationsAux:
       return 'strided'
     else:
       return 'pointer_based'
-
 
   def deduce_arg(self, term, as_const=False):
     if term.is_compute_constant or term.is_temporary:

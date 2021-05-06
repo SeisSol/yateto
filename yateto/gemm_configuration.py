@@ -193,7 +193,7 @@ class PSpaMM(CodeGenerator):
 
 class GemmForge(CodeGenerator):
   def __init__(self, arch, threshold: int = 256):
-    super().__init__('', ['gemmgen_aux.h'], '', arch)
+    super().__init__('', ['gemmforge_aux.h'], '', arch)
     self._threshold = threshold
 
   def _is_arch_supported(self):

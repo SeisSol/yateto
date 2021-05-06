@@ -47,7 +47,6 @@ class Architecture(object):
                enablePrefetch=False,
                sub_name=None,
                host_name=None):
-  #def __init__(self, name, sub_name, precision, alignment, enablePrefetch=False, host_name=None):
     """
 
     Args:
@@ -75,7 +74,7 @@ class Architecture(object):
       self.typename = 'float'
       self.epsilon = 1.19e-7
     else:
-      raise ValueError('Unknown precision type ' + self.precision)
+      raise ValueError(f'Unknown precision type {self.precision}')
     self.alignment = alignment
     assert self.alignment % self.bytesPerReal == 0
     self.alignedReals = self.alignment // self.bytesPerReal

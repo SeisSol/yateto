@@ -295,7 +295,7 @@ class OptimisedKernelGenerator(KernelGenerator):
         # containers with extra offsets for GPU-like computations
         if target == 'gpu':
           header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
-          header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = nullptr;')
+          header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
@@ -380,6 +380,7 @@ class OptimisedKernelGenerator(KernelGenerator):
 
         if target == 'gpu':
           cpp(f'assert({BatchedOperationsAux.NUM_ELEMENTS_NAME} != 0);')
+          cpp(f'assert({BatchedOperationsAux.STREAM_PTR_NAME} != {BatchedOperationsAux.FORBIDDEN_STREAM_PTR});')
 
         cpp(kernelOutline.function)
 

@@ -84,9 +84,9 @@ class CopyScaleAddGenerator(object):
                                                          transpose=False)
 
       try:
-        forge_generator = gf.CsaGenerator(gf.arch.produce(self._arch.name, self._arch.sub_name),
-                                       self._arch.typename)
-        forge_generator.generate(matrix_a, matrix_b, alpha, d.beta)
+        vm = gf.vm_factory(self._arch.name, self._arch.sub_name, fp_type=self._arch.typename)
+        forge_generator = gf.CsaGenerator(vm)
+        forge_generator.set(matrix_a, matrix_b, alpha, d.beta)
         routine_name = forge_generator.get_base_name()
 
         args = [str(alpha),
@@ -111,10 +111,8 @@ class CopyScaleAddGenerator(object):
 
 class GemmForgeWriter(GpuRoutineGenerator):
   def __init__(self, forge_generator):
+    self._generator = forge_generator
     self._basename = forge_generator.get_base_name()
-    self._declaration = forge_generator.get_launcher_header()
-    self._launcher = forge_generator.get_launcher()
-    self._kernel = forge_generator.get_kernel()
 
   def __eq__(self, other):
     if isinstance(other, GemmForgeWriter):
@@ -123,11 +121,16 @@ class GemmForgeWriter(GpuRoutineGenerator):
       return False
 
   def header(self, cpp):
-    cpp.include('gemmgen_aux.h')
+    cpp.include('gemmforge_aux.h')
 
   def __call__(self, routineName, fileName):
-    with open(fileName, "a") as file:
-      file.write(self._kernel)
-      file.write(self._launcher)
+    self._generator.generate()
+    declaration = self._generator.get_launcher_header()
+    launcher = self._generator.get_launcher()
+    kernel = self._generator.get_kernel()
 
-    return self._declaration
+    with open(fileName, "a") as file:
+      file.write(kernel)
+      file.write(launcher)
+
+    return declaration

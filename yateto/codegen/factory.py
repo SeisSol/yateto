@@ -72,7 +72,7 @@ class KernelFactory(object):
     if self._target == 'cpu':
       pass
     elif self._target == 'gpu':
-      self._cpp(f'{BatchedOperationsAux.STREAM_PTR_NAME} = nullptr;')
+      self._cpp(f'{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
     else:
       raise RuntimeError('unknown compute target')
 

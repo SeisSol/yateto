@@ -121,6 +121,8 @@ class GemmForgeWriter(GpuRoutineGenerator):
       return False
 
   def header(self, cpp):
+    #ToDo: add check if we running sycl
+    cpp.include('CL/sycl.hpp')
     cpp.include('gemmforge_aux.h')
 
   def __call__(self, routineName, fileName):

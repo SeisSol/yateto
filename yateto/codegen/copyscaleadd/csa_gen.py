@@ -96,7 +96,7 @@ class CopyScaleAddGenerator(object):
                 BatchedOperationsAux.STREAM_PTR_NAME]
         cpp("{}({});".format(routine_name, ', '.join(args)))
 
-        routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))
+        routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator, vm.get_headers()))
 
       except gf.GenerationError as err:
         print("ERROR: {}".format(err))
@@ -110,9 +110,10 @@ class CopyScaleAddGenerator(object):
 
 
 class GemmForgeWriter(GpuRoutineGenerator):
-  def __init__(self, forge_generator):
+  def __init__(self, forge_generator, headers):
     self._generator = forge_generator
     self._basename = forge_generator.get_base_name()
+    self._headers = headers
 
   def __eq__(self, other):
     if isinstance(other, GemmForgeWriter):
@@ -121,7 +122,8 @@ class GemmForgeWriter(GpuRoutineGenerator):
       return False
 
   def header(self, cpp):
-    cpp.include('gemmforge_aux.h')
+    for header in self._headers:
+      cpp.include(header)
 
   def __call__(self, routineName, fileName):
     self._generator.generate()

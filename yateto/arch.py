@@ -137,7 +137,9 @@ def getHeterogeneousArchitectureIdentifiedBy(compute_ident, compute_sub_arch=Non
                      f'Given: {host_ident}, {compute_ident}')
 
   arch = {
-    'nvidia': Architecture(compute_name, compute_precision, 64, False, compute_sub_arch, host_name)
+    'nvidia': Architecture(compute_name, compute_precision, 64, False, compute_sub_arch, host_name),
+    'hipsycl': Architecture(compute_name, compute_precision, 64, False, compute_sub_arch, host_name),
+    'oneapi': Architecture(compute_name, compute_precision, 64, False, compute_sub_arch, host_name)
   }
   return arch[compute_name]
 

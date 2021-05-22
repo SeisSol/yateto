@@ -197,7 +197,7 @@ class GemmForge(CodeGenerator):
     self._threshold = threshold
 
   def _is_arch_supported(self):
-    return self._arch.name.lower() in {'nvidia'}
+    return self._arch.name.lower() in {'nvidia', 'oneapi', 'hipsycl'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -253,7 +253,9 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'knl' : [libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [pspamm, openblas, blis, eigen],
-      'nvidia': [forge]
+      'nvidia': [forge],
+      'hipsycl': [forge],
+      'oneapi': [forge]
     }
 
     if arch.name in defaults:

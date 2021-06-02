@@ -133,8 +133,8 @@ class CodeGenerator(GemmTool):
     self._arch = arch
 
 class LIBXSMM(CodeGenerator):
-  def __init__(self, arch, threshold: int = 128):
-    super().__init__('libxsmm', [], 'libxsmm_gemm_generator', arch)
+  def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
+    super().__init__('libxsmm', [], cmd, arch)
     self._threshold = threshold
 
   def _archSupported(self):
@@ -159,8 +159,8 @@ class LIBXSMM(CodeGenerator):
     return Preference.LOW
 
 class PSpaMM(CodeGenerator):
-  def __init__(self, arch, threshold: int = 128):
-    super().__init__('pspamm', [], 'pspamm.py', arch)
+  def __init__(self, arch, cmd: str = 'pspamm.py', threshold: int = 128):
+    super().__init__('pspamm', [], cmd, arch)
     self._threshold = threshold
 
   def _archSupported(self):

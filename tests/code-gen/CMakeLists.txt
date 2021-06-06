@@ -58,7 +58,7 @@ foreach(EXAMPLE ${EXAMPLES})
 
     # execute code generator
     add_custom_command(COMMAND
-                        python ${CMAKE_SOURCE_DIR}/generator.py
+                        python3 ${CMAKE_SOURCE_DIR}/generator.py
                         --arch ${ARCH_STR}
                         --variant ${VARIANT}
                         --output_dir ${CMAKE_BINARY_DIR}

@@ -264,11 +264,8 @@ class Generator(object):
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
                cpu_cost_estimator=BoundingBoxCostEstimator,
-               gpu_cost_estimator=GpuBoundingBoxCostEstimator,
+               gpu_cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set()):
-
-    cost_estimators = {'cpu': cpu_cost_estimator,
-                       'gpu': gpu_cost_estimator}
 
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
@@ -299,6 +296,9 @@ class Generator(object):
     with Cpp(fUTcxxtest.h) as cpp:
         with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
             CxxTest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+
+
+    cost_estimators = {'cpu': cpu_cost_estimator, 'gpu': gpu_cost_estimator}
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:

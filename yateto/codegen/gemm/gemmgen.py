@@ -116,7 +116,7 @@ class GemmGen(object):
         try:
           vm = gf.vm_factory(self._arch.name, self._arch.sub_name, fp_type=self._arch.typename)
           forge_generator = gf.GemmGenerator(vm)
-          forge_generator.set(matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
+          forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
           args = [aux.deduce_arg(d.leftTerm, as_const=True),

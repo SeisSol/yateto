@@ -41,7 +41,7 @@ class FusedGemms:
     chainforge_generator = ChainForgeGenerator(gemm_list, vm)
     chainforge_generator.register()
 
-    cpp(f'{self._gen_call_size(chainforge_generator)}')
+    cpp(f'{self._gen_call_site(chainforge_generator)}')
     routine_name = chainforge_generator.get_base_name()
     routineCache.addRoutine(routine_name, ChainForgeWriter(chainforge_generator))
     return flops
@@ -99,7 +99,7 @@ class FusedGemms:
     self._tmp_matrices[res_name] = tmp_matrix
     return tmp_matrix
 
-  def _gen_call_size(self, generator):
+  def _gen_call_site(self, generator):
     mat_name_map = {}
     offset_name_map = {}
     for name, matrix in self._cache.items():

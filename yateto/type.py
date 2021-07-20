@@ -1,7 +1,7 @@
 import re
 from .ast.node import Node, IndexedTensor
 from numpy import ndarray, zeros, float64
-from .memory import DenseMemoryLayout
+from .memory import DenseMemoryLayout, Alignment
 from . import aspp
 
 class AbstractType(object):
@@ -35,7 +35,7 @@ class Tensor(AbstractType):
                shape,
                spp=None,
                memoryLayoutClass=DenseMemoryLayout,
-               alignStride=False,
+               alignStride=Alignment.Automatic,
                namespace=None):
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
@@ -77,7 +77,7 @@ class Tensor(AbstractType):
     
     self.setMemoryLayout(memoryLayoutClass, alignStride)
 
-  def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
+  def setMemoryLayout(self, memoryLayoutClass, alignStride=Alignment.Automatic):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp, alignStride=alignStride)
 
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
@@ -90,7 +90,7 @@ class Tensor(AbstractType):
 
   def setGroupSpp(self, spp):
     self._setSparsityPattern(spp, setOnlyGroupSpp=True)
-    self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
+    self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignment())
 
   def __getitem__(self, indexNames):
     return IndexedTensor(self, indexNames)

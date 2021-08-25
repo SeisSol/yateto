@@ -126,6 +126,59 @@ class Eigen(BLASlike):
                code=code)
     return code
 
+class LIBXSMM_JIT(BLASlike):
+  def __init__(self, arch):
+    super().__init__(None, ['libxsmm.h'])
+    self._arch = arch
+    self._threshold = 128
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+    if sparseA:
+      return Preference.LOW
+    if sparseB:
+      return Preference.MODERATE
+    if (m*n*k)**(1./3.) <= self._threshold:
+      return Preference.HIGH
+    return Preference.LOW
+
+  def _archSupported(self):
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome'}
+    return True  # TODO(Lukas)
+
+    if self._arch.name.lower() in supported_set:
+      return True
+    else:
+      return self._arch.host_name and self._arch.host_name.lower() in supported_set
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
+                beta, alignedA, alignedC, target):
+    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
+
+
+  def align(self, ld):
+    aligned = 'Unaligned'
+    if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
+      aligned = 'Aligned{}'.format(self._arch.alignment)
+    return aligned
+
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+    return """{{
+static auto kernel = libxsmm_mmfunction<{prec}>(
+  LIBXSMM_GEMM_FLAG_NONE, {M}, {N}, {K},
+  {ldA}, // lda
+  {ldB}, // ldb
+  {ldC}, // ldc
+  {alpha}, // alpha
+  {beta}, // beta
+  false // prefetch
+  );
+kernel({A}, {B}, {C});
+}}
+    """.format(prec=self._arch.typename, M=M, N=N, K=K,
+               ldA=ldA, ldB=ldB, ldC=ldC, A=A, B=B, C=C,
+               alpha=alpha, beta=beta
+               )
+
 class CodeGenerator(GemmTool):
   def __init__(self, operation_name: str, includes: List[str], cmd: str, arch):
     super().__init__(operation_name, includes)
@@ -145,9 +198,9 @@ class LIBXSMM(CodeGenerator):
     else:
       return self._arch.host_name and self._arch.host_name.lower() in supported_set
 
-  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
-    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
+    def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
+                  beta, alignedA, alignedC, target):
+      return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
     if sparseA:
@@ -239,7 +292,7 @@ class GeneratorCollection(object):
 class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
-    libxsmm = LIBXSMM(arch)
+    libxsmm = LIBXSMM_JIT(arch)
     pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)

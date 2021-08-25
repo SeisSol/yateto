@@ -152,16 +152,22 @@ class LIBXSMM_JIT(BLASlike):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
-    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
-
-
-  def align(self, ld):
-    aligned = 'Unaligned'
-    if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
-      aligned = 'Aligned{}'.format(self._arch.alignment)
-    return aligned
+    return self._archSupported() and not (sparseA or sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
   def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+    # TODO Flags?
+    #LIBXSMM_GEMM_FLAG_NONE = 0,
+    #LIBXSMM_GEMM_FLAG_TRANS_A = 1,
+    #/** Transpose matrix B. */
+    #LIBXSMM_GEMM_FLAG_TRANS_B = 2,
+    #/** Transpose matrix A and B. */
+    #LIBXSMM_GEMM_FLAG_TRANS_AB = LIBXSMM_GEMM_FLAG_TRANS_A | LIBXSMM_GEMM_FLAG_TRANS_B,
+    #/** Generate aligned load instructions. */
+    #LIBXSMM_GEMM_FLAG_ALIGN_A = 8,
+    #/** Aligned load/store instructions. */
+    #LIBXSMM_GEMM_FLAG_ALIGN_C = 16,
+
+    # TODO Prefix?
     return """{{
 static auto kernel = libxsmm_mmfunction<{prec}>(
   LIBXSMM_GEMM_FLAG_NONE, {M}, {N}, {K},
@@ -172,6 +178,7 @@ static auto kernel = libxsmm_mmfunction<{prec}>(
   {beta}, // beta
   false // prefetch
   );
+  assert(kernel);
 kernel({A}, {B}, {C});
 }}
     """.format(prec=self._arch.typename, M=M, N=N, K=K,

@@ -38,7 +38,8 @@ class BLASlike(GemmTool):
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     parameters = [
       'CblasColMajor',
       self.bool2Trans(transA),
@@ -65,7 +66,8 @@ class BLIS(BLASlike):
   def bool2Trans(self, trans):
     return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     init = '_blis_alpha = {}; _blis_beta = {};'.format(alpha, beta)
     parameters = [
       self.bool2Trans(transA),
@@ -97,7 +99,9 @@ class Eigen(BLASlike):
       aligned = 'Aligned{}'.format(self._arch.alignment)
     return aligned
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     AxB = '{alpha}_mapA{transA}*_mapB{transB}'.format(
             alpha=str(alpha) + '*' if alpha != 1.0 else '',
             transA=self.bool2Trans(transA), transB=self.bool2Trans(transB),
@@ -152,38 +156,63 @@ class LIBXSMM_JIT(BLASlike):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
-    return self._archSupported() and not (sparseA or sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
+    # Note:
+    # Libxsmm falls back to blas for transA and more general alpha/beta
+    # See e.g. here:
+    # https://libxsmm.readthedocs.io/en/latest/libxsmm_qna/#what-is-a-small-matrix-multiplication
+    # https://github.com/hfp/libxsmm/issues/396#issuecomment-674741063
+    return self._archSupported() and not (sparseA or sparseB) and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
-    # TODO Flags?
-    #LIBXSMM_GEMM_FLAG_NONE = 0,
-    #LIBXSMM_GEMM_FLAG_TRANS_A = 1,
-    #/** Transpose matrix B. */
-    #LIBXSMM_GEMM_FLAG_TRANS_B = 2,
-    #/** Transpose matrix A and B. */
-    #LIBXSMM_GEMM_FLAG_TRANS_AB = LIBXSMM_GEMM_FLAG_TRANS_A | LIBXSMM_GEMM_FLAG_TRANS_B,
-    #/** Generate aligned load instructions. */
-    #LIBXSMM_GEMM_FLAG_ALIGN_A = 8,
-    #/** Aligned load/store instructions. */
-    #LIBXSMM_GEMM_FLAG_ALIGN_C = 16,
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
+    flags = ["LIBXSMM_GEMM_FLAG_NONE"]
+    if transA:
+      flags += ['LIBXSMM_GEMM_FLAG_TRANS_A']
+    if transB:
+      flags += ['LIBXSMM_GEMM_FLAG_TRANS_B']
 
-    # TODO Prefix?
+    # Note: Alignment is currently a bit buggy.
+    # Enabling alignedC leads to wrong results currenty.
+    # See:
+    # https://github.com/SeisSol/yateto/issues/15
+    #if alignedA:
+      #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_A"]
+    #if alignedC:
+      #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
+    libxsmm_flag_str = " | ".join(flags)
+
+    prefetch = "nullptr" if prefetchName is None else prefetchName
+    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_SIGONLY" if prefetchName is None else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
+
     return """{{
 static auto kernel = libxsmm_mmfunction<{prec}>(
-  LIBXSMM_GEMM_FLAG_NONE, {M}, {N}, {K},
+  {flag}, // flag
+  {M}, // M
+  {N}, // N
+  {K}, // K
   {ldA}, // lda
   {ldB}, // ldb
   {ldC}, // ldc
   {alpha}, // alpha
   {beta}, // beta
-  false // prefetch
+  {prefetch_flag} // prefetch
+);
+assert(kernel);
+kernel(
+  {A}, // A
+  {B}, // B
+  {C}, // C
+  nullptr, // prefetch A
+  {prefetch}, // prefetch B
+  nullptr // prefetch C
   );
-  assert(kernel);
-kernel({A}, {B}, {C});
 }}
     """.format(prec=self._arch.typename, M=M, N=N, K=K,
                ldA=ldA, ldB=ldB, ldC=ldC, A=A, B=B, C=C,
-               alpha=alpha, beta=beta
+               alpha=alpha, beta=beta,
+               flag=libxsmm_flag_str,
+               prefetch_flag=prefetch_flag,
+               prefetch=prefetch
                )
 
 class CodeGenerator(GemmTool):

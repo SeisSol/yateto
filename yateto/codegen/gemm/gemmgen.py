@@ -94,9 +94,12 @@ class GemmGen(object):
       cpp(  self._gemm_cfg.call(d.transA,
                                 d.transB,
                                 m.size(), n.size(), k.size(),
-                                d.alpha, ptr_a, ldA,
+                                ptr_a, ldA,
                                 ptr_b, ldB,
-                                d.beta, ptr_c, ldC))
+                                d.beta, ptr_c, ldC,
+                                alignedA=d.alignedA,
+                                alignedC=d.alignedC,
+                                prefetchName=d.prefetchName))
 
     elif isinstance(self._gemm_cfg, GemmForge):
 

@@ -1,6 +1,8 @@
 import hashlib
 import subprocess
 import tempfile
+from abc import ABC
+
 from ..cache import RoutineGenerator, GpuRoutineGenerator
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge
 from ..common import BatchedOperationsAux
@@ -45,7 +47,7 @@ class GemmGen(object):
       sha = hashlib.md5()
       sha.update(str(spp).encode())
       name += 'sparse_' + sha.hexdigest()
-    return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(
+    return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
       name=name,
       alphaSubs=self._alpha(gemm['alpha']),
       betaSubs=self._beta(gemm['beta']),
@@ -100,7 +102,6 @@ class GemmGen(object):
                                 alignedA=d.alignedA,
                                 alignedC=d.alignedC,
                                 prefetchName=d.prefetchName))
-
     elif isinstance(self._gemm_cfg, GemmForge):
 
       if gf_spec:
@@ -148,11 +149,9 @@ class GemmGen(object):
       else:
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
-
-
+      routineName = self.generateRoutineName(gemm, spp)
+      routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._gemm_cfg))
     else:
-      assert not (d.transA or d.transB)
-
       gemm = {
         'M':            m.size(),
         'N':            n.size(),
@@ -164,10 +163,14 @@ class GemmGen(object):
         'beta':         self._beta(d.beta),
         'alignedA':     int(d.alignedA),
         'alignedC':     int(d.alignedC),
-        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly'
+        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly',
+        'transA': d.transA,
+        'transB': d.transB,
+
       }
 
       routineName = self.generateRoutineName(gemm, spp)
+
 
       if self._mode == 'pspamm':
         cpp( '{}({}, {}, {}, {}, {}, {});'.format(
@@ -188,8 +191,12 @@ class GemmGen(object):
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
 
-      routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._gemm_cfg))
-    
+      if self._gemm_cfg.is_internal():
+        routineCache.addRoutine(routineName, LibxsmmGemmGen(
+          self._arch, gemm, spp, sppRows, self._gemm_cfg))
+      else:
+        routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._gemm_cfg))
+
     return flops
 
 class ExecuteGemmGen(RoutineGenerator):  
@@ -320,3 +327,100 @@ class GemmForgeWriter(GpuRoutineGenerator):
       file.write(launcher)
 
     return declaration
+
+
+class LibxsmmGemmGen(ExecuteGemmGen):
+  def __init__(self,
+               arch,
+               gemm_descr,
+               spp,
+               spp_rows,
+               gemm_cfg):
+    super().__init__(arch, gemm_descr, spp, spp_rows, gemm_cfg)
+
+  def header(self, cpp):
+    super().header(cpp)
+    cpp.include('libxsmm.h')
+    #with cpp.PPIfndef('NDEBUG'):
+      #cpp('extern long long libxsmm_num_total_flops;')
+      #cpp('extern long long pspamm_num_total_flops;')
+    #with cpp.PPIf('defined( __SSE3__) || defined(__MIC__)'):
+      #cpp.includeSys('immintrin.h')
+
+  def _kernel(self, routine_name):
+    M = self._gemmDescr['M']
+    N = self._gemmDescr['N']
+    K = self._gemmDescr['K']
+    ldA = self._gemmDescr['LDA']
+    ldB = self._gemmDescr['LDB']
+    ldC = self._gemmDescr['LDC']
+    alpha = self._gemmDescr['alpha']
+    beta = self._gemmDescr['beta']
+    alignedA = self._gemmDescr['alignedA']
+    alignedC = self._gemmDescr['alignedC']
+    prefetch = self._gemmDescr['prefetch']
+    transA = self._gemmDescr['transA']
+    transB = self._gemmDescr['transB']
+
+    print(self._gemmDescr)
+
+    flags = ["LIBXSMM_GEMM_FLAG_NONE"]
+    if transA:
+      flags += ['LIBXSMM_GEMM_FLAG_TRANS_A']
+    if transB:
+      flags += ['LIBXSMM_GEMM_FLAG_TRANS_B']
+
+    # Note: Alignment is currently a bit buggy.
+    # Enabling alignedC leads to wrong results currenty.
+    # See:
+    # https://github.com/SeisSol/yateto/issues/15
+    #if alignedA:
+    #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_A"]
+    #if alignedC:
+    #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
+    libxsmm_flag_str = " | ".join(flags)
+
+    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_SIGONLY" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
+
+    kernel_var_name = f'{routine_name}_var'
+    return """
+static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
+  {flag}, // flag
+  {M}, // M
+  {N}, // N
+  {K}, // K
+  {ldA}, // lda
+  {ldB}, // ldb
+  {ldC}, // ldc
+  {alpha}, // alpha
+  {beta}, // beta
+  {prefetch_flag} // prefetch
+); 
+""".format(kernel_var_name=kernel_var_name,
+                prec=self._arch.typename, M=M, N=N, K=K,
+                      ldA=ldA, ldB=ldB, ldC=ldC,
+                      alpha=alpha, beta=beta,
+                      flag=libxsmm_flag_str,
+                      prefetch_flag=prefetch_flag,
+                      prefetch=prefetch
+                      )
+
+  def _call(self, routineName):
+    return f"""
+{{
+    {routineName}_var(A, B, C, A_prefetch, B_prefetch, C_prefetch);
+}}
+"""
+
+  def _functionSignature(self, routineName):
+    return 'void {routineName}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch)'.format(routineName=routineName, type=self._arch.typename)
+
+  def __call__(self, routineName, fileName):
+    func_signature = self._functionSignature(routineName)
+    with open(fileName, "a") as file:
+      file.write(self._kernel(routineName))
+      file.write(f"{func_signature}")
+      file.write(self._call(routineName))
+      #file.write(kernel)
+      #file.write(launcher)
+    return func_signature + ";"

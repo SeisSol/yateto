@@ -130,17 +130,33 @@ class Eigen(BLASlike):
                code=code)
     return code
 
-class LIBXSMM_JIT(BLASlike):
-  def __init__(self, arch):
-    super().__init__(None, ['libxsmm.h'])
+
+class CodeGenerator(GemmTool):
+  def __init__(self, operation_name: str,
+               includes: List[str],
+               cmd: str,
+               arch,
+               is_internal=False):
+    super().__init__(operation_name, includes)
+    self.cmd = cmd
     self._arch = arch
-    self._threshold = 128
+    self._is_internal = is_internal
+
+  def is_internal(self):
+    return self._is_internal
+
+
+class LIBXSMM_JIT(CodeGenerator):
+  def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
+    super().__init__('libxsmm_jit',
+                     ['libxsmm.h'],
+                     cmd,
+                     arch,
+                     is_internal=True)
+    self._threshold = threshold
+    self._arch = arch
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
-    if sparseA:
-      return Preference.LOW
-    if sparseB:
-      return Preference.MODERATE
     if (m*n*k)**(1./3.) <= self._threshold:
       return Preference.HIGH
     return Preference.LOW
@@ -162,64 +178,6 @@ class LIBXSMM_JIT(BLASlike):
     # https://libxsmm.readthedocs.io/en/latest/libxsmm_qna/#what-is-a-small-matrix-multiplication
     # https://github.com/hfp/libxsmm/issues/396#issuecomment-674741063
     return self._archSupported() and not (sparseA or sparseB) and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
-
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
-           alignedA, alignedC, prefetchName):
-    flags = ["LIBXSMM_GEMM_FLAG_NONE"]
-    if transA:
-      flags += ['LIBXSMM_GEMM_FLAG_TRANS_A']
-    if transB:
-      flags += ['LIBXSMM_GEMM_FLAG_TRANS_B']
-
-    # Note: Alignment is currently a bit buggy.
-    # Enabling alignedC leads to wrong results currenty.
-    # See:
-    # https://github.com/SeisSol/yateto/issues/15
-    #if alignedA:
-      #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_A"]
-    #if alignedC:
-      #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
-    libxsmm_flag_str = " | ".join(flags)
-
-    prefetch = "nullptr" if prefetchName is None else prefetchName
-    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_SIGONLY" if prefetchName is None else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
-
-    return """{{
-static auto kernel = libxsmm_mmfunction<{prec}>(
-  {flag}, // flag
-  {M}, // M
-  {N}, // N
-  {K}, // K
-  {ldA}, // lda
-  {ldB}, // ldb
-  {ldC}, // ldc
-  {alpha}, // alpha
-  {beta}, // beta
-  {prefetch_flag} // prefetch
-);
-assert(kernel);
-kernel(
-  {A}, // A
-  {B}, // B
-  {C}, // C
-  nullptr, // prefetch A
-  {prefetch}, // prefetch B
-  nullptr // prefetch C
-  );
-}}
-    """.format(prec=self._arch.typename, M=M, N=N, K=K,
-               ldA=ldA, ldB=ldB, ldC=ldC, A=A, B=B, C=C,
-               alpha=alpha, beta=beta,
-               flag=libxsmm_flag_str,
-               prefetch_flag=prefetch_flag,
-               prefetch=prefetch
-               )
-
-class CodeGenerator(GemmTool):
-  def __init__(self, operation_name: str, includes: List[str], cmd: str, arch):
-    super().__init__(operation_name, includes)
-    self.cmd = cmd
-    self._arch = arch
 
 class LIBXSMM(CodeGenerator):
   def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):

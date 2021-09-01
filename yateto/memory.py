@@ -116,8 +116,8 @@ class DenseMemoryLayout(MemoryLayout):
   def address(self, entry):
     assert entry in self._bbox
     a = 0
-    for i,e in enumerate(entry):
-      a += (e-self._bbox[i].start)*self._stride[i]
+    for i, e in enumerate(entry):
+      a += (e - self._bbox[i].start) * self._stride[i]
     return a
 
   def subtensorOffset(self, topLeftEntry):

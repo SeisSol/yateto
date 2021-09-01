@@ -3,7 +3,7 @@ from ...ast.indices import BoundingBox
 from ..cache import RoutineGenerator, GpuRoutineGenerator
 from chainforge.interfaces import YatetoInterface as yi
 from chainforge.common import GemmDescr, Addressing, FloatingPointType, DataFlowDirection
-from chainforge.common import vm_factory, generate_tmp_matrix
+from chainforge.common import Context, generate_tmp_matrix
 from chainforge.backend.generator import Generator as ChainForgeGenerator
 
 
@@ -31,14 +31,15 @@ class FusedGemms:
                                  b=self._cache[op2.name],
                                  c=self._cache[res.name],
                                  alpha=scalar,
-                                 beta=1.0 if add else 0.0))
+                                 beta=1.0 if add else 0.0,
+                                 strict_match=False))
       flops += gemm_list[-1].compute_flops()
 
-    vm = vm_factory(name=self._arch.name,
-                    sub_name=self._arch.sub_name,
-                    fp_type=FloatingPointType.str2enum(self._arch.typename))
+    context = Context(name=self._arch.name,
+                      sub_name=self._arch.sub_name,
+                      fp_type=FloatingPointType.str2enum(self._arch.typename))
 
-    chainforge_generator = ChainForgeGenerator(gemm_list, vm)
+    chainforge_generator = ChainForgeGenerator(gemm_list, context)
     chainforge_generator.register()
 
     cpp(f'{self._gen_call_site(chainforge_generator)}')
@@ -54,6 +55,13 @@ class FusedGemms:
                                        trans_op1=node.transA(),
                                        op2=op2_tensor,
                                        trans_op2=node.transB())
+
+    aligned_op1 = not node.transA() and op1_tensor.memoryLayout.alignedStride()
+    aligned_res = res_tensor.memoryLayout.alignedStride()
+
+    if aligned_op1 and aligned_res:
+      aligned_m = m.aligned(self._arch)
+      m.stop = aligned_m.stop
 
     matrix = self._get_chainforge_matrix(tensor=op1_tensor,
                                          tensor_variable=op1,
@@ -72,9 +80,12 @@ class FusedGemms:
     if res.is_temporary:
       self._cache[res.name] = self._gen_tmp_matix(op1, op2, node, res.name)
     else:
-      self._cache[res.name] = self._get_chainforge_matrix(tensor=res_tensor,
-                                                          tensor_variable=res,
-                                                          range=(m, n))
+      matrix = self._get_chainforge_matrix(tensor=res_tensor,
+                                           tensor_variable=res,
+                                           range=(m, n))
+
+      if not (res.name in self._cache and matrix.is_same(self._cache[res.name])):
+        self._cache[res.name] = matrix
 
   def _get_chainforge_matrix(self, tensor, tensor_variable, range):
     addr_mode = self._batch_aux.deduce_addresing(tensor)

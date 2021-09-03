@@ -54,8 +54,9 @@ class GemmGen(object):
   
   def _pointer(self, term, offset2, transpose):
     if transpose:
+      # swaps elements of tuple if transpose
       offset2 = offset2[::-1]
-    o = term.memoryLayout.subtensorOffset(offset2)
+    o = term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
     if o > 0:
       return '{} + {}'.format(term.name, o)
     return term.name
@@ -86,12 +87,16 @@ class GemmGen(object):
       flops = 2 * m.size() * n.size() * k.size()
     
     if isinstance(self._gemm_cfg, BLASlike):
+      ptr_a = self._pointer(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
+      ptr_b = self._pointer(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
+      ptr_c = self._pointer(term=d.result, offset2=(m.start, n.start), transpose=False)
+
       cpp(  self._gemm_cfg.call(d.transA,
                                 d.transB,
                                 m.size(), n.size(), k.size(),
-                                d.alpha, self._pointer(d.leftTerm, (m.start, k.start), d.transA), ldA,
-                                self._pointer(d.rightTerm, (k.start, n.start), d.transB), ldB,
-                                d.beta, self._pointer(d.result, (m.start, n.start), False), ldC))
+                                d.alpha, ptr_a, ldA,
+                                ptr_b, ldB,
+                                d.beta, ptr_c, ldC))
 
     elif isinstance(self._gemm_cfg, GemmForge):
 

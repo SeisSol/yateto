@@ -17,7 +17,7 @@ class Generic(object):
 
   def generate(self, cpp, routineCache):
     d = self._descr
-    
+
     if d.beta == 0.0:
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
       initializeWithZero(cpp, self._arch, d.result, writeBB)

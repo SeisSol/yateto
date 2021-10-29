@@ -119,7 +119,7 @@ class GemmGen(object):
                                                            transpose=False)
 
         try:
-          vm = gf.vm_factory(self._arch.name, self._arch.sub_name, fp_type=self._arch.typename)
+          vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=self._arch.typename)
           forge_generator = gf.GemmGenerator(vm)
           forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()

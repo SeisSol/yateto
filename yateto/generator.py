@@ -375,13 +375,13 @@ class Generator(object):
           cpp.include(inc)
         if isinstance(gemm_tool, BLASlike):
           cpp(gemm_tool.c_code_init)
-      cpp.out.write(kernelSourceContent)      
+      cpp.out.write(kernelSourceContent)
 
     print('Calling external code generators...')
     with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
         cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
-    
+
     # Mapping basename -> tensor
     tensors = dict()
 
@@ -398,7 +398,7 @@ class Generator(object):
       for group, kernel in family.items():
         tensors.update( FindTensors().visit(kernel.ast) )
         tensors_dict[''].update( FindTensors().visit(kernel.ast) )
-    
+
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())

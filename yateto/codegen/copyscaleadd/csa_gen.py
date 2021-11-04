@@ -84,7 +84,7 @@ class CopyScaleAddGenerator(object):
                                                          transpose=False)
 
       try:
-        vm = gf.vm_factory(self._arch.name, self._arch.sub_name, fp_type=self._arch.typename)
+        vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=self._arch.typename)
         forge_generator = gf.CsaGenerator(vm)
         forge_generator.set(matrix_a, matrix_b, alpha, d.beta)
         routine_name = forge_generator.get_base_name()

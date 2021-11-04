@@ -197,7 +197,7 @@ class GemmForge(CodeGenerator):
     self._threshold = threshold
 
   def _is_arch_supported(self):
-    return self._arch.name.lower() in {'nvidia', 'oneapi', 'hipsycl'}
+    return self._arch.backend.lower() in {'cuda', 'hip', 'oneapi', 'hipsycl'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -253,14 +253,14 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'knl' : [libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [pspamm, openblas, blis, eigen],
-      'nvidia': [forge],
-      'hipsycl': [forge],
-      'oneapi': [forge]
+      'power9' : [openblas, blis, eigen]
     }
 
     if arch.name in defaults:
       self.gemmTools = defaults[arch.name]
-      if arch.host_name:
-        self.gemmTools.extend(defaults[arch.host_name])
+    elif arch.host_name in defaults:
+      self.gemmTools = defaults[arch.host_name]
+      if arch.is_accelerator_type:
+        self.gemmTools.extend([forge])
     else:
       raise Exception("Default generator collection for architecture {} is missing.".format(arch))

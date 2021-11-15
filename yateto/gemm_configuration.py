@@ -260,7 +260,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
       self.gemmTools = defaults[arch.name]
     elif arch.host_name in defaults:
       self.gemmTools = defaults[arch.host_name]
-      if arch.is_accelerator_type:
+      if arch.is_accelerator:
         self.gemmTools.extend([forge])
     else:
       raise Exception("Default generator collection for architecture {} is missing.".format(arch))

@@ -122,8 +122,7 @@ class GemmForgeWriter(GpuRoutineGenerator):
       return False
 
   def header(self, cpp):
-    for header in self._headers:
-      cpp.include(header)
+    cpp.includes(self._headers)
 
   def __call__(self, routineName, fileName):
     self._generator.generate()

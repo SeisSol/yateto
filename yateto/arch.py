@@ -84,10 +84,7 @@ class Architecture(object):
     self.ulongTypename = 'unsigned long'
 
     self._tmpStackLimit = 524288
-
-    self.is_accelerator_type = False
-    if not (backend == 'cpp' or self.host_name == None):
-      self.is_accelerator_type = True
+    self.is_accelerator = backend != 'cpp' and self.host_name != None
 
   def setTmpStackLimit(self, tmpStackLimit):
     self._tmpStackLimit = tmpStackLimit

@@ -35,8 +35,8 @@ class FusedGemms:
                                  strict_match=False))
       flops += gemm_list[-1].compute_flops()
 
-    context = Context(name=self._arch.name,
-                      sub_name=self._arch.sub_name,
+    context = Context(arch=self._arch.name,
+                      backend=self._arch.backend,
                       fp_type=FloatingPointType.str2enum(self._arch.typename))
 
     chainforge_generator = ChainForgeGenerator(gemm_list, context)

@@ -27,9 +27,6 @@ class TestFramework(ABC):
         cpp.include(kernelsInclude)
         cpp.include(initInclude)
         cpp.include('yateto.h')
-        with cpp.PPIfndef('NDEBUG'):
-            cpp('long long libxsmm_num_total_flops = 0;')
-            cpp('long long pspamm_num_total_flops = 0;')
 
 class CxxTest(TestFramework):
     TEST_CLASS = 'KernelTestSuite'

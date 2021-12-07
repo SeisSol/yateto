@@ -128,6 +128,7 @@ class GemmGen(object):
                   aux.deduce_arg(d.rightTerm, as_const=True),
                   aux.deduce_arg(d.result, as_const=False),
                   BatchedOperationsAux.NUM_ELEMENTS_NAME,
+                  BatchedOperationsAux.FLAGS_NAME,
                   BatchedOperationsAux.STREAM_PTR_NAME]
           args_str = ', '.join(args)
 

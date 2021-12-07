@@ -76,6 +76,14 @@ class KernelFactory(object):
     else:
       raise RuntimeError('unknown compute target')
 
+  def reset_flags(self):
+    if self._target == 'cpu':
+      pass
+    elif self._target == 'gpu':
+      self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+    else:
+      raise RuntimeError('unknown compute target')
+
   def _indices(self, var):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)

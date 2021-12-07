@@ -93,6 +93,7 @@ class CopyScaleAddGenerator(object):
                 aux.deduce_arg(d.term),
                 aux.deduce_arg(d.result),
                 BatchedOperationsAux.NUM_ELEMENTS_NAME,
+                BatchedOperationsAux.FLAGS_NAME,
                 BatchedOperationsAux.STREAM_PTR_NAME]
         cpp("{}({});".format(routine_name, ', '.join(args)))
 

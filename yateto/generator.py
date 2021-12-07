@@ -4,7 +4,7 @@ import re
 import os
 from functools import wraps
 from yateto import Tensor
-from .ast.cost import BoundingBoxCostEstimator, GpuBoundingBoxCostEstimator
+from .ast.cost import BoundingBoxCostEstimator
 from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors, FindPrefetchCapabilities
 from .ast.transformer import *
@@ -65,8 +65,7 @@ class Kernel(object):
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
   
-  def prepareUntilCodeGen(self, cost_estimators):
-    cost_estimator = cost_estimators[self.target]
+  def prepareUntilCodeGen(self, cost_estimator):
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
@@ -263,8 +262,7 @@ class Generator(object):
                outputDir: str,
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
-               cpu_cost_estimator=BoundingBoxCostEstimator,
-               gpu_cost_estimator=BoundingBoxCostEstimator,
+               cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set()):
 
     if not gemm_cfg:
@@ -298,15 +296,13 @@ class Generator(object):
             CxxTest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
 
 
-    cost_estimators = {'cpu': cpu_cost_estimator, 'gpu': gpu_cost_estimator}
-
     print('Optimizing ASTs...')
     for kernel in self._kernels:
       print(kernel.name)
-      kernel.prepareUntilCodeGen(cost_estimators)
+      kernel.prepareUntilCodeGen(cost_estimator)
     for family in self._kernelFamilies.values():
       print(family.name)
-      family.prepareUntilCodeGen(cost_estimators)
+      family.prepareUntilCodeGen(cost_estimator)
 
 
     # Create mapping from namespace to kernel/family

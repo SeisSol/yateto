@@ -81,11 +81,12 @@ class BoundingBoxCostEstimator(CachedCostEstimator):
     return tbb.size() - bb.size()
 
 
-class GpuBoundingBoxCostEstimator(BoundingBoxCostEstimator):
+class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
   """Estimates num. of hardware flops for a tensor operation per GPU thread.
   Therefore, results of BoundingBoxCostEstimator are divided by a size
   of the first dimension of lhs because this dimension is fully parallelized.
-  Note, the estimator includes GPU caching.
+  Note, the estimator includes GPU caching. This estimator is relevant to
+  fused gemms kernels.
   """
   def __init__(self):
     super().__init__()

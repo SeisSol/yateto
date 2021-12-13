@@ -91,6 +91,7 @@ class BatchedOperationsAux:
   NUM_ELEMENTS_NAME = 'numElements'
   EXTRA_OFFSET_NAME = 'extraOffset'
   STREAM_PTR_NAME = 'streamPtr'
+  FLAGS_NAME = 'flags'
   FORBIDDEN_STREAM_PTR = 'reinterpret_cast<void*>(std::numeric_limits<uintptr_t>::max())'
 
   def __init__(self, underlying_data_type):

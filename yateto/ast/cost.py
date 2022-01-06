@@ -1,5 +1,7 @@
 from .indices import BoundingBox
+from .node import IndexSum
 from abc import ABC, abstractmethod
+
 
 class CostEstimator(ABC):
   def estimate(self, node):
@@ -29,6 +31,7 @@ class ShapeCostEstimator(CostEstimator):
     for size in node.indices.shape():
       cost *= size
     return cost
+
 
 class CachedCostEstimator(CostEstimator):
   def __init__(self):
@@ -93,29 +96,56 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     self._lead_dim = 0
     self._loaded_to_gpu_cache = set()
 
+  def _get_terms(self, node):
+    left_indices = node.leftTerm().indices
+    right_indices = node.rightTerm().indices
+    common_indices = left_indices & right_indices
+
+    if left_indices[0] in common_indices:
+      # swap terms becase we do not allow
+      # tensor product along the leading dimension.
+      # In other words, LoG will try to swap terms
+      # in the future
+      return node.rightTerm(), node.leftTerm()
+    else:
+      return node.leftTerm(), node.rightTerm()
+
   def estimate_Product(self, node):
     cost = super().estimate_Product(node)
-    bb = self._cache[node]
+    left_term, right_term = self._get_terms(node)
+
+    bb = self._cache[left_term]
     cost /= bb[self._lead_dim].size()
 
     extra_cost = 0
-    if not node.rightTerm() in self._loaded_to_gpu_cache:
-      self._loaded_to_gpu_cache.add(node.rightTerm())
-      rbb = self._cache[node.rightTerm()]
+    if not right_term in self._loaded_to_gpu_cache:
+      self._loaded_to_gpu_cache.add(right_term)
+      rbb = self._cache[right_term]
       extra_cost += rbb.size()
 
-    if node.indices[self._lead_dim] != node.leftTerm().indices[self._lead_dim]:
+    if node.indices[self._lead_dim] != left_term.indices[self._lead_dim]:
       if not node.leftTerm in self._loaded_to_gpu_cache:
-        self._loaded_to_gpu_cache.add(node.leftTerm())
-        lbb = self._cache[node.leftTerm()]
+        self._loaded_to_gpu_cache.add(left_term)
+        lbb = self._cache[left_term]
         extra_cost += lbb.size()
     return cost + extra_cost
 
   def estimate_IndexSum(self, node):
     cost = super().estimate_IndexSum(node)
-    bb = self._cache[node]
+
+    # Note: we cannot derive the dimension along which we
+    # are going to apply parallelization directly from
+    # the IndexSum. Therefore we need to find a next Product
+    # term and look at the left term
+    child = node.term()
+    while isinstance(child, IndexSum):
+      child = child.term()
+
+    left_term, _ = self._get_terms(child)
+    bb = self._cache[left_term]
     self._loaded_to_gpu_cache.add(node)
     return cost / bb[self._lead_dim].size()
+
 
 class ExactCost(CachedCostEstimator):
   def __init__(self):

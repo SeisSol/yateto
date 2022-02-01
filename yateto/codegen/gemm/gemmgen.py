@@ -96,6 +96,7 @@ class GemmGen(object):
       cpp(  self._gemm_cfg.call(d.transA,
                                 d.transB,
                                 m.size(), n.size(), k.size(),
+                                d.alpha,
                                 ptr_a, ldA,
                                 ptr_b, ldB,
                                 d.beta, ptr_c, ldC,
@@ -341,11 +342,6 @@ class LibxsmmGemmGen(ExecuteGemmGen):
   def header(self, cpp):
     super().header(cpp)
     cpp.include('libxsmm.h')
-    #with cpp.PPIfndef('NDEBUG'):
-      #cpp('extern long long libxsmm_num_total_flops;')
-      #cpp('extern long long pspamm_num_total_flops;')
-    #with cpp.PPIf('defined( __SSE3__) || defined(__MIC__)'):
-      #cpp.includeSys('immintrin.h')
 
   def _kernel(self, routine_name):
     M = self._gemmDescr['M']
@@ -361,8 +357,6 @@ class LibxsmmGemmGen(ExecuteGemmGen):
     prefetch = self._gemmDescr['prefetch']
     transA = self._gemmDescr['transA']
     transB = self._gemmDescr['transB']
-
-    print(self._gemmDescr)
 
     flags = ["LIBXSMM_GEMM_FLAG_NONE"]
     if transA:
@@ -397,18 +391,30 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
   {prefetch_flag} // prefetch
 ); 
 """.format(kernel_var_name=kernel_var_name,
-                prec=self._arch.typename, M=M, N=N, K=K,
-                      ldA=ldA, ldB=ldB, ldC=ldC,
-                      alpha=alpha, beta=beta,
-                      flag=libxsmm_flag_str,
-                      prefetch_flag=prefetch_flag,
-                      prefetch=prefetch
-                      )
+           prec=self._arch.typename, M=M, N=N, K=K,
+           ldA=ldA, ldB=ldB, ldC=ldC,
+           alpha=alpha, beta=beta,
+           flag=libxsmm_flag_str,
+           prefetch_flag=prefetch_flag,
+           prefetch=prefetch,
+ )
 
   def _call(self, routineName):
+    # See: https://github.com/libxsmm/libxsmm/blob/180aae45a74731c3f8fb697b62dcb6c336c218ac/src/generator_gemm_common.c#L1971
+    #flops=2*M*N*K
+    M = self._gemmDescr['M']
+    N = self._gemmDescr['N']
+    K = self._gemmDescr['K']
+    flops = 2 * M * N * K;
     return f"""
 {{
     {routineName}_var(A, B, C, A_prefetch, B_prefetch, C_prefetch);
+#ifndef NDEBUG
+#ifdef _OPENMP
+#pragma omp atomic
+#endif
+    libxsmm_num_total_flops += {flops}; // 2 * {M} * {N} * {K}
+#endif
 }}
 """
 
@@ -421,6 +427,4 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
       file.write(self._kernel(routineName))
       file.write(f"{func_signature}")
       file.write(self._call(routineName))
-      #file.write(kernel)
-      #file.write(launcher)
     return func_signature + ";"

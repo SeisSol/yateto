@@ -163,7 +163,6 @@ class LIBXSMM_JIT(CodeGenerator):
 
   def _archSupported(self):
     supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome'}
-    return True  # TODO(Lukas)
 
     if self._arch.name.lower() in supported_set:
       return True

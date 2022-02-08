@@ -70,6 +70,7 @@ foreach(EXAMPLE ${EXAMPLES})
                         ${GEN_DIR}/kernel.h
                         ${GEN_DIR}/tensor.h
                         ${GEN_DIR}/subroutine.h
+                        ${GEN_DIR}/KernelTest.t.h
                         COMMENT "Generating a source code")
 
 

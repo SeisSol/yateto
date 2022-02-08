@@ -38,7 +38,7 @@ jobs:
       CTEST_OUTPUT_ON_FAILURE: 1
     strategy:
       matrix:
-        generator: [Eigen, LIBXSMM, OpenBLAS]
+        generator: [Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS]
         
     steps:
     - uses: actions/checkout@v2

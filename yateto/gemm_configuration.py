@@ -191,9 +191,9 @@ class LIBXSMM(CodeGenerator):
     else:
       return self._arch.host_name and self._arch.host_name.lower() in supported_set
 
-    def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                  beta, alignedA, alignedC, target):
-      return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
+                beta, alignedA, alignedC, target):
+    return self._archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
     if sparseA:
@@ -285,7 +285,8 @@ class GeneratorCollection(object):
 class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
-    libxsmm = LIBXSMM_JIT(arch)
+    libxsmm = LIBXSMM(arch)
+    libxsmm_jit = LIBXSMM_JIT(arch)
     pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)
@@ -293,11 +294,11 @@ class DefaultGeneratorCollection(GeneratorCollection):
     eigen = Eigen(arch)
     forge = GemmForge(arch)
     defaults = {
-      'snb' : [libxsmm, mkl, blis, eigen],
-      'hsw' : [libxsmm, mkl, blis, eigen],
-      'rome' : [libxsmm, blis, eigen],
-      'knl' : [libxsmm, pspamm, mkl, blis, eigen],
-      'skx' : [libxsmm, pspamm, mkl, blis, eigen],
+      'snb' : [libxsmm_jit, libxsmm, mkl, blis, eigen],
+      'hsw' : [libxsmm_jit, libxsmm, mkl, blis, eigen],
+      'rome' : [libxsmm_jit, libxsmm, blis, eigen],
+      'knl' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
+      'skx' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [pspamm, openblas, blis, eigen],
       'power9' : [openblas, blis, eigen]
     }

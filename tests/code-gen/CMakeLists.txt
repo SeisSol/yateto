@@ -70,6 +70,7 @@ foreach(EXAMPLE ${EXAMPLES})
                         ${GEN_DIR}/kernel.h
                         ${GEN_DIR}/tensor.h
                         ${GEN_DIR}/subroutine.h
+                        ${GEN_DIR}/KernelTest.t.h
                         COMMENT "Generating a source code")
 
 
@@ -86,6 +87,7 @@ foreach(EXAMPLE ${EXAMPLES})
     target_include_directories(${EXAMPLE}-target PUBLIC ${CMAKE_SOURCE_DIR}/common
                                                       ${CMAKE_SOURCE_DIR}/../../include
                                                       ${GEN_DIR}
+                                                      ${EXTRA_INCLUDES}
                                                       ${CXXTEST_INCLUDE_DIRS}
                                                       ${OpenBLAS_INCLUDE_DIRS})
     target_link_libraries(${EXAMPLE}-target PUBLIC ${EXTRA_LIBS})

@@ -38,7 +38,8 @@ class BLASlike(GemmTool):
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     parameters = [
       'CblasColMajor',
       self.bool2Trans(transA),
@@ -65,7 +66,8 @@ class BLIS(BLASlike):
   def bool2Trans(self, trans):
     return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     init = '_blis_alpha = {}; _blis_beta = {};'.format(alpha, beta)
     parameters = [
       self.bool2Trans(transA),
@@ -97,7 +99,9 @@ class Eigen(BLASlike):
       aligned = 'Aligned{}'.format(self._arch.alignment)
     return aligned
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC):
+
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     AxB = '{alpha}_mapA{transA}*_mapB{transB}'.format(
             alpha=str(alpha) + '*' if alpha != 1.0 else '',
             transA=self.bool2Trans(transA), transB=self.bool2Trans(transB),
@@ -126,11 +130,53 @@ class Eigen(BLASlike):
                code=code)
     return code
 
+
 class CodeGenerator(GemmTool):
-  def __init__(self, operation_name: str, includes: List[str], cmd: str, arch):
+  def __init__(self, operation_name: str,
+               includes: List[str],
+               cmd: str,
+               arch,
+               is_internal=False):
     super().__init__(operation_name, includes)
     self.cmd = cmd
     self._arch = arch
+    self._is_internal = is_internal
+
+  def is_internal(self):
+    return self._is_internal
+
+
+class LIBXSMM_JIT(CodeGenerator):
+  def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
+    super().__init__('libxsmm_jit',
+                     ['libxsmm.h'],
+                     cmd,
+                     arch,
+                     is_internal=True)
+    self._threshold = threshold
+    self._arch = arch
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+    if (m*n*k)**(1./3.) <= self._threshold:
+      return Preference.HIGH
+    return Preference.LOW
+
+  def _archSupported(self):
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome'}
+
+    if self._arch.name.lower() in supported_set:
+      return True
+    else:
+      return self._arch.host_name and self._arch.host_name.lower() in supported_set
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
+                beta, alignedA, alignedC, target):
+    # Note:
+    # Libxsmm falls back to blas for transA and more general alpha/beta
+    # See e.g. here:
+    # https://libxsmm.readthedocs.io/en/latest/libxsmm_qna/#what-is-a-small-matrix-multiplication
+    # https://github.com/hfp/libxsmm/issues/396#issuecomment-674741063
+    return self._archSupported() and not (sparseA or sparseB) and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
 class LIBXSMM(CodeGenerator):
   def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
@@ -240,6 +286,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
     libxsmm = LIBXSMM(arch)
+    libxsmm_jit = LIBXSMM_JIT(arch)
     pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)
@@ -247,11 +294,11 @@ class DefaultGeneratorCollection(GeneratorCollection):
     eigen = Eigen(arch)
     forge = GemmForge(arch)
     defaults = {
-      'snb' : [libxsmm, mkl, blis, eigen],
-      'hsw' : [libxsmm, mkl, blis, eigen],
-      'rome' : [libxsmm, blis, eigen],
-      'knl' : [libxsmm, pspamm, mkl, blis, eigen],
-      'skx' : [libxsmm, pspamm, mkl, blis, eigen],
+      'snb' : [libxsmm_jit, libxsmm, mkl, blis, eigen],
+      'hsw' : [libxsmm_jit, libxsmm, mkl, blis, eigen],
+      'rome' : [libxsmm_jit, libxsmm, blis, eigen],
+      'knl' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
+      'skx' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [pspamm, openblas, blis, eigen],
       'power9' : [openblas, blis, eigen]
     }

@@ -162,7 +162,7 @@ class LIBXSMM_JIT(CodeGenerator):
     return Preference.LOW
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome', "a64fx", "thunderx2t99"}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -299,7 +299,8 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'rome' : [libxsmm_jit, libxsmm, blis, eigen],
       'knl' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
-      'thunderx2t99' : [pspamm, openblas, blis, eigen],
+      'thunderx2t99' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'a64fx' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'power9' : [openblas, blis, eigen]
     }
 

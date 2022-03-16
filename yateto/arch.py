@@ -54,7 +54,7 @@ class Architecture(object):
         sm_60, sm_61, etc.,
       backend (str): backend name e.g., cpp, cuda, hip, oneapi, hipsycl
       precision (str): either 'd' or 's' character which stands for 'double' or 'single' precision
-      alignment (int): length of a vector register (unit) in bytes
+      alignment (int): length of a cache line in bytes
       enablePrefetch (bool): indicates whether the compute (main) architecture supports
           data prefetching
       host_name (str): name of the host (CPU) architecture. If the code is intended to be generated
@@ -126,6 +126,7 @@ def getArchitectureIdentifiedBy(ident):
     'knl': Architecture(name, precision, 64, True),
     'rome': Architecture(name, precision, 32, False),
     'thunderx2t99': Architecture(name, precision, 16, False),
+    'a64fx': Architecture(name, precision, 256, True),
     'power9': Architecture(name, precision, 16, False)
   }
   return arch[name]

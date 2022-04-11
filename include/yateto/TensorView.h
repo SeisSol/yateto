@@ -49,6 +49,22 @@ namespace yateto {
     uint_t m_shape[Dim];
   };
 
+  template<typename real_t, typename uint_t>
+  class TensorView<0, real_t, uint_t> {
+  public:
+    explicit TensorView(std::initializer_list<uint_t> shape) {} 
+
+    explicit TensorView(uint_t const shape[]) {}
+    
+    constexpr uint_t dim() const {
+      return 0;
+    }
+
+    uint_t shape(uint_t dim) const {
+      return 0;
+    }
+  };
+
   template<unsigned Dim, typename real_t, typename uint_t=unsigned>
   class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
   public:

@@ -142,7 +142,7 @@ def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_back
 
   if device_arch in ['sm_60', 'sm_61', 'sm_62', 'sm_70', 'sm_71', 'sm_75', 'sm_80', 'sm_86']:
     alignment = 64
-  elif device_arch in ['gfx906', 'gfx908']:
+  elif device_arch in ['gfx906', 'gfx908', 'gfx90a']:
     alignment = 128
   elif device_arch in ['dg1', 'bdw', 'skl', 'Gen8', 'Gen9', 'Gen11', 'Gen12LP']:
     alignment = 32

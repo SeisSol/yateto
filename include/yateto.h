@@ -4,5 +4,6 @@
 #include "yateto/TensorView.h"
 #include "yateto/InitTools.h"
 #include "yateto/LinearAllocator.h"
+#include "yateto/Misc.h"
 
 #endif

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.5)
 project(unittest)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 set(EXAMPLES "matmul;minimal" CACHE STRING "a list of examples to run as tests")
 set(SAMPLES hosvd matmul minimal seissol_eqspp stock tce)
 set_property(CACHE EXAMPLES PROPERTY STRINGS ${SAMPLES})
@@ -95,6 +99,6 @@ foreach(EXAMPLE ${EXAMPLES})
                                                       ${CXXTEST_INCLUDE_DIRS}
                                                       ${OpenBLAS_INCLUDE_DIRS})
     target_link_libraries(${EXAMPLE}-target PUBLIC ${EXTRA_LIBS})
-    target_compile_options(${EXAMPLE}-target PUBLIC "-std=c++11" ${CPU_FLAGS})
+    target_compile_options(${EXAMPLE}-target PUBLIC ${CPU_FLAGS})
     add_test(${EXAMPLE}-test ${EXAMPLE}-target)
 endforeach()

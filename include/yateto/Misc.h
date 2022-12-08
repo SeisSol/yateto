@@ -4,15 +4,15 @@
 namespace yateto {
 
 template<typename KernelType>
-constexpr auto getMaxTmpMemRequired(KernelType& krnl) {
+auto getMaxTmpMemRequired(KernelType& krnl) {
   return KernelType::TmpMaxMemRequiredInBytes;
 }
 
 template<typename KernelType, typename... OtherKernelTypes>
-constexpr auto getMaxTmpMemRequired(KernelType& krnl,
-                                    OtherKernelTypes&... otherKrnls) {
-  constexpr auto currentTmpMem = KernelType::TmpMaxMemRequiredInBytes;
-  constexpr auto otherTmpMem = getMaxTmpMemRequired(otherKrnls...);
+auto getMaxTmpMemRequired(KernelType& krnl,
+                          OtherKernelTypes&... otherKrnls) {
+  auto currentTmpMem = KernelType::TmpMaxMemRequiredInBytes;
+  auto otherTmpMem = getMaxTmpMemRequired(otherKrnls...);
   return (currentTmpMem > otherTmpMem) ? currentTmpMem : otherTmpMem;
 }
 

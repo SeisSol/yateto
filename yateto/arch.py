@@ -140,9 +140,9 @@ def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_back
     raise ValueError(f'Precision of host and compute arch. must be the same. '
                      f'Given: {host_arch}, {device_arch}')
 
-  if device_arch in ['sm_60', 'sm_61', 'sm_62', 'sm_70', 'sm_71', 'sm_75', 'sm_80', 'sm_86']:
+  if 'sm_' in device_arch:
     alignment = 64
-  elif device_arch in ['gfx906', 'gfx908', 'gfx90a']:
+  elif 'gfx' in device_arch: 
     alignment = 128
   elif device_arch in ['dg1', 'bdw', 'skl', 'Gen8', 'Gen9', 'Gen11', 'Gen12LP']:
     alignment = 32

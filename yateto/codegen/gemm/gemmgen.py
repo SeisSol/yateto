@@ -4,7 +4,7 @@ import tempfile
 from abc import ABC
 
 from ..cache import RoutineGenerator, GpuRoutineGenerator
-from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge
+from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, libsmm
 from ..common import BatchedOperationsAux
 import importlib.util
 
@@ -88,6 +88,7 @@ class GemmGen(object):
     else:
       flops = 2 * m.size() * n.size() * k.size()
     
+    print(self._gemm_cfg)
     if isinstance(self._gemm_cfg, BLASlike):
       ptr_a = self._pointer(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
       ptr_b = self._pointer(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
@@ -150,6 +151,35 @@ class GemmGen(object):
       else:
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
+    elif isinstance(self._gemm_cfg, libsmm):
+      def address_mode(term):
+        if term.is_compute_constant:
+          return 'strided{0}'
+        if term.is_temporary:
+          return f'strided{{{term.memoryLayout.requiredReals()}}}'
+        else:
+          return 'pointers{}'
+
+      pA = self._pointer(d.leftTerm, (m.start, k.start), d.transA)
+      pB = self._pointer(d.rightTerm, (k.start, n.start), d.transB)
+      pC = self._pointer(d.result, (m.start, n.start), False)
+
+      aA = address_mode(d.leftTerm)
+      aB = address_mode(d.rightTerm)
+      aC = address_mode(d.result)
+
+      cpp('[&](){')
+      cpp(f'  static auto kernel = smm::gemm(gemm_configuration{{{m.size()}, {n.size()}, {k.size()}, {ldA}, {aA}, {ldB}, {aB}, {ldC}, {aC}, {self._alpha(d.alpha)}, {self._beta(d.beta)}}}, static_cast<::sycl::queue*>(streamPtr));')
+      cpp(f'  kernel.execute({pA}, {pB}, {pC}).wait();')
+      cpp('}();')
+
+      # cpp('{}({}, {}, {}, nullptr, {}, nullptr);'.format(
+        # routineName,
+        # self._pointer(d.leftTerm, (m.start, k.start), d.transA),
+        # self._pointer(d.rightTerm, (k.start, n.start), d.transB),
+        # self._pointer(d.result, (m.start, n.start), False),
+        # d.prefetchName if d.prefetchName is not None else 'nullptr'
+      # ))
     else:
       gemm = {
         'M':            m.size(),

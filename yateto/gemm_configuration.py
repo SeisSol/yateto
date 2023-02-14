@@ -258,6 +258,24 @@ class GemmForge(CodeGenerator):
       return Preference.LOWEST
     return Preference.HIGH
 
+class libsmm(CodeGenerator):
+  def __init__(self, arch):
+    super().__init__('',
+                     ['smm/configuration.hpp', 'smm/gemm.hpp'],
+                     '',
+                     arch)
+    self._arch = arch
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+    return Preference.HIGHEST
+
+  def _archSupported(self):
+      return self._arch.backend.lower() == 'oneapi'
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
+                beta, alignedA, alignedC, target):
+    return self._archSupported() and not (sparseA or sparseB) and (not transA) and (not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'gpu'
+
 
 class GeneratorCollection(object):
   def __init__(self, gemmTools: List[GemmTool]):
@@ -309,6 +327,8 @@ class DefaultGeneratorCollection(GeneratorCollection):
     elif arch.host_name in defaults:
       self.gemmTools = defaults[arch.host_name]
       if arch.is_accelerator:
+        if arch.backend == 'oneapi':
+            self.gemmTools.extend([libsmm(arch)])
         self.gemmTools.extend([forge])
     else:
       raise Exception("Default generator collection for architecture {} is missing.".format(arch))

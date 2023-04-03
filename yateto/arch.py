@@ -52,7 +52,7 @@ class Architecture(object):
     Args:
       name (str): name of the compute (main) architecture e.g., skx, thunderx2t99, power9
         sm_60, sm_61, etc.,
-      backend (str): backend name e.g., cpp, cuda, hip, oneapi, hipsycl
+      backend (str): backend name e.g., cpp, cuda, hip, oneapi, opensycl
       precision (str): either 'd' or 's' character which stands for 'double' or 'single' precision
       alignment (int): length of a cache line in bytes
       enablePrefetch (bool): indicates whether the compute (main) architecture supports

@@ -108,16 +108,17 @@ class BatchedOperationsAux:
     else:
       return 'pointer_based'
 
-  def deduce_arg(self, term, as_const=False):
-    if term.is_compute_constant or term.is_temporary:
-      extra_offset = '0'
-    else:
-      extra_offset = f'{self.EXTRA_OFFSET_NAME}_{term.name}'
-
+  def deduce_ptr_arg(self, term, as_const=False):
     if as_const:
       addressing = self.deduce_addresing(term)
       ptr = self._get_ptr_type(addressing)
       const_ptr_type = f'const {self.underlying_data_type} {ptr}'
-      return f'const_cast<{const_ptr_type}>({term.name}), {extra_offset}'
+      return f'const_cast<{const_ptr_type}>({term.name})'
     else:
-      return f'{term.name}, {extra_offset}'
+      return f'{term.name}'
+
+  def deduce_offset_arg(self, term):
+    if term.is_compute_constant or term.is_temporary:
+      return '0'
+    else:
+      return f'{self.EXTRA_OFFSET_NAME}_{term.name}'

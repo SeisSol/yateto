@@ -102,7 +102,7 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
-    if self.target == 'gpu' and chainforge_spec:
+    if self.target == 'gpu':# and chainforge_spec:
       self.cfg = FindFusedGemms().visit(self.cfg)
       self.cfg = LivenessAnalysis().visit(self.cfg)
 

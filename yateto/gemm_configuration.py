@@ -260,10 +260,7 @@ class GemmForge(CodeGenerator):
 
 class libsmm(CodeGenerator):
   def __init__(self, arch):
-    super().__init__('',
-                     ['smm/configuration.hpp', 'smm/gemm.hpp'],
-                     '',
-                     arch)
+    super().__init__('', [], '', arch)
     self._arch = arch
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):

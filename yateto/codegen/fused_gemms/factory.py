@@ -7,6 +7,8 @@ try:
 except:
   raise ('Found chainforge spec but cannot load. Please, check installation of chainforge')
 
+from .libsmm import FusedGemmsLibsmm
+
 
 class Description(object):
   def __init__(self, node, result, arguments, add, scalar):
@@ -37,5 +39,7 @@ class Description(object):
 def generator(arch, descr, target):
   if target == 'gpu' and gb_spec:
     return FusedGemms(arch, descr)
+  elif target == 'gpu':
+    return FusedGemmsLibsmm(arch, descr)
   else:
     raise NotImplementedError(f'no implementation found for {target} target')

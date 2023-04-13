@@ -53,12 +53,15 @@ class GemmGen(object):
       betaSubs=self._beta(gemm['beta']),
       **gemm
     )
-  
-  def _pointer(self, term, offset2, transpose):
+
+  def _offset(self, term, offset2, transpose):
     if transpose:
       # swaps elements of tuple if transpose
       offset2 = offset2[::-1]
-    o = term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
+    return term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
+
+  def _pointer(self, term, offset2, transpose):
+    o = self._offset(term, offset2, transpose)
     if o > 0:
       return '{} + {}'.format(term.name, o)
     return term.name
@@ -88,7 +91,6 @@ class GemmGen(object):
     else:
       flops = 2 * m.size() * n.size() * k.size()
     
-    print(self._gemm_cfg)
     if isinstance(self._gemm_cfg, BLASlike):
       ptr_a = self._pointer(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
       ptr_b = self._pointer(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
@@ -130,9 +132,12 @@ class GemmGen(object):
           forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
-          args = [aux.deduce_arg(d.leftTerm, as_const=True),
-                  aux.deduce_arg(d.rightTerm, as_const=True),
-                  aux.deduce_arg(d.result, as_const=False),
+          args = [aux.deduce_ptr_arg(d.leftTerm, as_const=True),
+                  aux.deduce_offset_arg(d.leftTerm),
+                  aux.deduce_ptr_arg(d.rightTerm, as_const=True),
+                  aux.deduce_offset_arg(d.rightTerm),
+                  aux.deduce_ptr_arg(d.result, as_const=False),
+                  aux.deduce_offset_arg(d.result),
                   BatchedOperationsAux.NUM_ELEMENTS_NAME,
                   BatchedOperationsAux.FLAGS_NAME,
                   BatchedOperationsAux.STREAM_PTR_NAME]
@@ -152,34 +157,44 @@ class GemmGen(object):
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
     elif isinstance(self._gemm_cfg, libsmm):
-      def address_mode(term):
-        if term.is_compute_constant:
-          return 'strided{0}'
-        if term.is_temporary:
-          return f'strided{{{term.memoryLayout.requiredReals()}}}'
-        else:
-          return 'pointers{}'
+      aux = BatchedOperationsAux(self._arch.typename)
+      gemm = {
+        'M':            m.size(),
+        'N':            n.size(),
+        'K':            k.size(),
+        'LDA':          ldA,
+        'addrA':        aux.deduce_addresing(d.leftTerm),
+        'distA':        d.leftTerm.memoryLayout.requiredReals(),
+        'LDB':          ldB,
+        'addrB':        aux.deduce_addresing(d.rightTerm),
+        'distB':        d.rightTerm.memoryLayout.requiredReals(),
+        'LDC':          ldC,
+        'addrC':        aux.deduce_addresing(d.result),
+        'distC':        d.result.memoryLayout.requiredReals(),
+        'alpha':        self._alpha(d.alpha),
+        'beta':         self._beta(d.beta),
+        'transA': d.transA,
+        'transB': d.transB,
+      }
+      routine_name = 'libsmm_wrapper_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_transA{transA}_transB{transB}'.format(**gemm)
 
-      pA = self._pointer(d.leftTerm, (m.start, k.start), d.transA)
-      pB = self._pointer(d.rightTerm, (k.start, n.start), d.transB)
-      pC = self._pointer(d.result, (m.start, n.start), False)
 
-      aA = address_mode(d.leftTerm)
-      aB = address_mode(d.rightTerm)
-      aC = address_mode(d.result)
+      offset_a = self._offset(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
+      offset_b = self._offset(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
+      offset_c = self._offset(term=d.result, offset2=(m.start, n.start), transpose=False)
+      args = [aux.deduce_ptr_arg(d.leftTerm, as_const=True),
+              f'{aux.deduce_offset_arg(d.leftTerm)} + {offset_a}',
+              aux.deduce_ptr_arg(d.rightTerm, as_const=True),
+              f'{aux.deduce_offset_arg(d.rightTerm)} + {offset_b}',
+              aux.deduce_ptr_arg(d.result, as_const=False),
+              f'{aux.deduce_offset_arg(d.result)} + {offset_c}',
+              BatchedOperationsAux.NUM_ELEMENTS_NAME,
+              BatchedOperationsAux.STREAM_PTR_NAME]
+      args = ', '.join(args)
 
-      cpp('[&](){')
-      cpp(f'  static auto kernel = smm::gemm(gemm_configuration{{{m.size()}, {n.size()}, {k.size()}, {ldA}, {aA}, {ldB}, {aB}, {ldC}, {aC}, {self._alpha(d.alpha)}, {self._beta(d.beta)}}}, static_cast<::sycl::queue*>(streamPtr));')
-      cpp(f'  kernel.execute({pA}, {pB}, {pC}).wait();')
-      cpp('}();')
+      cpp(f'{routine_name}({args});')
 
-      # cpp('{}({}, {}, {}, nullptr, {}, nullptr);'.format(
-        # routineName,
-        # self._pointer(d.leftTerm, (m.start, k.start), d.transA),
-        # self._pointer(d.rightTerm, (k.start, n.start), d.transB),
-        # self._pointer(d.result, (m.start, n.start), False),
-        # d.prefetchName if d.prefetchName is not None else 'nullptr'
-      # ))
+      routineCache.addRoutine(routine_name, LibsmmGemmGen(self._arch, gemm))
     else:
       gemm = {
         'M':            m.size(),
@@ -455,4 +470,47 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
       file.write(self._kernel(routineName))
       file.write(f"{func_signature}")
       file.write(self._call(routineName))
+    return func_signature + ";"
+
+class LibsmmGemmGen(GpuRoutineGenerator):
+  def __init__(self, arch, gemm_descr):
+      self.arch = arch
+      self.gemm_descr = gemm_descr
+
+  def __eq__(self, other):
+    return self.arch == other.arch and self.gemm_descr == other.gemm_descr
+
+  def header(self, cpp):
+    cpp.include('smm/configuration.hpp')
+    cpp.include('smm/gemm.hpp')
+    cpp.includeSys('CL/sycl.hpp')
+
+  def _functionSignature(self, routineName):
+    typ = self.arch.typename
+    stars = lambda x: '**' if x == 'pointer_based' else '*'
+    starsA = stars(self.gemm_descr['addrA'])
+    starsB = stars(self.gemm_descr['addrB'])
+    starsC = stars(self.gemm_descr['addrC'])
+    return f'void {routineName}({typ} const{starsA} A, int offsetA, {typ} const{starsB} B, int offsetB, {typ}{starsC} C, int offsetC, unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME}, void* {BatchedOperationsAux.STREAM_PTR_NAME})'
+
+  def address_mode(self, addr, dist):
+      if addr == 'pointer_based':
+          return 'smm::pointers{}'
+      elif addr == 'none':
+          return 'smm::strided{0}'
+      elif addr == 'strided':
+          return f'smm::strided{{{dist}}}'
+      raise NameError(addr)
+
+  def __call__(self, routineName, fileName):
+    func_signature = self._functionSignature(routineName)
+    with open(fileName, "a") as f:
+      aA = self.address_mode(self.gemm_descr['addrA'], self.gemm_descr['distA'])
+      aB = self.address_mode(self.gemm_descr['addrB'], self.gemm_descr['distB'])
+      aC = self.address_mode(self.gemm_descr['addrC'], self.gemm_descr['distC'])
+
+      f.write(f'{func_signature} {{\n')
+      f.write('  static auto kernel = smm::make_gemm<{typ}>({M}, {N}, {K}, {LDA}, {aA}, {LDB}, {aB}, {LDC}, {aC}, {alpha}, {beta}, *static_cast<::sycl::queue*>({stream}));\n'.format(typ=self.arch.typename, aA=aA, aB=aB, aC=aC, stream=BatchedOperationsAux.STREAM_PTR_NAME, **self.gemm_descr))
+      f.write(f'  kernel(A, offsetA, B, offsetB, C, offsetC, {BatchedOperationsAux.NUM_ELEMENTS_NAME}).wait();\n')
+      f.write('}\n')
     return func_signature + ";"

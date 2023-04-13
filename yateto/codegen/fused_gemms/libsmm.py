@@ -65,7 +65,8 @@ class FusedGemmsLibsmm:
       bbC = BoundingBox.fromSpp(node.eqspp())
 
       if node.transA() or node.transB():
-          raise NotImplementedError('Transposition not supported')
+          #raise NotImplementedError('Transposition not supported')
+          print(f'WARNING: Transposition not supported yet in {res} = {op1} * {op2}')
       
       k = bbA[1] & bbB[0]
       m = bbA[0]

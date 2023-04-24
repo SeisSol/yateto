@@ -271,7 +271,7 @@ class libsmm(CodeGenerator):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
-    return self._archSupported() and not (sparseA or sparseB) and (not transA) and (not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'gpu'
+    return self._archSupported() and not (sparseA or sparseB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'gpu'
 
 
 class GeneratorCollection(object):

@@ -509,8 +509,12 @@ class LibsmmGemmGen(GpuRoutineGenerator):
       aB = self.address_mode(self.gemm_descr['addrB'], self.gemm_descr['distB'])
       aC = self.address_mode(self.gemm_descr['addrC'], self.gemm_descr['distC'])
 
+      T = lambda x: 'smm::transpose::T' if x else 'smm::transpose::N'
+      tA = T(self.gemm_descr['transA'])
+      tB = T(self.gemm_descr['transB'])
+
       f.write(f'{func_signature} {{\n')
-      f.write('  static auto kernel = smm::make_gemm<{typ}>({M}, {N}, {K}, {LDA}, {aA}, {LDB}, {aB}, {LDC}, {aC}, {alpha}, {beta}, *static_cast<::sycl::queue*>({stream}));\n'.format(typ=self.arch.typename, aA=aA, aB=aB, aC=aC, stream=BatchedOperationsAux.STREAM_PTR_NAME, **self.gemm_descr))
+      f.write('  static auto kernel = smm::make_gemm<{typ}>({tA}, {tB}, {M}, {N}, {K}, {LDA}, {aA}, {LDB}, {aB}, {LDC}, {aC}, {alpha}, {beta}, *static_cast<::sycl::queue*>({stream}));\n'.format(typ=self.arch.typename, aA=aA, aB=aB, aC=aC, tA=tA, tB=tB, stream=BatchedOperationsAux.STREAM_PTR_NAME, **self.gemm_descr))
       f.write(f'  kernel(A, offsetA, B, offsetB, C, offsetC, {BatchedOperationsAux.NUM_ELEMENTS_NAME}).wait();\n')
       f.write('}\n')
     return func_signature + ";"

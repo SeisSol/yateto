@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -17,7 +17,7 @@ setup(
     description="A tensor toolbox for discontinuous Galerkin methods",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=["yateto"],
+    packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: BSD 3-Clause License",

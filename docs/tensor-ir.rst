@@ -8,7 +8,7 @@ YATeTo immediate language reference
 ===================================
 
 This document is a draft for an immediate tensor language that sits between the high-level
-Einstein notation and the low-level backend-specific code.
+Einstein notation and the low-level back-end-specific code.
 
 The grammar is given in `ABNF syntax <https://www.ietf.org/rfc/rfc5234.txt>`_.
 
@@ -58,9 +58,9 @@ Scalar types
 
 .. code:: abnf
 
-    scalar-type                 = int_type / fp_type
-    int_type                    = ("i" / "u") ("8" / "16" / "32" / "64")
-    fp_type                     = "f" ("32" / "64")
+    scalar-type                 = int-type / floating-type
+    int-type                    = ("i" / "u") ("8" / "16" / "32" / "64")
+    floating-type               = "f" ("32" / "64")
 
 Scalar types are either integer ("i"), unsigned integer ("u"),
 or floating point ("f").
@@ -107,7 +107,7 @@ Instructions
 .. code:: abnf
 
     block                       = *instruction
-    instruction                 = value-instruction / axpy-instruction / barrier-instruction / lifetime-stop-instruction / matmul_inst
+    instruction                 = value-instruction / axpy-instruction / barrier-instruction / lifetime-stop-instruction / matmul-instruction
     value-instruction           = local-identifier "=" (alloca-instruction / get-work-item-instruction / submatrix-instruction)
 
 Alloca
@@ -191,12 +191,12 @@ Axpy implements
 The first argument gives :math:`\alpha`.
 The second and the third argument must have memref type and give A and B, respectively.
 
-Matrix muliplication
---------------------
+Matrix multiplication
+---------------------
 
 .. code:: abnf
 
-    matmul_inst                 = floating-constant "," local-identifier "," local-identifier "," floating-constant "," local-identifier
+    matmul-instruction          = floating-constant "," local-identifier "," local-identifier "," floating-constant "," local-identifier
 
 Overview
 ........
@@ -227,7 +227,7 @@ Additional instructions
 Sample code
 ===========
 
-The following sample implementes the kernel
+The following sample implements the kernel
 
 .. math::
 

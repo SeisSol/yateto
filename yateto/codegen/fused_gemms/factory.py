@@ -1,9 +1,16 @@
 import importlib.util
+import pkg_resources
 gb_spec = importlib.util.find_spec('chainforge')
 try:
   if gb_spec:
     gb = gb_spec.loader.load_module()
+    version = pkg_resources.get_distribution('chainforge').version
+    if not version == '0.0.3':
+      raise RuntimeError(f'chainforge version 0.3.0 is requried. Found: {version}. Please, update using `pip3`')
+
     from .external_generator import FusedGemms
+except RuntimeError as err:
+  raise err
 except:
   raise ('Found chainforge spec but cannot load. Please, check installation of chainforge')
 

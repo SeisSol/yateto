@@ -6,7 +6,7 @@ try:
     gb = gb_spec.loader.load_module()
     version = pkg_resources.get_distribution('chainforge').version
     if not version == '0.0.3':
-      raise RuntimeError(f'chainforge version 0.3.0 is requried. Found: {version}. Please, update using `pip3`')
+      raise RuntimeError(f'chainforge version 0.0.3 is requried. Found: {version}. Please, update using `pip3`')
 
     from .external_generator import FusedGemms
 except RuntimeError as err:

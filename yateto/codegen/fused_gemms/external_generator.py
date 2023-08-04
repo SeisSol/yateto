@@ -24,7 +24,8 @@ class FusedGemms:
       node, args, add, scalar = item
       res, op1, op2 = args
 
-      self._get_matrices(node, res, op1, op2)
+      self._cache_matrices(node, res, op1, op2)
+      can_be_aligned = self._can_be_aligned(node, res, op1)
       gemm_list.append(GemmDescr(trans_a=node.transA(),
                                  trans_b=node.transB(),
                                  a=self._cache[op1.name],
@@ -32,7 +33,8 @@ class FusedGemms:
                                  c=self._cache[res.name],
                                  alpha=scalar,
                                  beta=1.0 if add else 0.0,
-                                 strict_match=False))
+                                 strict_match=False,
+                                 prefer_align=can_be_aligned))
       flops += gemm_list[-1].compute_flops()
 
     context = Context(arch=self._arch.name,
@@ -47,7 +49,15 @@ class FusedGemms:
     routineCache.addRoutine(routine_name, ChainForgeWriter(chainforge_generator))
     return flops
 
-  def _get_matrices(self, node, res, op1, op2):
+  def _can_be_aligned(self, node, res, op1):
+    res_tensor = IndexedTensorDescription.fromNode(res, node)
+    op1_tensor = IndexedTensorDescription.fromNode(op1, node.leftTerm())
+
+    aligned_res = res_tensor.memoryLayout.alignedStride()
+    aligned_op1 = not node.transA() and op1_tensor.memoryLayout.alignedStride()
+    return aligned_res and aligned_op1
+
+  def _cache_matrices(self, node, res, op1, op2):
     res_tensor = IndexedTensorDescription.fromNode(res, node)
     op1_tensor = IndexedTensorDescription.fromNode(op1, node.leftTerm())
     op2_tensor = IndexedTensorDescription.fromNode(op2, node.rightTerm())
@@ -56,10 +66,8 @@ class FusedGemms:
                                        op2=op2_tensor,
                                        trans_op2=node.transB())
 
-    aligned_op1 = not node.transA() and op1_tensor.memoryLayout.alignedStride()
-    aligned_res = res_tensor.memoryLayout.alignedStride()
-
-    if aligned_op1 and aligned_res:
+    can_be_aligned = self._can_be_aligned(node, res, op1)
+    if can_be_aligned:
       aligned_m = m.aligned(self._arch)
       m.stop = aligned_m.stop
 

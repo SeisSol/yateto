@@ -263,7 +263,8 @@ class Generator(object):
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
                cost_estimator=BoundingBoxCostEstimator,
-               include_tensors=set()):
+               include_tensors=set(),
+               template=(None, None)):
 
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
@@ -285,10 +286,10 @@ class Generator(object):
     print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
         for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg, testFramework)
+            UnitTestGenerator(self._arch, template).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg, testFramework)
         for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, testFramework, group)
+                UnitTestGenerator(self._arch, template).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, testFramework, group)
     with Cpp(fUTdoctest.cpp) as cpp:
         Doctest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
     with Cpp(fUTcxxtest.h) as cpp:
@@ -322,7 +323,7 @@ class Generator(object):
 
     print('Generating kernels...')
     cache = RoutineCache()
-    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
+    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache, template)
 
     kernelSource = StringIO()
     kernelSourceContent = ''
@@ -341,6 +342,8 @@ class Generator(object):
           header.include(fTensors.hName)
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace), header.Namespace(namespace):
+            header.TemplateStructForward(optKernelGenerator.NAMESPACE, template[0])
+            with header.TemplateStruct(optKernelGenerator.NAMESPACE, template[1]):
               # Group kernels by namespace
               for kernel_namespace, kernels in kernel_dict.items():
                 for kernel in kernels:
@@ -398,7 +401,7 @@ class Generator(object):
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
-    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key))
+    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), template)
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):

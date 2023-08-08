@@ -56,12 +56,7 @@ class KernelGenerator(object):
     return cls.BUFFER_NAME + str(buf)
 
   def deduce_single_scalar(self, scalar):
-    if scalar is None:
-      return 1.0
-    elif isinstance(scalar, Scalar):
-      return UnitTestGenerator._tensorNameS(scalar)
-    else:
-      return scalar
+    return 1.0 if scalar is None else scalar
 
   def deduce_scalar_list(self, action):
     return [self.deduce_single_scalar(scalar) for scalar in action.scalar]
@@ -409,6 +404,14 @@ class UnitTestGenerator(KernelGenerator):
   def __init__(self, arch):
     super().__init__(arch)
 
+  def deduce_single_scalar(self, scalar):
+    if scalar is None:
+      return 1.0
+    elif isinstance(scalar, Scalar):
+      return self._tensorNameS(scalar)
+    else:
+      return scalar
+
   @classmethod
   def _tensorName(cls, var):
     if var.isLocal():
@@ -601,18 +604,18 @@ class InitializerGenerator(object):
         self._collect[baseName][group] = tensor
       else:
         assert self._collect[baseName][group] == tensor
-    for tensor in scalars:
-      baseName = tensor.baseNameWithNamespace()
-      group = tensor.group()
+    for scalar in scalars:
+      baseName = scalar.baseNameWithNamespace()
+      group = scalar.group()
       if baseName not in self._scalarCollect:
-        self._scalarCollect[baseName] = {group: tensor}
+        self._scalarCollect[baseName] = {group: scalar}
       elif group not in self._scalarCollect[baseName]:
         groupRef = next(iter(self._scalarCollect[baseName].keys()))
         if len(group) != len(groupRef):
           raise ValueError('Mixed group dimensions are not allowed. ({} and {} for {}.)'.format(group, groupRef, baseName))
-        self._scalarCollect[baseName][group] = tensor
+        self._scalarCollect[baseName][group] = scalar
       else:
-        assert self._scalarCollect[baseName][group] == tensor
+        assert self._scalarCollect[baseName][group] == scalar
     maxIndex = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._collect.items()}
     self._groupSize = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndex.items()}
     maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}
@@ -628,7 +631,6 @@ class InitializerGenerator(object):
   def iterate_collect(self):
     cur_namespace = ''
     cur_dict = collections.OrderedDict()
-    cur_dictScalar = collections.OrderedDict()
     for base_name, tensors in self._collect.items():
       splitted = base_name.rsplit('::', 1)
       if len(splitted) == 1:
@@ -647,8 +649,7 @@ class InitializerGenerator(object):
   def iterate_collect_scalar(self):
     cur_namespace = ''
     cur_dict = collections.OrderedDict()
-    cur_dictScalar = collections.OrderedDict()
-    for base_name, tensors in self._scalarCollect.items():
+    for base_name, scalars in self._scalarCollect.items():
       splitted = base_name.rsplit('::', 1)
       if len(splitted) == 1:
         namespace = ''
@@ -659,7 +660,7 @@ class InitializerGenerator(object):
         yield cur_namespace, cur_dict
         cur_namespace = namespace
         cur_dict = {}
-      cur_dict[base_name, base_name_without_ns] = tensors
+      cur_dict[base_name, base_name_without_ns] = scalars
     # Don't forget last namespace
     yield cur_namespace, cur_dict
 
@@ -706,7 +707,6 @@ class InitializerGenerator(object):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 with header.Function(self.CONTAINER_CLASS_NAME, '', ''):
                   pass
-                # header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
                 with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
                 with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):

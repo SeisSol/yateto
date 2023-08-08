@@ -18,6 +18,49 @@ class IdentifiedType(AbstractType):
   GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
 
+  def __init__(self, name, namespace=None):
+    if not self.isValidName(name):
+      raise ValueError('Invalid name (must match regexp {}): {}'.format(self.VALID_NAME, name))
+    
+    self._name = name
+    self.namespace = namespace
+
+  @classmethod
+  def getGroup(cls, name):
+    gis = re.search(cls.GROUP_INDICES, name)
+    if gis:
+      return tuple(int(gi) for gi in re.split(',', gis.group(1)))
+    return tuple()
+
+  def group(self):
+    return self.getGroup(self._name)
+  
+  @classmethod
+  def getBaseName(cls, name):
+    return re.match(cls.BASE_NAME, name).group(0)
+  
+  def baseName(self):
+    return self.getBaseName(self._name)
+  
+  @classmethod
+  def splitBasename(cls, base_name_with_namespace):
+    name_parts = base_name_with_namespace.rsplit('::', 1)
+    if len(name_parts) > 1:
+      prefix = '{}::'.format(name_parts[0])
+    else:
+      prefix = ''
+    base_name = name_parts[-1]
+    return prefix, base_name
+  
+  def prefix(self):
+    return '{}::'.format(self.namespace) if self.namespace else ''
+  
+  def baseNameWithNamespace(self):
+    return '{}{}'.format(self.prefix(), self.baseName())
+
+  def nameWithNamespace(self):
+    return '{}{}'.format(self.prefix(), self.name())
+
   # TODO:(David) superclass Scalar and Tensor
 
 class Scalar(AbstractType):

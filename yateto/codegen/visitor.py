@@ -10,6 +10,7 @@ from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux
+from ..type import Scalar
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
@@ -55,7 +56,12 @@ class KernelGenerator(object):
     return cls.BUFFER_NAME + str(buf)
 
   def deduce_single_scalar(self, scalar):
-    return 1.0 if scalar is None else UnitTestGenerator._tensorNameS(scalar)
+    if scalar is None:
+      return 1.0
+    elif isinstance(scalar, Scalar):
+      return UnitTestGenerator._tensorNameS(scalar)
+    else:
+      return scalar
 
   def deduce_scalar_list(self, action):
     return [self.deduce_single_scalar(scalar) for scalar in action.scalar]

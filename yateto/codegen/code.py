@@ -177,7 +177,9 @@ class Cpp:
     self.__call__('struct {};'.format(name))
 
   def Struct(self, name):
-    return Block(self, 'struct ' + name, foot=';')
+    if len(name) == 0:
+      return NoScope()
+    return Block(self, 'struct ' + name, foot='; // struct ' + name)
     
   def HeaderGuard(self, name):
     return HeaderGuard(self, name)

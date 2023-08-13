@@ -200,7 +200,8 @@ class OptimisedKernelGenerator(KernelGenerator):
         entries[key] = entries[key] | value
     
 
-  def generate(self, cpp, header, name, kernelOutlines, familyStride=None):
+  def generate(self, cpp, header, name, kernelOutlines, namespace, familyStride=None):
+    templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
     tensors = collections.OrderedDict()
     prefetch = collections.OrderedDict()
     writable = dict()
@@ -279,7 +280,7 @@ class OptimisedKernelGenerator(KernelGenerator):
         if not writable:
           typ += ' const'
         if len(next(iter(groups))) > 0:
-          class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
+          class_name = f'{InitializerGenerator.TENSOR_NAMESPACE}{templateval}::{base_name_with_namespace}'
           container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
           header(f'{class_name}::{container_type} {base_name};')
         else:
@@ -346,32 +347,31 @@ class OptimisedKernelGenerator(KernelGenerator):
           with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
             header('return {}[{}];'.format(function, indexF))
 
-    templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
+    namespaceval = '' if namespace == '' or namespace is None else f'{namespace}::'
     flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
-    for fc in flopCounters:
-      cpp('{} {} const {}{}::{}{};'.format(
-        CONSTEXPR,
-        self._arch.ulongTypename,
-        self.NAMESPACE,
-        templateval,
-        name,
-        fc,
-        brackets
-      ))
-    if familyStride is not None:
-      cpp('{0} {1}{2}::{3}::{4} {1}{2}::{3}::{4}[];'.format(
-        CONSTEXPR,
-        self.NAMESPACE,
-        templateval,
-        name,
-        self.MEMBER_FUNCTION_PTR_NAME,
-        self.EXECUTE_ARRAY_NAME
-      ))
+    #for fc in flopCounters:
+    #  header('{} {} static const {}{}{};'.format(
+    #    CONSTEXPR,
+    #    self._arch.ulongTypename,
+    #    name,
+    #    fc,
+    #    brackets
+    #  ))
+    #if familyStride is not None:
+    #  cpp('{0} {1}{2}::{3}{4}::{5} {1}{2}::{3}{4}::{6}[];'.format(
+    #    CONSTEXPR,
+    #    self.NAMESPACE,
+    #    templateval,
+    #    namespaceval,
+    #    name,
+    #    self.MEMBER_FUNCTION_PTR_NAME,
+    #    self.EXECUTE_ARRAY_NAME
+    #  ))
     for index, kernelOutline in enumerate(kernelOutlines):
       if kernelOutline is None:
         continue
 
-      with cpp.Function('{}{}::{}::{}'.format(self.NAMESPACE, templateval, name, executeName(index))):
+      with cpp.Function('{}{}::{}{}::{}'.format(self.NAMESPACE, templateval, namespaceval, name, executeName(index))):
         sclrs = sorted(list(kernelOutline.scalars), key=str)
         for scalar in sclrs:
           cpp('assert(!std::isnan({}));'.format(scalar))
@@ -607,10 +607,10 @@ class InitializerGenerator(object):
     yield cur_namespace, cur_dict
     
   def generateTensorsH(self, header):
-    for namespace, tensor_dict in self.iterate_collect():
-      with header.Namespace(namespace):
-        header.TemplateStructForward(self.TENSOR_NAMESPACE, self._template[0])
-        with header.TemplateStruct(self.TENSOR_NAMESPACE, self._template[1]):
+    header.TemplateStructForward(self.TENSOR_NAMESPACE, self._template[0])
+    with header.TemplateStruct(self.TENSOR_NAMESPACE, self._template[1]):
+      for namespace, tensor_dict in self.iterate_collect():
+        with header.Struct(namespace):
           for (baseName, baseNameWithoutNamespace), tensors in tensor_dict.items():        
             with header.Struct(baseNameWithoutNamespace):
               groupSize = self._groupSize[baseName]
@@ -639,29 +639,42 @@ class InitializerGenerator(object):
   def generateTensorsCpp(self, cpp):
     templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
     for namespace, tensor_dict in self.iterate_collect():
-      with cpp.Namespace(namespace):
-        for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-          self._tensor(cpp, '::'.join([f'{self.TENSOR_NAMESPACE}{templateval}', base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
+      for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
+        prefix_parts = [f'{self.TENSOR_NAMESPACE}{templateval}']
+        if len(namespace) > 0:
+          prefix_parts += [namespace]
+        prefix_parts += [base_name_without_namespace, '']
+        prefix = '::'.join(prefix_parts)
+        self._tensor(cpp, prefix, tensors, self._groupSize[base_name], True)
   
   def generateInitH(self, header):
     templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
-    for namespace, tensor_dict in self.iterate_collect():
-      with header.Namespace(namespace):
-        header.TemplateStructForward(self.INIT_NAMESPACE, self._template[0])
-        with header.TemplateStruct(self.INIT_NAMESPACE, self._template[1]):
+    header.TemplateStructForward(self.INIT_NAMESPACE, self._template[0])
+    with header.TemplateStruct(self.INIT_NAMESPACE, self._template[1]):
+      for namespace, tensor_dict in self.iterate_collect():
+        with header.Struct(namespace):
           for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-            self._init(header, base_name, base_name_without_namespace, '', tensors, False)
-        for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-          self._init2(header, base_name, base_name_without_namespace, f'{self.INIT_NAMESPACE}{templateval}', tensors, False)
+            prefix_parts = [f'{self.TENSOR_NAMESPACE}{templateval}']
+            if len(namespace) > 0:
+              prefix_parts += [namespace]
+            prefix = '::'.join(prefix_parts)
+            self._init(header, base_name, base_name_without_namespace, '', tensors, False, prefix=prefix)
+    for namespace, tensor_dict in self.iterate_collect():
+      prefix_parts = [f'{self.INIT_NAMESPACE}{templateval}']
+      if len(namespace) > 0:
+        prefix_parts += [namespace]
+      prefix = '::'.join(prefix_parts)
+      for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
+        self._init2(header, base_name, base_name_without_namespace, prefix, tensors, False)
 
   def generateInitCpp(self, cpp):
+    templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
     for namespace, tensor_dict in self.iterate_collect():
       for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-        prefix_parts = []
+        prefix_parts = [f'{self.INIT_NAMESPACE}{templateval}']
         if len(namespace) > 0:
-          prefix_parts.append(namespace)
-        templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
-        prefix_parts +=  [f'{self.INIT_NAMESPACE}{templateval}', base_name_without_namespace, '']
+          prefix_parts += [namespace]
+        prefix_parts += [base_name_without_namespace, '']
         prefix = '::'.join(prefix_parts)
         self._init(cpp, base_name, base_name_without_namespace, prefix, tensors, True)
         self._init2(cpp, base_name, base_name_without_namespace, prefix, tensors, True)
@@ -672,16 +685,16 @@ class InitializerGenerator(object):
     self._array(cpp, self._numberType, name + self.SHAPE_NAME, shape, groupSize, declarationOnly)
     self._array(cpp, self._numberType, name + self.SIZE_NAME, size, groupSize, declarationOnly, alwaysArray=False)
 
-  def _init(self, cpp, baseName, baseNameWithoutNamespace, name, tensors, declarationOnly):
+  def _init(self, cpp, baseName, baseNameWithoutNamespace, name, tensors, declarationOnly, prefix=''):
     groupSize = self._groupSize[baseName]
     stride = groupSizeToStride(groupSize)
     index = lambda group: str(address(group, stride)) if len(group) > 0 else ''
 
     if declarationOnly:
-      for group,tensor in tensors.items():
-        ml = tensor.memoryLayout()
-        tv = self._tensorViewGenerator(ml)
-        tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
+      # for group,tensor in tensors.items():
+      #  ml = tensor.memoryLayout()
+      #  tv = self._tensorViewGenerator(ml)
+      #  tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
       valueNames = dict()
       for group,tensor in tensors.items():
         values = tensor.values()
@@ -697,7 +710,7 @@ class InitializerGenerator(object):
         self._array(cpp, self._realPtrType, name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
     else:
       templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
-      with cpp.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, f'{self.TENSOR_NAMESPACE}{templateval}')):
+      with cpp.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, prefix)):
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
           tv = self._tensorViewGenerator(ml)

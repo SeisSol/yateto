@@ -244,7 +244,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        cpu_arch,
+        'arm_sve' if cpu_arch == 'a64fx' else cpu_arch, 
         '--prefetching',
         self._gemmDescr['prefetch'],
         '--output_funcname',

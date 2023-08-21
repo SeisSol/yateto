@@ -227,7 +227,7 @@ class ExecuteGemmGen(RoutineGenerator):
       result = subprocess.run(strcmd)
     except OSError:
       raise RuntimeError(f'GEMM code generator executable "{self._cmd}" not found. (Make sure to add the folder containing the executable to your PATH environment variable.)')
-    if result.returncode:
+    if result.returncode != 0:
       raise RuntimeError(f"""GEMM code generator executable "{self._cmd}" failed. Thus, the kernel generation may be incomplete.
 Given command: {' '.join(strcmd)}
 Stdout: {result.stdout}

@@ -632,12 +632,12 @@ class InitializerGenerator(object):
     cur_namespace = ''
     cur_dict = collections.OrderedDict()
     for base_name, tensors in self._collect.items():
-      splitted = base_name.rsplit('::', 1)
-      if len(splitted) == 1:
+      splitName = base_name.rsplit('::', 1)
+      if len(splitName) == 1:
         namespace = ''
-        base_name_without_ns = splitted[0]
+        base_name_without_ns = splitName[0]
       else:
-        namespace, base_name_without_ns = splitted
+        namespace, base_name_without_ns = splitName
       if namespace != cur_namespace:
         yield cur_namespace, cur_dict
         cur_namespace = namespace
@@ -650,12 +650,12 @@ class InitializerGenerator(object):
     cur_namespace = ''
     cur_dict = collections.OrderedDict()
     for base_name, scalars in self._scalarCollect.items():
-      splitted = base_name.rsplit('::', 1)
-      if len(splitted) == 1:
+      splitName = base_name.rsplit('::', 1)
+      if len(splitName) == 1:
         namespace = ''
-        base_name_without_ns = splitted[0]
+        base_name_without_ns = splitName[0]
       else:
-        namespace, base_name_without_ns = splitted
+        namespace, base_name_without_ns = splitName
       if namespace != cur_namespace:
         yield cur_namespace, cur_dict
         cur_namespace = namespace

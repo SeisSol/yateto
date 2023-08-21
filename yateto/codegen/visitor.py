@@ -10,6 +10,7 @@ from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux
+from ..type import Scalar
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
@@ -148,11 +149,14 @@ class OptimisedKernelGenerator(KernelGenerator):
         tensors[base_name] = {group}
   
   def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target):
-    scalars = ScalarsSet().visit(cfg)
+    scalarsP = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     writable = dict()
     is_compute_constant_tensors = dict()
+    scalars = collections.OrderedDict()
+    for scalar in scalarsP:
+      self.KernelOutline._addTensor(scalar, scalars)
     for var in variables:
       self.KernelOutline._addTensor(var.tensor, tensors)
       bn = var.tensor.baseNameWithNamespace()
@@ -203,11 +207,11 @@ class OptimisedKernelGenerator(KernelGenerator):
     tensors = collections.OrderedDict()
     prefetch = collections.OrderedDict()
     writable = dict()
-    scalars = set()
+    scalars = collections.OrderedDict()
     is_compute_constant_tensors = dict()
     for ko in kernelOutlines:
       if ko:
-        scalars = scalars | ko.scalars
+        self._addFromKO(ko.scalars, scalars)
         self._addFromKO(ko.tensors, tensors)
         self._addFromKO(ko.writable, writable)
         self._addFromKO(ko.prefetch, prefetch)
@@ -221,8 +225,6 @@ class OptimisedKernelGenerator(KernelGenerator):
 
     if not is_same_target:
       raise RuntimeError("kernels with the same family belong to different compute target.")
-
-    scalars = sorted(list(scalars), key=str)
 
     if familyStride is not None:
       executeName = lambda index: self.EXECUTE_NAME + str(index)
@@ -269,9 +271,6 @@ class OptimisedKernelGenerator(KernelGenerator):
 
         header.emptyline()
 
-        for scalar in scalars:
-          header('{0} {1} = std::numeric_limits<{0}>::signaling_NaN();'.format(self._arch.typename, scalar))
-
         def kernelArgs(base_name_with_namespace, groups, writable, is_constant, target):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           typ = self._arch.typename
@@ -285,6 +284,19 @@ class OptimisedKernelGenerator(KernelGenerator):
           else:
             header(f'{typ}{ptr_type} {base_name}{{}};')
         
+        def scalarArgs(base_name_with_namespace, groups):
+          prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+          typ = self._arch.typename
+          if len(next(iter(groups))) > 0:
+            class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
+            container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}>'
+            header(f'{class_name}::{container_type} {base_name};')
+          else:
+            header(f'{typ} {base_name} = std::numeric_limits<{typ}>::signaling_NaN();')
+
+        for baseName, groups in scalars.items():
+          scalarArgs(baseName,
+                     groups)
         for baseName, groups in tensors.items():
           kernelArgs(baseName,
                      groups,
@@ -392,12 +404,31 @@ class UnitTestGenerator(KernelGenerator):
   def __init__(self, arch):
     super().__init__(arch)
 
+  def deduce_single_scalar(self, scalar):
+    if scalar is None:
+      return 1.0
+    elif isinstance(scalar, Scalar):
+      return self._tensorNameS(scalar)
+    else:
+      return scalar
+
   @classmethod
   def _tensorName(cls, var):
     if var.isLocal():
       return str(var)
     baseName = var.tensor.baseName()
     group = var.tensor.group()
+    terms = [baseName] + [str(g) for g in group]
+    return '_'.join(terms)
+
+  @classmethod
+  def _nameS(cls, var):
+    return '_ut_' + cls._tensorNameS(var)
+
+  @classmethod
+  def _tensorNameS(cls, var):
+    baseName = var.baseName()
+    group = var.group()
     terms = [baseName] + [str(g) for g in group]
     return '_'.join(terms)
 
@@ -411,7 +442,7 @@ class UnitTestGenerator(KernelGenerator):
     return '_view_' + self._name(var)
   
   def _groupStr(self, var):
-    group = var.tensor.group()
+    group = var.group()
     return ','.join([str(g) for g in group])
 
   def _groupTemplate(self, var):
@@ -431,7 +462,7 @@ class UnitTestGenerator(KernelGenerator):
       factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
 
       for i,scalar in enumerate(scalars):
-        cpp('{} {} = {};'.format(self._arch.typename, scalar, float(i+2)))
+        cpp('{} {} = {};'.format(self._arch.typename, self._tensorNameS(scalar), float(i+2)))
         
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
@@ -452,7 +483,7 @@ class UnitTestGenerator(KernelGenerator):
         cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
             initNS = InitializerGenerator.INIT_NAMESPACE,
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            groupTemplate=self._groupTemplate(var),
+            groupTemplate=self._groupTemplate(var.tensor),
             prefix=prefix,
             baseName=var.tensor.baseName(),
             name=self._tensorName(var),
@@ -464,10 +495,10 @@ class UnitTestGenerator(KernelGenerator):
         cpp.emptyline()
 
       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
-      for scalar in scalars:
-        cpp( '{0}.{1} = {1};'.format(self.KERNEL_VAR, scalar) )
+      for var in scalars:
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
       for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var), self._tensorName(var)) )
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), self._tensorName(var)) )
 
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
@@ -554,11 +585,12 @@ class InitializerGenerator(object):
       cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
       cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
 
-  def __init__(self, arch, tensors):
+  def __init__(self, arch, tensors, scalars):
     self._arch = arch
     self._numberType = '{} const'.format(self._arch.uintTypename)
     self._realType = '{} const'.format(self._arch.typename)
     self._realPtrType = self._realType + '*'
+    self._scalarCollect = collections.OrderedDict()
     self._collect = collections.OrderedDict()
     for tensor in tensors:
       baseName = tensor.baseNameWithNamespace()
@@ -572,8 +604,22 @@ class InitializerGenerator(object):
         self._collect[baseName][group] = tensor
       else:
         assert self._collect[baseName][group] == tensor
+    for scalar in scalars:
+      baseName = scalar.baseNameWithNamespace()
+      group = scalar.group()
+      if baseName not in self._scalarCollect:
+        self._scalarCollect[baseName] = {group: scalar}
+      elif group not in self._scalarCollect[baseName]:
+        groupRef = next(iter(self._scalarCollect[baseName].keys()))
+        if len(group) != len(groupRef):
+          raise ValueError('Mixed group dimensions are not allowed. ({} and {} for {}.)'.format(group, groupRef, baseName))
+        self._scalarCollect[baseName][group] = scalar
+      else:
+        assert self._scalarCollect[baseName][group] == scalar
     maxIndex = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._collect.items()}
     self._groupSize = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndex.items()}
+    maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}
+    self._groupSizeScalar = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndexScalar.items()}
   
   def _tensorViewGenerator(self, memoryLayout):
     memLayoutMap = {
@@ -586,12 +632,12 @@ class InitializerGenerator(object):
     cur_namespace = ''
     cur_dict = collections.OrderedDict()
     for base_name, tensors in self._collect.items():
-      splitted = base_name.rsplit('::', 1)
-      if len(splitted) == 1:
+      splitName = base_name.rsplit('::', 1)
+      if len(splitName) == 1:
         namespace = ''
-        base_name_without_ns = splitted[0]
+        base_name_without_ns = splitName[0]
       else:
-        namespace, base_name_without_ns = splitted
+        namespace, base_name_without_ns = splitName
       if namespace != cur_namespace:
         yield cur_namespace, cur_dict
         cur_namespace = namespace
@@ -599,7 +645,25 @@ class InitializerGenerator(object):
       cur_dict[base_name, base_name_without_ns] = tensors
     # Don't forget last namespace
     yield cur_namespace, cur_dict
-    
+
+  def iterate_collect_scalar(self):
+    cur_namespace = ''
+    cur_dict = collections.OrderedDict()
+    for base_name, scalars in self._scalarCollect.items():
+      splitName = base_name.rsplit('::', 1)
+      if len(splitName) == 1:
+        namespace = ''
+        base_name_without_ns = splitName[0]
+      else:
+        namespace, base_name_without_ns = splitName
+      if namespace != cur_namespace:
+        yield cur_namespace, cur_dict
+        cur_namespace = namespace
+        cur_dict = {}
+      cur_dict[base_name, base_name_without_ns] = scalars
+    # Don't forget last namespace
+    yield cur_namespace, cur_dict
+
   def generateTensorsH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
       with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
@@ -623,6 +687,26 @@ class InitializerGenerator(object):
               with header.Struct(self.CONTAINER_CLASS_NAME):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
+                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                  header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                  header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+    for namespace, scalar_dict in self.iterate_collect_scalar():
+      with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
+        for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():        
+          with header.Struct(baseNameWithoutNamespace):
+            groupSize = self._groupSizeScalar[baseName]
+            args = ndargs(len(groupSize))
+            typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
+            if len(groupSize) > 0:
+              with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
+            if len(groupSize) > 0:
+              header('template<typename T>')
+              with header.Struct(self.CONTAINER_CLASS_NAME):
+                header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
+                with header.Function(self.CONTAINER_CLASS_NAME, '', ''):
+                  pass
                 with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
                 with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):

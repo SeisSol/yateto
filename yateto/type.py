@@ -12,24 +12,66 @@ class AbstractType(object):
   def name(self):
     return self._name
 
-class Scalar(AbstractType):
-  VALID_NAME = r'^[a-zA-Z]\w*$'
-  
-  def __init__(self, name):
-    if not self.isValidName(name):
-      raise ValueError('Scalar name invalid (must match regexp {}): {}'.format(self.VALID_NAME, name))
-
-    self._name = name
-  
-  def __str__(self):
-    return self._name
-
-class Tensor(AbstractType):
+class IdentifiedType(AbstractType):
   BASE_NAME = r'[a-zA-Z]\w*'
   GROUP_INDEX = r'(0|[1-9]\d*)'
   GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
 
+  def __init__(self, name, namespace=None):
+    if not self.isValidName(name):
+      raise ValueError('Invalid name (must match regexp {}): {}'.format(self.VALID_NAME, name))
+    
+    self._name = name
+    self.namespace = namespace
+  
+  def __str__(self):
+    return self._name
+
+  @classmethod
+  def getGroup(cls, name):
+    gis = re.search(cls.GROUP_INDICES, name)
+    if gis:
+      return tuple(int(gi) for gi in re.split(',', gis.group(1)))
+    return tuple()
+
+  def group(self):
+    return self.getGroup(self._name)
+  
+  @classmethod
+  def getBaseName(cls, name):
+    return re.match(cls.BASE_NAME, name).group(0)
+  
+  def baseName(self):
+    return self.getBaseName(self._name)
+  
+  @classmethod
+  def splitBasename(cls, base_name_with_namespace):
+    name_parts = base_name_with_namespace.rsplit('::', 1)
+    if len(name_parts) > 1:
+      prefix = '{}::'.format(name_parts[0])
+    else:
+      prefix = ''
+    base_name = name_parts[-1]
+    return prefix, base_name
+  
+  def prefix(self):
+    return '{}::'.format(self.namespace) if self.namespace else ''
+  
+  def baseNameWithNamespace(self):
+    return '{}{}'.format(self.prefix(), self.baseName())
+
+  def nameWithNamespace(self):
+    return '{}{}'.format(self.prefix(), self.name())
+  
+  def __hash__(self):
+    return hash(self._name)
+
+class Scalar(IdentifiedType):  
+  def __init__(self, name, namespace=None):
+    super().__init__(name, namespace=namespace)
+
+class Tensor(IdentifiedType):
   def __init__(self,
                name,
                shape,
@@ -37,6 +79,7 @@ class Tensor(AbstractType):
                memoryLayoutClass=DenseMemoryLayout,
                alignStride=False,
                namespace=None):
+    super().__init__(name, namespace=namespace)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -101,42 +144,6 @@ class Tensor(AbstractType):
   def memoryLayout(self):
     return self._memoryLayout
   
-  @classmethod
-  def getBaseName(cls, name):
-    return re.match(cls.BASE_NAME, name).group(0)
-  
-  def baseName(self):
-    return self.getBaseName(self._name)
-
-  @classmethod
-  def splitBasename(cls, base_name_with_namespace):
-    name_parts = base_name_with_namespace.rsplit('::', 1)
-    if len(name_parts) > 1:
-      prefix = '{}::'.format(name_parts[0])
-    else:
-      prefix = ''
-    base_name = name_parts[-1]
-    return prefix, base_name
-  
-  def prefix(self):
-    return '{}::'.format(self.namespace) if self.namespace else ''
-  
-  def baseNameWithNamespace(self):
-    return '{}{}'.format(self.prefix(), self.baseName())
-
-  def nameWithNamespace(self):
-    return '{}{}'.format(self.prefix(), self.name())
-
-  @classmethod
-  def getGroup(cls, name):
-    gis = re.search(cls.GROUP_INDICES, name)
-    if gis:
-      return tuple(int(gi) for gi in re.split(',', gis.group(1)))
-    return tuple()
-
-  def group(self):
-    return self.getGroup(self._name)
-  
   def spp(self, groupSpp=True):
     return self._groupSpp if groupSpp else self._spp
   
@@ -168,9 +175,6 @@ class Tensor(AbstractType):
     if equal:
       assert self._shape == other._shape and aspp.array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
     return equal
-  
-  def __hash__(self):
-    return hash(self._name)
   
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)

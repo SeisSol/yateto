@@ -132,6 +132,9 @@ class Cpp:
       
   def For(self, argument):
     return Block(self, 'for ({})'.format(argument))
+
+  def ForRange(self, variable, range):
+    return self.For(f'int {variable} = {range.start}; {variable} < {range.end}; ++{variable}')
     
   def Namespace(self, name):
     if len(name) == 0:

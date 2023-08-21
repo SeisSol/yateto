@@ -226,12 +226,12 @@ class ExecuteGemmGen(RoutineGenerator):
       strcmd = [str(arg) for arg in argList]
       result = subprocess.run(strcmd)
     except OSError:
-      raise RuntimeError('GEMM code generator executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(self._cmd))
+      raise RuntimeError(f'GEMM code generator executable "{self._cmd}" not found. (Make sure to add the folder containing the executable to your PATH environment variable.)')
     if result.returncode:
-      raise RuntimeError("""GEMM code generator executable "{}" failed. Thus, the kernel generation may be incomplete.
-Given command: {}
-Stdout: {}
-Stderr: {}""".format(self._cmd, ' '.join(strcmd), result.stdout, result.stderr))
+      raise RuntimeError(f"""GEMM code generator executable "{self._cmd}" failed. Thus, the kernel generation may be incomplete.
+Given command: {' '.join(strcmd)}
+Stdout: {result.stdout}
+Stderr: {result.stderr}""")
   
   def __call__(self, routineName, fileName):
     cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name

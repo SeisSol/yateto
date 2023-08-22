@@ -70,6 +70,9 @@ class IdentifiedType(AbstractType):
 class Scalar(IdentifiedType):  
   def __init__(self, name, namespace=None):
     super().__init__(name, namespace=namespace)
+  
+  def __hash__(self):
+    return hash(self._name)
 
 class Tensor(IdentifiedType):
   def __init__(self,
@@ -119,6 +122,9 @@ class Tensor(IdentifiedType):
     self._groupSpp = self._spp
     
     self.setMemoryLayout(memoryLayoutClass, alignStride)
+
+  def __hash__(self):
+    return hash(self._name)
 
   def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp, alignStride=alignStride)

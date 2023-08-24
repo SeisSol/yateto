@@ -237,6 +237,13 @@ Stderr: {result.stderr}""")
     cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
 
     if self._mode == 'pspamm':
+      pspamm_arch = cpu_arch
+      if cpu_arch == 'a64fx':
+        pspamm_arch = 'arm_sve'
+      elif cpu_arch in ['naples', 'rome', 'milan']:
+        # names are Zen1, Zen2, Zen3, respectively
+        # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
+        pspamm_arch = 'hsw'
       argList = [
         self._cmd,
         self._gemmDescr['M'],
@@ -248,7 +255,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        'arm_sve' if cpu_arch == 'a64fx' else cpu_arch, 
+        pspamm_arch, 
         '--prefetching',
         self._gemmDescr['prefetch'],
         '--output_funcname',

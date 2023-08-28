@@ -162,7 +162,7 @@ class LIBXSMM_JIT(CodeGenerator):
     return Preference.LOW
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512'}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -286,7 +286,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
     libxsmm = LIBXSMM(arch)
-    # libxsmm_jit = LIBXSMM_JIT(arch)
+    libxsmm_jit = LIBXSMM_JIT(arch)
     pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)

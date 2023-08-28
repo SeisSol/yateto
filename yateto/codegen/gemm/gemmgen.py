@@ -239,11 +239,17 @@ Stderr: {result.stderr}""")
     if self._mode == 'pspamm':
       pspamm_arch = cpu_arch
       if cpu_arch == 'a64fx':
-        pspamm_arch = 'arm_sve'
+        pspamm_arch = 'arm_sve512'
+      elif cpu_arch == 'thunderx2t99':
+        pspamm_arch = 'neon'
+      elif cpu_arch.startswith('sve'):
+        pspamm_arch = f'arm_{cpu_arch}' # TODO(David): rename to sveLEN only
       elif cpu_arch in ['naples', 'rome', 'milan']:
         # names are Zen1, Zen2, Zen3, respectively
         # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
         pspamm_arch = 'hsw'
+      elif cpu_arch in ['bergamo']:
+        pspamm_arch = 'skx'
       argList = [
         self._cmd,
         self._gemmDescr['M'],
@@ -268,6 +274,13 @@ Stderr: {result.stderr}""")
       for key, val in self._blockSize.items():
         argList.extend(['--' + key, val])
     else:
+      libxsmm_arch = cpu_arch
+      if cpu_arch in ['naples', 'rome', 'milan']:
+        # names are Zen1, Zen2, Zen3, respectively
+        # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
+        libxsmm_arch = 'hsw'
+      elif cpu_arch in ['bergamo']:
+        libxsmm_arch = 'skx'
       argList = [
         self._cmd,
         'dense',
@@ -283,7 +296,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['beta'],
         self._gemmDescr['alignedA'],
         self._gemmDescr['alignedC'],
-        'hsw' if cpu_arch == 'rome' else cpu_arch, # libxsmm has no support for rome, hsw works well in practice
+        libxsmm_arch, # libxsmm has no support for rome, hsw works well in practice
         self._gemmDescr['prefetch'],
         self._arch.precision + 'P'
       ]

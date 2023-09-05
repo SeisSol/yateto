@@ -240,8 +240,8 @@ Stderr: {result.stderr}""")
       pspamm_arch = cpu_arch
       if cpu_arch == 'a64fx':
         pspamm_arch = 'arm_sve512'
-      elif cpu_arch == 'thunderx2t99':
-        pspamm_arch = 'neon'
+      elif cpu_arch in ['apple-m1', 'thunderx2t99', 'neon']:
+        pspamm_arch = 'arm'
       elif cpu_arch.startswith('sve'):
         pspamm_arch = f'arm_{cpu_arch}' # TODO(David): rename to sveLEN only
       elif cpu_arch in ['naples', 'rome', 'milan']:

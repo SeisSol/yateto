@@ -381,9 +381,13 @@ class OptimisedKernelGenerator(KernelGenerator):
         continue
 
       with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
-        sclrs = sorted(list(kernelOutline.scalars), key=str)
-        for scalar in sclrs:
-          cpp('assert(!std::isnan({}));'.format(scalar))
+        for base_name_with_namespace, groups in kernelOutline.scalars:
+          base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
+          if len(next(iter(groups))) > 0:
+            for gis in groups:
+              cpp('assert(!std::isnan({}({})));'.format(base_name, ','.join(str(gi) for gi in gis)))
+          else:
+            cpp(f'assert(!std::isnan({base_name}));')
         for base_name_with_namespace, groups in kernelOutline.tensors.items():
           base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
           if len(next(iter(groups))) > 0:

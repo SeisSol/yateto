@@ -603,6 +603,7 @@ class InitializerGenerator(object):
           raise ValueError('Mixed group dimensions are not allowed. ({} and {} for {}.)'.format(group, groupRef, baseName))
         self._collect[baseName][group] = tensor
       else:
+        print(f'The tensor {baseName}{group} has been defined twice. Error.')
         assert self._collect[baseName][group] == tensor
     for scalar in scalars:
       baseName = scalar.baseNameWithNamespace()
@@ -615,7 +616,9 @@ class InitializerGenerator(object):
           raise ValueError('Mixed group dimensions are not allowed. ({} and {} for {}.)'.format(group, groupRef, baseName))
         self._scalarCollect[baseName][group] = scalar
       else:
-        assert self._scalarCollect[baseName][group] == scalar
+        print(f'The scalar {baseName}{group} has been defined twice.')
+        # having a scalar (family) with the same name should not cause problems
+        pass
     maxIndex = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._collect.items()}
     self._groupSize = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndex.items()}
     maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}

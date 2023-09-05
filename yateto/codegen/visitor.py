@@ -381,7 +381,7 @@ class OptimisedKernelGenerator(KernelGenerator):
         continue
 
       with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
-        for base_name_with_namespace, groups in kernelOutline.scalars:
+        for base_name_with_namespace, groups in kernelOutline.scalars.items():
           base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
           if len(next(iter(groups))) > 0:
             for gis in groups:

@@ -126,7 +126,7 @@ def getArchitectureIdentifiedBy(ident):
     'knl': Architecture(name, precision, 64, True),
     'rome': Architecture(name, precision, 32, False),
     'thunderx2t99': Architecture(name, precision, 16, False),
-    'a64fx': Architecture(name, precision, 256, True),
+    'a64fx': Architecture(name, precision, 64, True),
     'power9': Architecture(name, precision, 16, False)
   }
   return arch[name]

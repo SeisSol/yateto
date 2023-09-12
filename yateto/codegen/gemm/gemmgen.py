@@ -223,16 +223,27 @@ class ExecuteGemmGen(RoutineGenerator):
   def _callGenerator(self, argList):
     resultCode = 1
     try:
-      resultCode = subprocess.call([str(arg) for arg in argList])
+      strcmd = [str(arg) for arg in argList]
+      result = subprocess.run(strcmd)
     except OSError:
-      raise RuntimeError('GEMM code generator executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(self._cmd))
-    if resultCode != 0:
-      raise RuntimeError('GEMM code generator executable "{}" failed. Thus, the kernel generation may be incomplete.'.format(self._cmd))
+      raise RuntimeError(f'GEMM code generator executable "{self._cmd}" not found. (Make sure to add the folder containing the executable to your PATH environment variable.)')
+    if result.returncode != 0:
+      raise RuntimeError(f"""GEMM code generator executable "{self._cmd}" failed. Thus, the kernel generation may be incomplete.
+Given command: {' '.join(strcmd)}
+Stdout: {result.stdout}
+Stderr: {result.stderr}""")
   
   def __call__(self, routineName, fileName):
     cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
 
     if self._mode == 'pspamm':
+      pspamm_arch = cpu_arch
+      if cpu_arch == 'a64fx':
+        pspamm_arch = 'arm_sve'
+      elif cpu_arch in ['naples', 'rome', 'milan']:
+        # names are Zen1, Zen2, Zen3, respectively
+        # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
+        pspamm_arch = 'hsw'
       argList = [
         self._cmd,
         self._gemmDescr['M'],
@@ -244,7 +255,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        'arm_sve' if cpu_arch == 'a64fx' else cpu_arch, 
+        pspamm_arch, 
         '--prefetching',
         self._gemmDescr['prefetch'],
         '--output_funcname',

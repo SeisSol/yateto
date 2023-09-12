@@ -380,6 +380,7 @@ class Generator(object):
 
     # Mapping basename -> tensor
     tensors = dict()
+    scalars = set()
 
     # Mapping namespace -> (basename -> tensor)
     tensors_dict = collections.defaultdict(dict)
@@ -390,15 +391,17 @@ class Generator(object):
     for kernel in self._kernels:
         tensors.update( FindTensors().visit(kernel.ast) )
         tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        scalars.update(ScalarsSet().visit(kernel.cfg))
     for family in self._kernelFamilies.values():
       for group, kernel in family.items():
         tensors.update( FindTensors().visit(kernel.ast) )
         tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        scalars.update(ScalarsSet().visit(kernel.cfg))
 
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
-    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key))
+    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key))
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):

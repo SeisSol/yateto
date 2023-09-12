@@ -63,12 +63,12 @@ def tensor_collection_from_constant_expression(base_name: str,
   where all involved tensors and scalars are constant.
 
   Example:
-    tensor = tensor_collection_from_constant_expression('C', lambda a: A[a]['ik'] * B['kj'], range(2))
+    tensor = tensor_collection_from_constant_expression('C', lambda a: A[a]['ik'] * B['kj'], simpleParameterSpace(2))
 
   Args:
     base_name: Tensor base name
     expressions: A lambda that takes a group index and returns an expression consisting in constant tensors
-    group_indices: All valid indices for which the groups are defined
+    group_indices: All valid indices for which the groups are defined. Supposed to be an iterator which returns tuples (such as a YATeTo parameter space)
     target_indices: The index permutation of the resulting tensor
     dtype: Precision used in computation
     tensor_args: Additional arguments to Tensor constructor
@@ -78,16 +78,13 @@ def tensor_collection_from_constant_expression(base_name: str,
   """
   tensors = {}
   for idx in group_indices:
-    expression = expressions(idx)
-    name = "{}({})".format(base_name, idx)
+    expression = expressions(*idx)
+    name = "{}({})".format(base_name, ','.join(str(i) for i in idx))
     tensor = tensor_from_constant_expression(name=name,
                                              expression=expression,
                                              target_indices=target_indices,
                                              dtype=dtype,
                                              tensor_args=tensor_args)
-    tensors[idx] = tensor
+    tensors[name] = tensor
 
-  return create_collection({base_name: tensors})
-
-
-
+  return create_collection(tensors)

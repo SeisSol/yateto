@@ -298,12 +298,11 @@ class Generator(object):
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
-      print(f'{kernel.name} ({len(kernel.ast)} ASTs)')
+      print(f'{kernel.name} ({len(kernel.ast)} AST(s))')
       kernel.prepareUntilCodeGen(cost_estimator)
     for family in self._kernelFamilies.values():
-      print(f'{family.name} ({len(family.ast)} ASTs)')
+      print(f'{family.name} ({sum(len(kernel.ast) for kernel in family.kernels())} AST(s))')
       family.prepareUntilCodeGen(cost_estimator)
-
 
     # Create mapping from namespace to kernel/family
     kernel_dict = {}

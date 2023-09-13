@@ -298,10 +298,10 @@ class Generator(object):
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
-      print(kernel.name)
+      print(f'{kernel.name} ({len(kernel.ast)} ASTs)')
       kernel.prepareUntilCodeGen(cost_estimator)
     for family in self._kernelFamilies.values():
-      print(family.name)
+      print(f'{family.name} ({len(family.ast)} ASTs)')
       family.prepareUntilCodeGen(cost_estimator)
 
 

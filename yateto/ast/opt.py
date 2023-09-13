@@ -37,11 +37,9 @@ def strengthReduction(terms, target_indices, cost_estimator, split = 0):
                                  cost_estimator,
                                  j-1)
 
-        cost_estimator_copy = cost_estimator
-        treeCost = cost_estimator_copy.estimate(tree)
+        treeCost = cost_estimator.estimate(tree)
         if best == None or treeCost < minCost:
           best = tree
           minCost = treeCost
-          cost_estimator = cost_estimator_copy
 
   return best

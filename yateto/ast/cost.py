@@ -94,7 +94,12 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
   def __init__(self):
     super().__init__()
     self._lead_dim = 0
-    self._loaded_to_gpu_cache = set()
+    self._loaded_to_gpu_cache = {}
+  
+  def generic_estimate(self, node):
+    result = super().generic_estimate(node)
+    self._loaded_to_gpu_cache[node] = set()
+    return result
 
   def _get_terms(self, node):
     left_indices = node.leftTerm().indices
@@ -117,15 +122,18 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     bb = self._cache[left_term]
     cost /= bb[self._lead_dim].size()
 
+    # take the union of all cached nodes
+    self._loaded_to_gpu_cache[node] = self._loaded_to_gpu_cache[left_term].union(self._loaded_to_gpu_cache[right_term])
+
     extra_cost = 0
     if not right_term in self._loaded_to_gpu_cache:
-      self._loaded_to_gpu_cache.add(right_term)
+      self._loaded_to_gpu_cache[node].add(right_term)
       rbb = self._cache[right_term]
       extra_cost += rbb.size()
 
     if node.indices[self._lead_dim] != left_term.indices[self._lead_dim]:
       if not node.leftTerm in self._loaded_to_gpu_cache:
-        self._loaded_to_gpu_cache.add(left_term)
+        self._loaded_to_gpu_cache[node].add(left_term)
         lbb = self._cache[left_term]
         extra_cost += lbb.size()
     return cost + extra_cost
@@ -143,7 +151,12 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
 
     left_term, _ = self._get_terms(child)
     bb = self._cache[left_term]
-    self._loaded_to_gpu_cache.add(node)
+
+    # we will have visited node.term() as well at this point
+    # (but we need to add ourselves as well)
+    self._loaded_to_gpu_cache[node] = set(self._loaded_to_gpu_cache[node.term()])
+    self._loaded_to_gpu_cache[node].add(node)
+
     return cost / bb[self._lead_dim].size()
 
 

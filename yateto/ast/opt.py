@@ -1,14 +1,12 @@
 import sys
 from .node import IndexSum, Product
-from copy import deepcopy
-
 
 def strengthReduction(terms, target_indices, cost_estimator, split = 0):
   n = len(terms)
   
   indexList = [index for term in terms for index in term.indices]
   uniqueIndices = set(indexList)
-  summationIndices = set([index for index in uniqueIndices if indexList.count(index) == 1]) - set(target_indices)
+  summationIndices = set(index for index in uniqueIndices if indexList.count(index) == 1) - set(target_indices)
   
   while len(summationIndices) != 0:
     i = split
@@ -31,19 +29,17 @@ def strengthReduction(terms, target_indices, cost_estimator, split = 0):
   for i in range(n):
     for j in range(max(i+1,split),n):
       mulTerm = Product(terms[i], terms[j])
-      prodCost = deepcopy(cost_estimator).estimate(mulTerm)
+      prodCost = cost_estimator.estimate(mulTerm)
       if best == None or prodCost < minCost:
         selection = set(range(n)) - set([i,j])
         tree = strengthReduction([terms[i] for i in selection] + [mulTerm],
-                                 deepcopy(target_indices),
+                                 target_indices,
                                  cost_estimator,
                                  j-1)
 
-        cost_estimator_copy = deepcopy(cost_estimator)
-        treeCost = cost_estimator_copy.estimate(tree)
+        treeCost = cost_estimator.estimate(tree)
         if best == None or treeCost < minCost:
           best = tree
           minCost = treeCost
-          cost_estimator = cost_estimator_copy
 
   return best

@@ -13,13 +13,13 @@ def splitByDistance(p):
 
 def fusedVariants(memLayout, I, P, M, prune = False):
   D = list()
-  indices = sorted([P[p] for p in I])
+  indices = sorted(P[p] for p in I)
   groups = splitByDistance(indices)
-  groupStrings = [''.join([M[p] for p in sorted(g)]) for g in groups]
-  D = set([s for g in groupStrings for s in allSubstrings(g)])
+  groupStrings = [''.join(M[p] for p in sorted(g)) for g in groups]
+  D = set(s for g in groupStrings for s in allSubstrings(g))
   if prune:
-    D = set([d for d in D if d[0] == M[0]])
-  D = set([d for d in D if memLayout.mayFuse(sorted([P[i] for i in d]))])  
+    D = set(d for d in D if d[0] == M[0])
+  D = set(d for d in D if memLayout.mayFuse(sorted(P[i] for i in d)))  
   return D
 
 def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):

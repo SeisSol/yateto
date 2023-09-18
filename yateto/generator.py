@@ -255,7 +255,11 @@ class Generator(object):
       family.add(indexedName, ast, prefetch, namespace, target=target)
   
   def _headerGuardName(self, namespace, template, fileBaseName):
-    partlist = namespace.upper().split('::') + template[1].upper().split(',') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
+    if template[1] is None:
+      templateparts = []
+    else:
+      templateparts = template[1].upper().split(',')
+    partlist = namespace.upper().split('::') + templateparts + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
 
   def generate(self,

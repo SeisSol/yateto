@@ -705,7 +705,6 @@ class InitializerGenerator(object):
                     header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
                   with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
                     header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-    with header.TemplateStruct(self.TENSOR_NAMESPACE, self._template[1]):
       for namespace, scalar_dict in self.iterate_collect_scalar():
         with header.Struct(namespace):
           for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():        

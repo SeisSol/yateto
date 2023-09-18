@@ -63,7 +63,7 @@ class DeduceIndices(Transformer):
     g = Indices()
     for child in node:
       overlap = g & child.indices
-      if any([g.size()[index] != child.size()[index] for index in overlap]):
+      if any(g.size()[index] != child.size()[index] for index in overlap):
         PrettyPrinter().visit(node)
         raise ValueError('Einsum: Index dimensions do not match: ', g, child.indices, str(child))
       g = g.merged(child.indices - overlap)
@@ -76,7 +76,7 @@ class DeduceIndices(Transformer):
     for child in node:
       self.visit(child, bound)
 
-    ok = all([node[0].indices <= child.indices and child.indices <= node[0].indices for child in node])
+    ok = all(node[0].indices <= child.indices and child.indices <= node[0].indices for child in node)
     if not ok:
       raise ValueError('Add: Indices do not match: ', *[child.indices for child in node])
 
@@ -198,7 +198,7 @@ class EquivalentSparsityPattern(Transformer):
   
   def getEqspp(self, terms, targetIndices):
     # Shortcut if all terms have dense eqspps
-    if all([term.eqspp().is_dense() for term in terms]):
+    if all(term.eqspp().is_dense() for term in terms):
       return aspp.dense(targetIndices.shape())
 
     minTree = opt.strengthReduction(terms, targetIndices, ShapeCostEstimator())

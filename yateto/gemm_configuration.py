@@ -210,7 +210,7 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'thunderx2t99', 'knl', 'skx'}
+    supported_set = {'thunderx2t99', 'knl', 'skx', 'a64fx'}
     if self._arch.name.lower() in supported_set:
       return True
     else:

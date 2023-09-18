@@ -90,7 +90,7 @@ class CopyScaleAddGenerator(object):
         routine_name = forge_generator.get_base_name()
 
         args = [str(alpha),
-                aux.deduce_arg(d.term),
+                aux.deduce_arg(d.term, as_const=True),
                 aux.deduce_arg(d.result),
                 BatchedOperationsAux.NUM_ELEMENTS_NAME,
                 BatchedOperationsAux.FLAGS_NAME,

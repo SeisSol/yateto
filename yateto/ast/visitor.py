@@ -46,7 +46,7 @@ class CachedVisitor(Visitor):
     return result
 
 def addIndent(string, indent):
-  return '\n'.join([indent + line for line in string.splitlines()])
+  return '\n'.join(indent + line for line in string.splitlines())
 
 class PrettyPrinter(Visitor):
   def __init__(self):
@@ -236,9 +236,9 @@ class PrintEquivalentSparsityPatterns(Visitor):
       f.write('%%TensorMarket tensor coordinate real general\n')
       nzs = pattern.nonzero()
       if nzs:
-        f.write('{} {}\n'.format(' '.join([str(s) for s in pattern.shape]), len(nzs[0])))
+        f.write('{} {}\n'.format(' '.join(str(s) for s in pattern.shape), len(nzs[0])))
         for idx in zip(*nzs):
-          f.write('{} {}\n'.format(' '.join([str(i) for i in idx]), float(pattern[idx])))
+          f.write('{} {}\n'.format(' '.join(str(i) for i in idx), float(pattern[idx])))
     nSubplots = 1
     for dim in range(2, eqspp.ndim):
       nSubplots *= eqspp.shape[dim]
@@ -254,7 +254,7 @@ class PrintEquivalentSparsityPatterns(Visitor):
       for index in ndindex(*list(eqspp.shape)[2:]):
         sl = pattern[(slice(None, None), slice(None, None)) + index]
         axs[nSubplot].imshow(sl.astype(bool), cmap=self._cmap, norm=self._norm)
-        axs[nSubplot].set_title('(:,:,{})'.format(','.join([str(i) for i in index])), y=1.2)
+        axs[nSubplot].set_title('(:,:,{})'.format(','.join(str(i) for i in index)), y=1.2)
         nSubplot = nSubplot + 1
     #plt.setp(axs, xticks=arange(eqspp.shape[1]), yticks=arange(eqspp.shape[0]))
     fig.tight_layout()
@@ -286,14 +286,14 @@ class ComputeConstantExpression(Visitor):
     terms = self.generic_visit(node)
     childIndices = [child.indices for child in node]
     assert None not in childIndices and node.indices is not None, 'Use DeduceIndices before {}.'.format(self.__class__.__name__)
-    einsumDescription = ','.join([indices.tostring() for indices in childIndices])
+    einsumDescription = ','.join(indices.tostring() for indices in childIndices)
     einsumDescription = '{}->{}'.format(einsumDescription, node.indices.tostring())
     return einsum(einsumDescription, *terms)
 
   def visit_Add(self, node):
     terms = self.generic_visit(node)
     assert len(terms) > 1
-    permute = lambda indices, tensor: tensor.transpose(tuple([indices.find(idx) for idx in node.indices]))
+    permute = lambda indices, tensor: tensor.transpose(tuple(indices.find(idx) for idx in node.indices))
     return reduce(add, [permute(child.indices, terms[i]) for i,child in enumerate(node)])
 
   def visit_ScalarMultiplication(self, node):

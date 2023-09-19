@@ -137,7 +137,6 @@ def getArchitectureIdentifiedBy(ident):
     'sve512': Architecture(name, precision, 64, False),
     'sve1024': Architecture(name, precision, 128, False),
     'sve2048': Architecture(name, precision, 256, False),
-    'apple-m1': Architecture(name, precision, 16, False),
     'power9': Architecture(name, precision, 16, False),
   }
   return arch[name]

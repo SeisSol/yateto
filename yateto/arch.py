@@ -115,7 +115,7 @@ def _get_name_and_precision(ident):
 def getArchitectureIdentifiedBy(ident):
   name, precision = _get_name_and_precision(ident)
 
-  # NOTE: ibxsmm currently supports prefetch only for KNL kernels
+  # NOTE: libxsmm currently supports prefetch only for KNL kernels
   arch = {
     'noarch': Architecture(name, precision, 16, False),
     'wsm': Architecture(name, precision, 16, False),
@@ -124,10 +124,20 @@ def getArchitectureIdentifiedBy(ident):
     'skx': Architecture(name, precision, 64, True),
     'knc': Architecture(name, precision, 64, False),
     'knl': Architecture(name, precision, 64, True),
+    'naples': Architecture(name, precision, 32, False),
     'rome': Architecture(name, precision, 32, False),
+    'milan': Architecture(name, precision, 32, False),
+    'bergamo': Architecture(name, precision, 64, True),
     'thunderx2t99': Architecture(name, precision, 16, False),
     'a64fx': Architecture(name, precision, 64, True),
-    'power9': Architecture(name, precision, 16, False)
+    'neon': Architecture(name, precision, 16, False),
+    'apple-m1': Architecture(name, precision, 16, False),
+    'sve128': Architecture(name, precision, 16, False),
+    'sve256': Architecture(name, precision, 32, False),
+    'sve512': Architecture(name, precision, 64, False),
+    'sve1024': Architecture(name, precision, 128, False),
+    'sve2048': Architecture(name, precision, 256, False),
+    'power9': Architecture(name, precision, 16, False),
   }
   return arch[name]
 

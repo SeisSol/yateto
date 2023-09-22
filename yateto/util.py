@@ -27,7 +27,7 @@ def create_collection(matrices):
 def tensor_from_constant_expression(name: str,
                                     expression,
                                     target_indices: Indices = None,
-                                    dtype: dtype = np.float128,
+                                    dtype: dtype = np.longdouble,
                                     tensor_args: dict = dict()):
   """
   Computes the result of an expression and returns
@@ -55,7 +55,7 @@ def tensor_collection_from_constant_expression(base_name: str,
                                                expressions,
                                                group_indices,
                                                target_indices: Indices = None,
-                                               dtype=np.float128,
+                                               dtype=np.longdouble,
                                                tensor_args: dict = {}):
   """
   Computes the result of an expression group and returns

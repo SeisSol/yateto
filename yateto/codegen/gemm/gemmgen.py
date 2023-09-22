@@ -399,7 +399,7 @@ class LibxsmmGemmGen(ExecuteGemmGen):
     #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
     libxsmm_flag_str = " | ".join(flags)
 
-    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_SIGONLY" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
+    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_NONE" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
 
     kernel_var_name = f'{routine_name}_var'
     return """

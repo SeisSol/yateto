@@ -162,7 +162,7 @@ class LIBXSMM_JIT(CodeGenerator):
     return Preference.LOW
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512', 'apple-m1'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512', 'apple-m1', "apple-m2"}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -210,7 +210,7 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1'}
+    supported_set = {'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1', 'apple-m2'}
     if self._arch.name.lower() in supported_set:
       return True
     else:
@@ -303,6 +303,8 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'knl' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'apple-m1' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'apple-m2' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'a64fx' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'neon' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'sve128' : [libxsmm_jit, pspamm, openblas, blis, eigen],

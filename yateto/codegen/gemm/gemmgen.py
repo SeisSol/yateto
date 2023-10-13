@@ -268,16 +268,33 @@ class ExecuteGemmGen(RoutineGenerator):
   def _callGenerator(self, argList):
     resultCode = 1
     try:
-      resultCode = subprocess.call([str(arg) for arg in argList])
+      strcmd = [str(arg) for arg in argList]
+      result = subprocess.run(strcmd)
     except OSError:
-      raise RuntimeError('GEMM code generator executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(self._cmd))
-    if resultCode != 0:
-      raise RuntimeError('GEMM code generator executable "{}" failed. Thus, the kernel generation may be incomplete.'.format(self._cmd))
+      raise RuntimeError(f'GEMM code generator executable "{self._cmd}" not found. (Make sure to add the folder containing the executable to your PATH environment variable.)')
+    if result.returncode != 0:
+      raise RuntimeError(f"""GEMM code generator executable "{self._cmd}" failed. Thus, the kernel generation may be incomplete.
+Given command: {' '.join(strcmd)}
+Stdout: {result.stdout}
+Stderr: {result.stderr}""")
   
   def __call__(self, routineName, fileName):
     cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
 
     if self._mode == 'pspamm':
+      pspamm_arch = cpu_arch
+      if cpu_arch == 'a64fx':
+        pspamm_arch = 'arm_sve512'
+      elif cpu_arch in ['apple-m1', 'thunderx2t99', 'neon']:
+        pspamm_arch = 'arm'
+      elif cpu_arch.startswith('sve'):
+        pspamm_arch = f'arm_{cpu_arch}' # TODO(David): rename to sveLEN only
+      elif cpu_arch in ['naples', 'rome', 'milan']:
+        # names are Zen1, Zen2, Zen3, respectively
+        # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
+        pspamm_arch = 'hsw'
+      elif cpu_arch in ['bergamo']:
+        pspamm_arch = 'skx'
       argList = [
         self._cmd,
         self._gemmDescr['M'],
@@ -289,7 +306,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        cpu_arch,
+        pspamm_arch, 
         '--prefetching',
         self._gemmDescr['prefetch'],
         '--output_funcname',
@@ -302,6 +319,13 @@ class ExecuteGemmGen(RoutineGenerator):
       for key, val in self._blockSize.items():
         argList.extend(['--' + key, val])
     else:
+      libxsmm_arch = cpu_arch
+      if cpu_arch in ['naples', 'rome', 'milan']:
+        # names are Zen1, Zen2, Zen3, respectively
+        # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
+        libxsmm_arch = 'hsw'
+      elif cpu_arch in ['bergamo']:
+        libxsmm_arch = 'skx'
       argList = [
         self._cmd,
         'dense',
@@ -317,7 +341,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['beta'],
         self._gemmDescr['alignedA'],
         self._gemmDescr['alignedC'],
-        'hsw' if cpu_arch == 'rome' else cpu_arch, # libxsmm has no support for rome, hsw works well in practice
+        libxsmm_arch, # libxsmm has no support for rome, hsw works well in practice
         self._gemmDescr['prefetch'],
         self._arch.precision + 'P'
       ]
@@ -420,7 +444,7 @@ class LibxsmmGemmGen(ExecuteGemmGen):
     #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
     libxsmm_flag_str = " | ".join(flags)
 
-    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_SIGONLY" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
+    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_NONE" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
 
     kernel_var_name = f'{routine_name}_var'
     return """

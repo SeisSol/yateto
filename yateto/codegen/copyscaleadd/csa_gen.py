@@ -90,7 +90,7 @@ class CopyScaleAddGenerator(object):
         routine_name = forge_generator.get_base_name()
 
         args = [str(alpha),
-                aux.deduce_ptr_arg(d.term),
+                aux.deduce_ptr_arg(d.term, as_const=True),
                 aux.deduce_offset_arg(d.term),
                 aux.deduce_ptr_arg(d.result),
                 aux.deduce_offset_arg(d.result),

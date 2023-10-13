@@ -59,7 +59,7 @@ class Node(ABC):
     pass
 
   def permute(self, indices, spp):
-    perm = tuple([indices.find(idx) for idx in self.indices])
+    perm = tuple(indices.find(idx) for idx in self.indices)
     return spp.transposed(perm)
 
   def _checkMultipleScalarMults(self):
@@ -174,7 +174,7 @@ class Op(Node):
     if str(indices) == str(self.indices):
       return
 
-    p = tuple([self.indices.find(idx) for idx in indices])
+    p = tuple(self.indices.find(idx) for idx in indices)
     if self._eqspp is not None:
       if permuteEqspp:
         self._eqspp = self._eqspp.transposed(p)

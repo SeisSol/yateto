@@ -132,22 +132,29 @@ namespace yateto {
     }
 
     template<typename Head>
-    void isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head) {
-      assert(static_cast<uint_t>(head) >= start[dim]);
-      assert(static_cast<uint_t>(head) < stop[dim]);
+    bool isInRange(const uint_t start[Dim], const uint_t stop[Dim], int dim, Head head) const {
+      return static_cast<uint_t>(head) >= start[dim] && static_cast<uint_t>(head) < stop[dim];
     }
 
     template<typename Head, typename... Tail>
-    void isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head, Tail... tail) {
-      assert(static_cast<uint_t>(head) >= start[dim]);
-      assert(static_cast<uint_t>(head) < stop[dim]);
-      isInRange(start, stop, dim+1, tail...);
+    bool isInRange(const uint_t  start[Dim], const uint_t stop[Dim], int dim, Head head, Tail... tail) const {
+      return static_cast<uint_t>(head) >= start[dim]
+             && static_cast<uint_t>(head) < stop[dim]
+             && isInRange(start, stop, dim+1, tail...);
     }
-  
+
+    template<typename... Entry>
+    bool isInRange(Entry... entry) const {
+      static_assert(sizeof...(entry) == Dim,
+                  "Number of arguments to isInRange(...) does not match Tensor's dimension.");
+      return isInRange(m_start, m_stop, 0, entry...);
+    }
+
     template<typename... Entry>
     real_t& operator()(Entry... entry) {
-      static_assert(sizeof...(entry) == Dim, "Number of arguments to operator() does not match Tensor's dimension.");
-      isInRange(m_start, m_stop, 0, entry...);
+      static_assert(sizeof...(entry) == Dim,
+                        "Number of arguments to operator() does not match Tensor's dimension.");
+      assert(isInRange(entry...));
       return m_values[address(entry...)];
     }
 

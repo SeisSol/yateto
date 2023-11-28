@@ -132,19 +132,19 @@ namespace yateto {
     }
 
     template<typename Head>
-    bool isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head) {
+    bool isInRange(const uint_t start[Dim], const uint_t stop[Dim], int dim, Head head) const {
       return static_cast<uint_t>(head) >= start[dim] && static_cast<uint_t>(head) < stop[dim];
     }
 
     template<typename Head, typename... Tail>
-    bool isInRange(uint_t start[Dim], uint_t stop[Dim], int dim, Head head, Tail... tail) {
+    bool isInRange(const uint_t  start[Dim], const uint_t stop[Dim], int dim, Head head, Tail... tail) const {
       return static_cast<uint_t>(head) >= start[dim]
              && static_cast<uint_t>(head) < stop[dim]
              && isInRange(start, stop, dim+1, tail...);
     }
 
     template<typename... Entry>
-    bool isInRange(Entry... entry) {
+    bool isInRange(Entry... entry) const {
       static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to isInRange(...) does not match Tensor's dimension.");
       return isInRange(m_start, m_stop, 0, entry...);

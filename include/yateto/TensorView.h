@@ -326,7 +326,7 @@ namespace yateto {
       return m_values[addr];
     }
 
-    bool isInRange(uint_t row, uint_t col) {
+    bool isInRange(uint_t row, uint_t col) const {
       assert(col >= 0 && col < this->shape(1));
       uint_t addr = m_colPtr[ col ];
       uint_t stop = m_colPtr[ col+1 ];

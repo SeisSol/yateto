@@ -326,6 +326,20 @@ namespace yateto {
       return m_values[addr];
     }
 
+    bool isInRange(uint_t row, uint_t col) {
+      assert(col >= 0 && col < this->shape(1));
+      uint_t addr = m_colPtr[ col ];
+      uint_t stop = m_colPtr[ col+1 ];
+      while (addr < stop) {
+        if (m_rowInd[addr] == row) {
+          return true;
+        }
+        ++addr;
+      }
+
+      return false;
+    }
+
     real_t& operator[](uint_t entry[2]) {
       return operator()(entry[0], entry[1]);
     }

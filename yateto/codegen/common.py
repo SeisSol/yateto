@@ -1,7 +1,7 @@
 from .. import aspp
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
-
+import kernelforge
 
 class TensorDescription(object):
   def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False):
@@ -98,15 +98,15 @@ class BatchedOperationsAux:
     self.underlying_data_type = underlying_data_type
 
   def _get_ptr_type(self, addressing):
-    return '**' if addressing == 'pointer_based' else '*'
+    return '**' if addressing == kernelforge.common.basic_types.Addressing.PTR_BASED else '*'
 
   def deduce_addresing(self, term):
     if term.is_compute_constant:
-      return 'none'
+      return kernelforge.common.basic_types.Addressing.NONE
     if term.is_temporary:
-      return 'strided'
+      return kernelforge.common.basic_types.Addressing.STRIDED
     else:
-      return 'pointer_based'
+      return kernelforge.common.basic_types.Addressing.PTR_BASED
 
   def deduce_arg(self, term, as_const=False):
     if term.is_compute_constant or term.is_temporary:

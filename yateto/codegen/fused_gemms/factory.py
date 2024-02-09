@@ -1,19 +1,6 @@
 import importlib.util
 import pkg_resources
-gb_spec = importlib.util.find_spec('chainforge')
-try:
-  if gb_spec:
-    gb = gb_spec.loader.load_module()
-    version = pkg_resources.get_distribution('chainforge').version
-    if not version == '0.0.3':
-      raise RuntimeError(f'chainforge version 0.0.3 is requried. Found: {version}. Please, update using `pip3`')
-
-    from .external_generator import FusedGemms
-except RuntimeError as err:
-  raise err
-except:
-  raise ('Found chainforge spec but cannot load. Please, check installation of chainforge')
-
+from .external_generator import FusedGemms
 
 class Description(object):
   def __init__(self, node, result, arguments, add, scalar):
@@ -42,7 +29,7 @@ class Description(object):
 
 
 def generator(arch, descr, target):
-  if target == 'gpu' and gb_spec:
+  if target == 'gpu':
     return FusedGemms(arch, descr)
   else:
     raise NotImplementedError(f'no implementation found for {target} target')

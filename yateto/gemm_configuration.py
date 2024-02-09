@@ -237,17 +237,17 @@ class PSpaMM(CodeGenerator):
     return dict()
 
 
-class GemmForge(CodeGenerator):
+class KernelForge(CodeGenerator):
   def __init__(self, arch, threshold: int = 256):
-    super().__init__('', ['gemmforge_aux.h'], '', arch)
+    super().__init__('', ['kernelforge_aux.h'], '', arch)
     self._threshold = threshold
 
   def _is_arch_supported(self):
-    return self._arch.backend.lower() in {'cuda', 'hip', 'oneapi', 'hipsycl'}
+    return self._arch.backend.lower() in {'cuda', 'hip', 'oneapi', 'hipsycl', 'omptarget', 'targetdart'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
-    return self._is_arch_supported() and not (sparseA or sparseB) and target == 'gpu'
+    return self._is_arch_supported() and not (sparseA and sparseB) and target == 'gpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
     if sparseA and sparseB:
@@ -292,7 +292,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
     blis = BLIS(arch)
     openblas = OpenBLAS(arch)
     eigen = Eigen(arch)
-    forge = GemmForge(arch)
+    forge = KernelForge(arch)
     defaults = {
       'snb' : [libxsmm_jit, libxsmm, mkl, blis, eigen],
       'hsw' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],

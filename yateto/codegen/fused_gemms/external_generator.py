@@ -1,10 +1,12 @@
 from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from ...ast.indices import BoundingBox
 from ..cache import RoutineGenerator, GpuRoutineGenerator
-from chainforge.interfaces import YatetoInterface as yi
-from chainforge.common import GemmDescr, Addressing, FloatingPointType, DataFlowDirection
-from chainforge.common import Context, generate_tmp_matrix
-from chainforge.backend.generator import Generator as ChainForgeGenerator
+from kernelforge.interface import YatetoInterface as yi
+from kernelforge.generators.descriptions import GemmDescr
+from kernelforge.common.basic_types import Addressing, FloatingPointType, DataFlowDirection
+from kernelforge.common.context import Context
+from kernelforge.common.aux import generate_tmp_matrix
+from kernelforge.generators.generator import Generator as KernelForgeGenerator
 
 
 class FusedGemms:
@@ -41,12 +43,12 @@ class FusedGemms:
                       backend=self._arch.backend,
                       fp_type=FloatingPointType.str2enum(self._arch.typename))
 
-    chainforge_generator = ChainForgeGenerator(gemm_list, context)
+    chainforge_generator = KernelForgeGenerator(gemm_list, context)
     chainforge_generator.register()
 
     cpp(f'{self._gen_call_site(chainforge_generator)}')
     routine_name = chainforge_generator.get_base_name()
-    routineCache.addRoutine(routine_name, ChainForgeWriter(chainforge_generator))
+    routineCache.addRoutine(routine_name, KernelForgeWriter(chainforge_generator, context.get_vm().get_headers()))
     return flops
 
   def _can_be_aligned(self, node, res, op1):
@@ -104,11 +106,14 @@ class FusedGemms:
       else:
         return self._tmp_matrices[tensor_variable.name]
 
-    return yi.gen_dense_matrix(range,
+    return yi.gen_matrix(range,
                                tensor.memoryLayout.bbox(),
-                               addressing=Addressing.str2addr(addr_mode),
+                               addressing=addr_mode,
                                name=tensor_variable.name,
-                               is_tmp=tensor_variable.is_temporary)
+                               is_tmp=tensor_variable.is_temporary,
+                               transpose=False,
+                               pattern = None,
+                               values = None)
 
   def _gen_tmp_matix(self, op1, op2, res_node, res_name):
     tmp_matrix = generate_tmp_matrix(op1=self._cache[op1.name],
@@ -123,7 +128,7 @@ class FusedGemms:
     offset_name_map = {}
     for name, matrix in self._cache.items():
       if matrix.direction == DataFlowDirection.SOURCE:
-        ptr_type = f'{self._arch.typename} {Addressing.addr2ptr_type(matrix.addressing)}'
+        ptr_type = f'const {self._arch.typename}{Addressing.addr2ptr_type(matrix.addressing)}'
         mat_name_map[name] = f'const_cast<{ptr_type}>({name})'
       else:
         mat_name_map[name] = name
@@ -156,20 +161,20 @@ class FusedGemms:
     return m, n, k
 
 
-class ChainForgeWriter(GpuRoutineGenerator):
-  def __init__(self, chainforge_generator):
+class KernelForgeWriter(GpuRoutineGenerator):
+  def __init__(self, chainforge_generator, headers):
+    self._headers = headers
     self._generator = chainforge_generator
     self._basename = self._generator.get_base_name()
 
   def __eq__(self, other):
-    if isinstance(other, ChainForgeWriter):
+    if isinstance(other, KernelForgeWriter):
       return self._basename == other._basename
     else:
       return False
 
   def header(self, cpp):
-    #cpp.include('chainforge_aux.h')
-    pass
+    cpp.includes(self._headers)
 
   def __call__(self, routineName, fileName):
     self._generator.generate()

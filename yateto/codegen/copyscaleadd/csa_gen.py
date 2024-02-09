@@ -1,16 +1,9 @@
 from ..common import *
 from ..cache import RoutineGenerator, GpuRoutineGenerator
 from ..common import BatchedOperationsAux
+from kernelforge.common.basic_types import Addressing, FloatingPointType, DataFlowDirection
 
-
-# Optional modules
-import importlib.util
-gf_spec = importlib.util.find_spec('gemmforge')
-try:
-  if gf_spec:
-    gf = gf_spec.loader.load_module()
-except:
-  raise ('Cannot load gemmforge.')
+import kernelforge
 
 
 class CopyScaleAddGenerator(object):
@@ -66,58 +59,62 @@ class CopyScaleAddGenerator(object):
     Returns:
 
     """
-    if (gf_spec):
-      d = self._descr  # type: copyscaleadd.Description
-      m = d.loopRanges[d.result.indices[0]]
-      n = d.loopRanges[d.result.indices[1]]
-      alpha = d.alpha
+    d = self._descr  # type: copyscaleadd.Description
+    m = d.loopRanges[d.result.indices[0]]
+    n = d.loopRanges[d.result.indices[1]]
+    alpha = d.alpha
 
-      aux = BatchedOperationsAux(self._arch.typename)
-      matrix_a = gf.YatetoInterface.produce_dense_matrix((m, n),
-                                                         d.term.memoryLayout.bbox(),
-                                                         addressing=aux.deduce_addresing(d.term),
-                                                         transpose=False)
+    aux = BatchedOperationsAux(self._arch.typename)
+    matrix_a = kernelforge.interface.YatetoInterface.gen_matrix((m, n),
+                                                        d.term.memoryLayout.bbox(),
+                                                        addressing=aux.deduce_addresing(d.term),
+                                                        transpose=False,
+                                                        is_tmp=False,
+                                                        name='A')
 
-      matrix_b = gf.YatetoInterface.produce_dense_matrix((m, n),
-                                                         d.result.memoryLayout.bbox(),
-                                                         addressing=aux.deduce_addresing(d.result),
-                                                         transpose=False)
+    matrix_b = kernelforge.interface.YatetoInterface.gen_matrix((m, n),
+                                                        d.result.memoryLayout.bbox(),
+                                                        addressing=aux.deduce_addresing(d.result),
+                                                        transpose=False,
+                                                        is_tmp=False,
+                                                        name='B')
 
-      try:
-        vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=self._arch.typename)
-        forge_generator = gf.CsaGenerator(vm)
-        forge_generator.set(matrix_a, matrix_b, alpha, d.beta)
-        routine_name = forge_generator.get_base_name()
+    matrix_a.set_data_flow_direction(DataFlowDirection.SOURCE)
+    matrix_b.set_data_flow_direction(DataFlowDirection.SINK)
 
-        args = [str(alpha),
-                aux.deduce_arg(d.term, as_const=True),
-                aux.deduce_arg(d.result),
-                BatchedOperationsAux.NUM_ELEMENTS_NAME,
-                BatchedOperationsAux.FLAGS_NAME,
-                BatchedOperationsAux.STREAM_PTR_NAME]
-        cpp("{}({});".format(routine_name, ', '.join(args)))
+    try:
+      vm = kernelforge.common.context.Context(self._arch.name, self._arch.backend, fp_type=kernelforge.common.basic_types.FloatingPointType.str2enum(self._arch.typename))
+      forge_generator = kernelforge.generators.generator.Generator([
+        kernelforge.generators.descriptions.CSADescr(False, matrix_a, matrix_b, alpha, d.beta, False, False)
+      ], vm)
+      forge_generator.register()
+      routine_name = forge_generator.get_base_name()
 
-        routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator, vm.get_headers()))
+      args = [str(alpha),
+              aux.deduce_arg(d.term, as_const=True),
+              aux.deduce_arg(d.result),
+              BatchedOperationsAux.NUM_ELEMENTS_NAME,
+              BatchedOperationsAux.FLAGS_NAME,
+              BatchedOperationsAux.STREAM_PTR_NAME]
+      cpp("launcher_{}({});".format(routine_name, ', '.join(args)))
 
-      except gf.GenerationError as err:
-        print("ERROR: {}".format(err))
-        raise err
+      routineCache.addRoutine(routine_name, KernelForgeWriter(forge_generator, vm.get_vm().get_headers()))
 
-      return m.size() * n.size()
+    except kernelforge.common.exceptions.GenerationError as err:
+      print("ERROR: {}".format(err))
+      raise err
 
-    else:
-      raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
-                         'e.g., pip3 install gemmforge')
+    return m.size() * n.size()
 
 
-class GemmForgeWriter(GpuRoutineGenerator):
+class KernelForgeWriter(GpuRoutineGenerator):
   def __init__(self, forge_generator, headers):
     self._generator = forge_generator
     self._basename = forge_generator.get_base_name()
     self._headers = headers
 
   def __eq__(self, other):
-    if isinstance(other, GemmForgeWriter):
+    if isinstance(other, KernelForgeWriter):
       return self._basename == other._basename
     else:
       return False
@@ -127,7 +124,7 @@ class GemmForgeWriter(GpuRoutineGenerator):
 
   def __call__(self, routineName, fileName):
     self._generator.generate()
-    declaration = self._generator.get_launcher_header()
+    declaration = self._generator.get_header()
     launcher = self._generator.get_launcher()
     kernel = self._generator.get_kernel()
 

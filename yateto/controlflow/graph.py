@@ -68,7 +68,7 @@ class Expression(object):
     return self.node.eqspp()
 
   def variables(self):
-    return set([var for var in self._variables])
+    return set(var for var in self._variables)
 
   def variableList(self):
     return self._variables
@@ -145,18 +145,16 @@ class ProgramAction(object):
 class FusedActions(object):
   def __init__(self):
     self._actions: List[ProgramAction] = []
-    self._variables: List[Variable] = []
+    self._variables: List[List[Variable]] = []
     self._adds: List[bool] = []
     self._scalars = []
 
   def add(self, action: ProgramAction) -> None:
-    if not isinstance(action.term.node, LoopOverGEMM):
-      raise ValueError(f'fused actions are applied only to LoopOverGEMM, '
-                       f'given: {type(action.term.node)}')
-
     self._actions.append(action)
-    self._variables.append(action.result)
-    self._variables.extend(action.term.variableList())
+    if isinstance(action.term, Variable):
+      self._variables.append([action.result, action.term])
+    else:
+      self._variables.append([action.result, *action.term.variableList()])
     self._adds.append(action.add)
     self._scalars.append(action.scalar)
 
@@ -170,12 +168,15 @@ class FusedActions(object):
   def _gen_expr(self) -> Expression:
     node = FusedGEMMs()
     for action in self._actions:
-      node.add(action.term.node)
+      if isinstance(action.term, Variable):
+        node.add(action.term)
+      else:
+        node.add(action.term.node)
 
     result: Variable = self._actions[-1].result
     return Expression(node=node,
                       memoryLayout=result.memoryLayout(),
-                      variables=self._variables)
+                      variables=[var for varlist in self._variables for var in varlist])
 
   def is_empty(self) -> bool:
     return len(self._actions) == 0

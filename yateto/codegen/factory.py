@@ -57,7 +57,7 @@ class KernelFactory(object):
       self._cpp(f'{declaration} = linearAllocator.allocate({total_size});')
 
 
-  def freeTmp(self):
+  def freeTmp(self, routineCache):
     if self._target == 'cpu':
       for free in self._freeList:
         self._cpp(f'free({free});')
@@ -260,5 +260,4 @@ class UnitTestFactory(KernelFactory):
         memory[addr] = str(float((addr + self._rand) % maxValue)+1.0)
       self.temporary(resultName, size, memory=memory)
     self._rand += 1
-
 

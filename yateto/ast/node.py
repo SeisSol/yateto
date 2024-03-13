@@ -460,11 +460,11 @@ class FusedGEMMs(Op):
   def __init__(self):
     super().__init__()
 
-  def add(self, node):
-    if isinstance(node, LoopOverGEMM):
-      self._children.append(node)
-    else:
-      raise ValueError(f'expected LoopOverGEMM, received: {type(node)}')
+  def add(self, term):
+    self._children.append(term)
+  
+  def addVariable(self, term):
+    self._children.append(term)
 
   def get_children(self):
     return self._children

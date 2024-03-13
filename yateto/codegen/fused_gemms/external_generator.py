@@ -17,6 +17,9 @@ class FusedGemms:
     self._cache = {}
     self._tmp_matrices = {}
 
+  def add_operation(self, operation):
+    pass
+
   def generate(self, cpp, routineCache, cfg):
     self._tmp_matrices = {}
     self._cache = {}
@@ -37,7 +40,7 @@ class FusedGemms:
                                  beta=1.0 if add else 0.0,
                                  strict_match=False,
                                  prefer_align=can_be_aligned))
-      flops += gemm_list[-1].compute_flops()
+      # flops += gemm_list[-1].compute_flops()
 
     context = Context(arch=self._arch.name,
                       backend=self._arch.backend,
@@ -118,8 +121,8 @@ class FusedGemms:
   def _gen_tmp_matix(self, op1, op2, res_node, res_name):
     tmp_matrix = generate_tmp_matrix(op1=self._cache[op1.name],
                                      op2=self._cache[op2.name],
-                                     trans_op1=res_node.transA(),
-                                     trans_op2=res_node.transB())
+                                     trans_a=res_node.transA(),
+                                     trans_b=res_node.transB())
     self._tmp_matrices[res_name] = tmp_matrix
     return tmp_matrix
 
@@ -142,8 +145,6 @@ class FusedGemms:
     alpha = self._descr.scalar[-1]
     return generator.generate_call_site(mat_name_map,
                                         offset_name_map,
-                                        alpha,
-                                        beta,
                                         BatchedOperationsAux.NUM_ELEMENTS_NAME,
                                         BatchedOperationsAux.FLAGS_NAME,
                                         BatchedOperationsAux.STREAM_PTR_NAME)
@@ -163,7 +164,7 @@ class FusedGemms:
 
 class KernelForgeWriter(GpuRoutineGenerator):
   def __init__(self, chainforge_generator, headers):
-    self._headers = headers
+    self._headers = list(headers) + list(chainforge_generator.get_helper_headers())
     self._generator = chainforge_generator
     self._basename = self._generator.get_base_name()
 

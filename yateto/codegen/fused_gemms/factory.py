@@ -17,11 +17,10 @@ class Description(object):
 
   def __next__(self):
     index = self._inter_counter
-    args_index = 3 * index
     self._inter_counter += 1
     try:
       return (self.node.get_child(index),
-              self.args[args_index:args_index + 3],
+              self.args[index],
               self.add[index],
               self.scalar[index])
     except IndexError:

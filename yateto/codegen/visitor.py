@@ -9,6 +9,7 @@ from ..controlflow.graph import Variable
 from ..type import Tensor
 from .code import Cpp
 from .factory import *
+from .gpukernel import GpuKernelFactory
 from .common import BatchedOperationsAux
 from ..type import Scalar
 
@@ -177,9 +178,14 @@ class OptimisedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = OptimisedKernelFactory(fcpp, self._arch, target)
+      if target == 'cpu':
+        factory = OptimisedKernelFactory(fcpp, self._arch, target)
+      elif target == 'gpu':
+        factory = GpuKernelFactory(fcpp, self._arch, target)
+      else:
+        raise NotImplementedError(f'Unknown target {target}')
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
-      factory.freeTmp()
+      factory.freeTmp(self._routineCache)
       factory.reset_stream()
       factory.reset_flags()
       function = functionIO.getvalue()    
@@ -513,7 +519,7 @@ class UnitTestGenerator(KernelGenerator):
         if var.writable:
           factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout()))
 
-      factory.freeTmp()
+      factory.freeTmp(None)
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'

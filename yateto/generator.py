@@ -101,9 +101,6 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
-    if self.target == 'gpu':
-      self.cfg = FindFusedGemms().visit(self.cfg)
-      self.cfg = LivenessAnalysis().visit(self.cfg)
 
 class KernelFamily(object):
   GROUP_INDEX = r'\((0|[1-9]\d*)\)'

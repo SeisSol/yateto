@@ -54,10 +54,6 @@ class Generic(object):
     
     hasOuterLoops = len(d.outerLoopIndices) > 0
 
-    if hasOuterLoops and self._target == 'gpu':
-      raise RuntimeError("Loop over GEMM with the outer loop hasn't been implemented yet "
-                         "for the GPU-like architectures")
-
     outerAname = '_A' if hasOuterLoops else d.leftTerm.name
     outerBname = '_B' if hasOuterLoops else d.rightTerm.name
     outerCname = '_C' if hasOuterLoops else d.result.name

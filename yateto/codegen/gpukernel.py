@@ -11,7 +11,7 @@ from kernelforge.generators.descriptions import GemmDescr
 from kernelforge.common.basic_types import Addressing, FloatingPointType, DataFlowDirection
 from kernelforge.common.context import Context
 from kernelforge.common.aux import generate_tmp_tensor
-from kernelforge.common.matrix.tensor import Tensor
+from kernelforge.common.matrix.tensor import Tensor, TensorWrapper, SubTensor
 from kernelforge.generators.generator import Generator as KernelForgeGenerator
 
 class GpuKernelGenerator:
@@ -56,18 +56,20 @@ class GpuKernelGenerator:
 
   def _cache_matrices(self, dest, ops, target, permute):
     can_be_aligned = self._can_be_aligned(dest, ops, target, permute)
-    if can_be_aligned:
-      aligned_m = m.aligned(self._arch)
-      m.stop = aligned_m.stop
 
-    def make_tensor(op):
+    def make_tensor(op, dims):
       if isinstance(op, Scalar):
         entry = self._add_scalar(op)
         entry_name = op.name()
       else:
+        currentRange = BoundingBox.fromSpp(op.eqspp)
+        if can_be_aligned:
+          for i, dim in enumerate(dims):
+            if dim == 0:
+              currentRange[i] = currentRange[i].aligned(self._arch)
         entry = self._get_kernelforge_matrix(tensor=op,
                                             tensor_variable=op,
-                                            range=BoundingBox.fromSpp(op.eqspp))
+                                            range=currentRange)
         entry_name = op.name
 
       if not (entry_name in self._cache and entry.is_same(self._cache[entry_name])):
@@ -76,16 +78,17 @@ class GpuKernelGenerator:
     # no add onto a matrix that doesn't exist (TODO: check if that's always the case)
     assert not(dest.is_temporary and dest in ops)
 
-    for op in ops:
-      make_tensor(op)
+    for op, optarget in zip(ops, target):
+      make_tensor(op, optarget)
 
     if dest.is_temporary: # (dest is never a scalar---for the time being)
       self._cache[dest.name] = self._gen_tmp_matix(ops, target, permute, dest.name)
     else:
-      make_tensor(dest)
+      make_tensor(dest, [i for i in range(len(dest.indices))])
 
   def _add_scalar(self, scalar):
-    self._tmp_matrices[scalar.name()] = Tensor([], Addressing.SCALAR, alias=scalar.name())
+    tensor = Tensor([], Addressing.SCALAR, alias=scalar.name())
+    self._tmp_matrices[scalar.name()] = tensor # SubTensor(tensor, tensor.bbox)
     return self._tmp_matrices[scalar.name()]
 
   def _get_kernelforge_matrix(self, tensor, tensor_variable, range):
@@ -102,7 +105,7 @@ class GpuKernelGenerator:
                                addressing=addr_mode,
                                name=tensor_variable.name,
                                is_tmp=tensor_variable.is_temporary,
-                               transpose=False,
+                               permute=None,
                                pattern = None,
                                values = None)
 
@@ -225,7 +228,7 @@ class GpuKernelFactory(KernelFactory):
     #   opsVar += [node]
     #   target += [[i for i in range(result.TODO)]]
     #   permute += [[i for i in range(result.TODO)]]
-    assert not add
+    # assert not add
     
     return self.generator.add_operation(dest, ops, target, permute)
 

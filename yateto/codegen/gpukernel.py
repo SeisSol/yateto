@@ -22,12 +22,12 @@ class GpuKernelGenerator:
     self._tmp_matrices = {}
     self._descr_list = []
 
-  def add_operation(self, dest, ops, target, permute):
+  def add_operation(self, dest, ops, target, permute, add):
       self._cache_matrices(dest, ops, target, permute)
       can_be_aligned = self._can_be_aligned(dest, ops, target, permute)
       self._descr_list.append(MultilinearDescr(self._cache[dest.name],
                                 [self._cache[op.name() if isinstance(op, Scalar) else op.name] for op in ops],
-                                target, permute,
+                                target, permute, add=add,
                                  strict_match=False,
                                  prefer_align=can_be_aligned))
       return 0# self._descr_list[-1].get_flops()
@@ -50,7 +50,7 @@ class GpuKernelGenerator:
     aligned = dest.memoryLayout.alignedStride()
     for i, op in enumerate(ops):
       if 0 in target[i]:
-        aligned &= dest.memoryLayout.alignedStride() and permute == [j for j,_ in enumerate(op.indices)]
+        aligned &= dest.memoryLayout.alignedStride() and permute[i][0] == 0
     
     return aligned
 
@@ -62,14 +62,18 @@ class GpuKernelGenerator:
         entry = self._add_scalar(op)
         entry_name = op.name()
       else:
-        currentRange = BoundingBox.fromSpp(op.eqspp)
+        currentRangePre = BoundingBox.fromSpp(op.eqspp)
+        currentRange = list(currentRangePre)
+        currentShape = list(op.memoryLayout.shape())
         if can_be_aligned:
           for i, dim in enumerate(dims):
             if dim == 0:
               currentRange[i] = currentRange[i].aligned(self._arch)
+              currentShape[i] = max(currentShape[i], currentRange[i].size())
         entry = self._get_kernelforge_matrix(tensor=op,
                                             tensor_variable=op,
-                                            range=currentRange)
+                                            shape=currentShape,
+                                            bboxrange=currentRange)
         entry_name = op.name
 
       if not (entry_name in self._cache and entry.is_same(self._cache[entry_name])):
@@ -91,7 +95,7 @@ class GpuKernelGenerator:
     self._tmp_matrices[scalar.name()] = tensor # SubTensor(tensor, tensor.bbox)
     return self._tmp_matrices[scalar.name()]
 
-  def _get_kernelforge_matrix(self, tensor, tensor_variable, range):
+  def _get_kernelforge_matrix(self, tensor, tensor_variable, shape, bboxrange):
     addr_mode = self._batch_aux.deduce_addresing(tensor)
     if tensor_variable.is_temporary:
       if not tensor_variable.name in self._tmp_matrices:
@@ -100,14 +104,14 @@ class GpuKernelGenerator:
       else:
         return self._tmp_matrices[tensor_variable.name]
 
-    return yi.gen_matrix(range,
-                               tensor.memoryLayout.bbox(),
+    return yi.gen_matrix(shape,
+                               bboxrange,
                                addressing=addr_mode,
                                name=tensor_variable.name,
                                is_tmp=tensor_variable.is_temporary,
                                permute=None,
-                               pattern = None,
-                               values = None)
+                               pattern = tensor_variable.eqspp,
+                               values = tensor_variable.eqspp)
 
   def _gen_tmp_matix(self, ops, target, permute, res_name):
     # TODO: ignore scalars here?
@@ -184,7 +188,6 @@ class GpuKernelFactory(KernelFactory):
   def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     return self.handle(IndexedTensorDescription.fromNode(result, node), [IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()), IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())], add, scalar, node.transA(), node.transB())
-    # loopIndices
   
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
@@ -230,5 +233,4 @@ class GpuKernelFactory(KernelFactory):
     #   permute += [[i for i in range(result.TODO)]]
     # assert not add
     
-    return self.generator.add_operation(dest, ops, target, permute)
-
+    return self.generator.add_operation(dest, ops, target, permute, add)

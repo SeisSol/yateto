@@ -39,11 +39,11 @@ class Generic(object):
     return forLoops(cpp, d.result.indices, d.loopRanges, ProductBody())
 
   def _generateSparseDense(self, cpp):
-    raise NotImplementedError
+    return self._generateSparseSparse(cpp)
 
   def _generateSparseSparse(self, cpp):
     d = self._descr
-    assert d.isACsc and d.isBCsc
+    # assert d.isACsc and d.isBCsc
 
     if not d.add:
       initializeWithZero(cpp, self._arch, d.result)

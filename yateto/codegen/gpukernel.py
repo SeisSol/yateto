@@ -160,7 +160,7 @@ class KernelForgeWriter(GpuRoutineGenerator):
     launcher = self._generator.get_launcher()
     kernel = self._generator.get_kernel()
 
-    with open(fileName, 'a') as file:
+    with open(fileName, 'a', encoding='utf-8') as file:
       file.write(kernel)
       file.write(launcher)
 

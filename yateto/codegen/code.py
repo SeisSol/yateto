@@ -111,7 +111,7 @@ class Cpp:
     self.indent = 0
     
   def __enter__(self):
-    self.out = open(self.fileHandle, 'w+') if isinstance(self.fileHandle, str) else self.fileHandle
+    self.out = open(self.fileHandle, 'w+', encoding='utf-8') if isinstance(self.fileHandle, str) else self.fileHandle
     return self
     
   def __exit__(self, type, value, traceback):

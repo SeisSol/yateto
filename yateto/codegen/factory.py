@@ -3,7 +3,7 @@ from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
 from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
-from . import copyscaleadd, indexsum, log, product, fused_gemms
+from . import copyscaleadd, indexsum, log, product
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -106,11 +106,6 @@ class OptimisedKernelFactory(KernelFactory):
       prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description, self._target)
-    return generator.generate(self._cpp, routineCache, gemm_cfg)
-
-  def create_FusedGEMMs(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
-    description = fused_gemms.Description(node, result, arguments, add, scalar)
-    generator = fused_gemms.generator(self._arch, description, self._target)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
   
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):

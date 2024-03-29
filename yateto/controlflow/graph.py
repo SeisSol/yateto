@@ -1,4 +1,3 @@
-from ..ast.node import Node, FusedGEMMs, LoopOverGEMM
 from collections import OrderedDict
 from typing import Dict, List
 
@@ -141,55 +140,9 @@ class ProgramAction(object):
     self.term.setWritable(name)
 
 
-# TODO: probably should be a subclass of ProgramAction
-class FusedActions(object):
-  def __init__(self):
-    self._actions: List[ProgramAction] = []
-    self._variables: List[List[Variable]] = []
-    self._adds: List[bool] = []
-    self._scalars = []
-
-  def add(self, action: ProgramAction) -> None:
-    self._actions.append(action)
-    if isinstance(action.term, Variable):
-      self._variables.append([action.result, action.term])
-    else:
-      self._variables.append([action.result, *action.term.variableList()])
-    self._adds.append(action.add)
-    self._scalars.append(action.scalar)
-
-  def gen_program_action(self) -> ProgramAction:
-    last_action: ProgramAction = self._actions[-1]
-    return ProgramAction(result=last_action.result,
-                         term=self._gen_expr(),
-                         add=self._adds,
-                         scalar=self._scalars)
-
-  def _gen_expr(self) -> Expression:
-    node = FusedGEMMs()
-    for action in self._actions:
-      if isinstance(action.term, Variable):
-        node.add(action.term)
-      else:
-        node.add(action.term.node)
-
-    result: Variable = self._actions[-1].result
-    return Expression(node=node,
-                      memoryLayout=result.memoryLayout(),
-                      variables=[var for varlist in self._variables for var in varlist])
-
-  def is_empty(self) -> bool:
-    return len(self._actions) == 0
-
-
 class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
     self.live = None
     self.initBuffer = None
     self.bufferMap = None
-
-
-class FusedProgramPoint(ProgramPoint):
-  def __init__(self, action: FusedActions):
-    super().__init__(action.gen_program_action())

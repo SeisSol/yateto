@@ -454,29 +454,3 @@ class LoopOverGEMM(BinOp):
       return False
 
     return True if len(left_indices - right_indices) == 1 else False
-
-
-class FusedGEMMs(Op):
-  def __init__(self):
-    super().__init__()
-
-  def add(self, term):
-    self._children.append(term)
-  
-  def addVariable(self, term):
-    self._children.append(term)
-
-  def get_children(self):
-    return self._children
-
-  def get_child(self, index):
-    return self._children[index]
-
-  def nonZeroFlops(self):
-    nzFlops = 0
-    for child in self._children:
-      nzFlops += child.nonZeroFlops()
-    return nzFlops
-
-  def is_empty(self):
-    return len(self._children) == 0

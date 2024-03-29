@@ -69,7 +69,7 @@ class GpuKernelGenerator:
           for i, dim in enumerate(dims):
             if dim == 0:
               currentRange[i] = currentRange[i].aligned(self._arch)
-              currentShape[i] = max(currentShape[i], currentRange[i].size())
+              currentShape[i] = max(currentShape[i], currentRange[i].stop)
         entry = self._get_kernelforge_matrix(tensor=op,
                                             tensor_variable=op,
                                             shape=currentShape,
@@ -225,12 +225,5 @@ class GpuKernelFactory(KernelFactory):
       ops += [scalar]
       target += [[]]
       permute += [[]]
-    
-    # if add:
-    #   ops += [result]
-    #   opsVar += [node]
-    #   target += [[i for i in range(result.TODO)]]
-    #   permute += [[i for i in range(result.TODO)]]
-    # assert not add
     
     return self.generator.add_operation(dest, ops, target, permute, add)

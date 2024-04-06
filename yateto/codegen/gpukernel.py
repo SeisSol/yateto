@@ -69,7 +69,9 @@ class GpuKernelGenerator:
           for i, dim in enumerate(dims):
             if dim == 0:
               currentRange[i] = currentRange[i].aligned(self._arch)
-              currentShape[i] = max(currentShape[i], currentRange[i].stop)
+
+              # unstable/incorrect? TODO: check (for now, it should work)
+              currentShape[i] = max(self._arch.alignedUpper(currentShape[i]), currentRange[i].stop)
         entry = self._get_kernelforge_matrix(tensor=op,
                                             tensor_variable=op,
                                             shape=currentShape,

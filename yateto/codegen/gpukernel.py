@@ -3,7 +3,7 @@ from kernelforge.generators.descriptions import MultilinearDescr
 from common import *
 
 from .common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux
-from ..ast.indices import BoundingBox
+from ..ast.indices import BoundingBox, Range
 from ..type import Scalar
 from .cache import RoutineGenerator, GpuRoutineGenerator
 from kernelforge.interface import YatetoInterface as yi
@@ -47,6 +47,7 @@ class GpuKernelGenerator:
     routineCache.addRoutine(routine_name, KernelForgeWriter(kernelforge_generator, context.get_vm().get_headers()))
 
   def _can_be_aligned(self, dest, ops, target, permute):
+    # TODO: useful?
     aligned = dest.memoryLayout.alignedStride()
     for i, op in enumerate(ops):
       if 0 in target[i]:
@@ -62,16 +63,15 @@ class GpuKernelGenerator:
         entry = self._add_scalar(op)
         entry_name = op.name()
       else:
-        currentRangePre = BoundingBox.fromSpp(op.eqspp)
-        currentRange = list(currentRangePre)
-        currentShape = list(op.memoryLayout.shape())
+        # TODO: refine
+        currentPreShape = list(BoundingBox.fromSpp(op.eqspp))
         if can_be_aligned:
           for i, dim in enumerate(dims):
-            if dim == 0:
-              currentRange[i] = currentRange[i].aligned(self._arch)
-
-              # unstable/incorrect? TODO: check (for now, it should work)
-              currentShape[i] = max(self._arch.alignedUpper(currentShape[i]), currentRange[i].stop)
+            if i == 0 and op.memoryLayout.alignedStride(): # previously: dim == 0
+              currentPreShape[i] = currentPreShape[i].aligned(self._arch)
+        currentShape = [b.stop for b in currentPreShape]
+        currentRange = list(BoundingBox(Range(0, b) for b in currentShape))
+              
         entry = self._get_kernelforge_matrix(tensor=op,
                                             tensor_variable=op,
                                             shape=currentShape,

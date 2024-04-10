@@ -61,7 +61,7 @@ def __processMatrix(name, shape, entries, clones, transpose, alignStride, namesp
                          'Please, check your input file and rename')
 
     matrices[name] = Tensor(name=name,
-                            shape=shape,
+                            shape=tuple(shape),
                             spp=mtx,
                             alignStride=alignStride(name),
                             namespace=namespace)

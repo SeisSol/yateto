@@ -40,10 +40,10 @@ class KernelFactory(object):
                     size,
                     self._arch.typename))
         if iniZero:
-          if memory:
-            for i, data in enumerate(memory):
-              self._cpp(f'{bufname}[{i}] = {data};')
           self._cpp.memset(bufname, size, self._arch.typename)
+        if memory:
+          for i, data in enumerate(memory):
+            self._cpp(f'{bufname}[{i}] = {data};')
         self._freeList.append(bufname)
       else:
         ini = ''

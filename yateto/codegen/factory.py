@@ -30,8 +30,6 @@ class KernelFactory(object):
 
     if self._target == 'cpu':
       if self._arch.onHeap(size):
-        if memory:
-          raise NotImplementedError('Direct temporary initialization is not supported for heap-allocated memory.')
         if len(self._freeList) == 0:
           self._cpp('int {};'.format(self.ERROR_NAME))
         self._cpp('{}* {};'.format(self._arch.typename, bufname))
@@ -42,6 +40,9 @@ class KernelFactory(object):
                     size,
                     self._arch.typename))
         if iniZero:
+          if memory:
+            for i, data in enumerate(memory):
+              self._cpp(f'{bufname}[{i}] = {data};')
           self._cpp.memset(bufname, size, self._arch.typename)
         self._freeList.append(bufname)
       else:

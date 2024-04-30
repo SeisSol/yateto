@@ -258,7 +258,7 @@ class GemmForge(CodeGenerator):
       return Preference.LOWEST
     return Preference.HIGH
 
-class libsmm(CodeGenerator):
+class tinytc(CodeGenerator):
   def __init__(self, arch):
     super().__init__('', [], '', arch)
     self._arch = arch
@@ -336,7 +336,8 @@ class DefaultGeneratorCollection(GeneratorCollection):
       self.gemmTools = defaults[arch.host_name]
       if arch.is_accelerator:
         if arch.backend == 'oneapi':
-            self.gemmTools.extend([libsmm(arch)])
-        self.gemmTools.extend([forge])
+            self.gemmTools.extend([tinytc(arch)])
+        else:
+            self.gemmTools.extend([forge])
     else:
       raise Exception("Default generator collection for architecture {} is missing.".format(arch))

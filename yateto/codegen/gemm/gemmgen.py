@@ -2,9 +2,10 @@ import hashlib
 import subprocess
 import tempfile
 from abc import ABC
+from collections import namedtuple
 
 from ..cache import RoutineGenerator, GpuRoutineGenerator
-from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, libsmm
+from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
 from ..common import BatchedOperationsAux
 import importlib.util
 
@@ -156,7 +157,7 @@ class GemmGen(object):
       else:
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
-    elif isinstance(self._gemm_cfg, libsmm):
+    elif isinstance(self._gemm_cfg, tinytc):
       aux = BatchedOperationsAux(self._arch.typename)
       gemm = {
         'M':            m.size(),
@@ -176,7 +177,7 @@ class GemmGen(object):
         'transA': d.transA,
         'transB': d.transB,
       }
-      routine_name = 'libsmm_wrapper_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_transA{transA}_transB{transB}'.format(**gemm)
+      routine_name = 'tinytc_wrapper_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_transA{transA}_transB{transB}'.format(**gemm)
 
 
       offset_a = self._offset(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
@@ -194,7 +195,7 @@ class GemmGen(object):
 
       cpp(f'{routine_name}({args});')
 
-      routineCache.addRoutine(routine_name, LibsmmGemmGen(self._arch, gemm))
+      routineCache.addRoutine(routine_name, TinytcGemmGen(self._arch, gemm))
     else:
       gemm = {
         'M':            m.size(),
@@ -499,7 +500,7 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
       file.write(self._call(routineName))
     return func_signature + ";"
 
-class LibsmmGemmGen(GpuRoutineGenerator):
+class TinytcGemmGen(GpuRoutineGenerator):
   def __init__(self, arch, gemm_descr):
       self.arch = arch
       self.gemm_descr = gemm_descr
@@ -508,9 +509,11 @@ class LibsmmGemmGen(GpuRoutineGenerator):
     return self.arch == other.arch and self.gemm_descr == other.gemm_descr
 
   def header(self, cpp):
-    cpp.include('smm/configuration.hpp')
-    cpp.include('smm/gemm.hpp')
-    cpp.includeSys('CL/sycl.hpp')
+    cpp.include('tinytc/tinytc.hpp')
+    cpp.include('tinytc/tinytc_sycl.hpp')
+    cpp.includeSys('sycl/sycl.hpp')
+    cpp.includeSys('stdexcept')
+    cpp.includeSys('utility')
 
   def _functionSignature(self, routineName):
     typ = self.arch.typename
@@ -520,30 +523,99 @@ class LibsmmGemmGen(GpuRoutineGenerator):
     starsC = stars(self.gemm_descr['addrC'])
     return f'void {routineName}({typ} const{starsA} A, int offsetA, {typ} const{starsB} B, int offsetB, {typ}{starsC} C, int offsetC, unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME}, void* {BatchedOperationsAux.STREAM_PTR_NAME})'
 
-  def address_mode(self, addr, dist):
+  def memref_type(self, addr, M, N, stride, dist):
       if addr == 'pointer_based':
-          return 'smm::pointers{}'
+          return f'group<memref<{M}x{N},strided<1,{stride}>>, offset: ?>'
       elif addr == 'none':
-          return 'smm::strided{0}'
+          return f'memref<{M}x{N},strided<1,{stride}>>'
       elif addr == 'strided':
-          return f'smm::strided{{{dist}}}'
+          return f'memref<{M}x{N}x?,strided<1,{stride},{dist}>>'
       raise NameError(addr)
 
   def __call__(self, routineName, fileName):
     func_signature = self._functionSignature(routineName)
     with open(fileName, "a") as f:
-      aA = self.address_mode(self.gemm_descr['addrA'], self.gemm_descr['distA'])
-      aB = self.address_mode(self.gemm_descr['addrB'], self.gemm_descr['distB'])
-      aC = self.address_mode(self.gemm_descr['addrC'], self.gemm_descr['distC'])
+      scalar_ty = 'f64' if self.arch.bytesPerReal == 8 else 'f32'
+      gd = self.gemm_descr
 
-      T = lambda x: 'smm::transpose::T' if x else 'smm::transpose::N'
-      tA = T(self.gemm_descr['transA'])
-      tB = T(self.gemm_descr['transB'])
-      alpha = self.gemm_descr['alpha']
-      beta = self.gemm_descr['beta']
+      Operand = namedtuple('Operand', ['name', 'addr', 'rows', 'cols', 'ld', 'dist'])
+      def data_type(op):
+        if op.addr == 'pointer_based':
+          return f'group<memref<{scalar_ty}x{op.rows}x{op.cols},strided<1,{op.ld}>, offset: ?>'
+        elif op.addr == 'strided':
+          return f'memref<{scalar_ty}x{op.rows}x{op.cols}x?,strided<1,{op.ld},{op.dist}>>'
+        elif op.addr == 'none':
+          return f'memref<{scalar_ty}x{op.rows}x{op.cols},strided<1,{op.ld}>>'
+        else:
+          raise NameError(op.addr)
+      def load_inst(op):
+        if op.addr == 'pointer_based':
+          return f'load %{op.name}[%gid] : {data_type(op)}'
+        elif op.addr == 'strided':
+          return f'load %{op.name}[:,:,%gid] : {data_type(op)}'
+        elif op.addr == 'none':
+          return f'load %{op.name}[:,:] : {data_type(op)}'
+        else:
+          raise NameError(op.addr)
+      def mat_type(op):
+        return f'memref<{scalar_ty}x{op.rows}x{op.cols},strided<1,{op.ld}>>'
+      def call_args(op):
+        if op.addr == 'pointer_based':
+          return [op.name, f'offset{op.name}']
+        elif op.addr == 'strided':
+          return [op.name, f'{BatchedOperationsAux.NUM_ELEMENTS_NAME}']
+        elif op.addr == 'none':
+          return [op.name]
+        else:
+          raise NameError(op.addr)
+
+      A = Operand('A', gd['addrA'], gd['M'], gd['K'], gd['LDA'], gd['distA'])
+      B = Operand('B', gd['addrB'], gd['K'], gd['N'], gd['LDB'], gd['distB'])
+      C = Operand('C', gd['addrC'], gd['M'], gd['N'], gd['LDC'], gd['distC'])
+      ops = [A, B, C]
+
+      T = lambda x: 't' if x else 'n'
+      tA = T(gd['transA'])
+      tB = T(gd['transB'])
+      alpha = gd['alpha']
+      beta = gd['beta']
 
       f.write(f'{func_signature} {{\n')
-      f.write('  static auto kernel = smm::make_gemm<{typ}>({tA}, {tB}, {M}, {N}, {K}, {LDA}, {aA}, {LDB}, {aB}, {LDC}, {aC}, *static_cast<::sycl::queue*>({stream}));\n'.format(typ=self.arch.typename, aA=aA, aB=aB, aC=aC, tA=tA, tB=tB, stream=BatchedOperationsAux.STREAM_PTR_NAME, **self.gemm_descr))
-      f.write(f'  kernel({alpha}, A, B, {beta}, C, {BatchedOperationsAux.NUM_ELEMENTS_NAME}).wait();\n')
-      f.write('}\n')
+      f.write("""    struct custom_kernel { ::sycl::kernel kernel; ::sycl::range<3u> group_size; };
+    static auto k = [&](::sycl::queue const& queue) -> custom_kernel {
+        static const std::string source = R\"tinytc(
+func @gemm(""")
+      f.write(', '.join([f'%{op.name}: {data_type(op)}' for op in ops]))
+      f.write(""") {
+%gid = group_id
+""")
+      for op in ops:
+        f.write(f'%{op.name.lower()} = {load_inst(op)}\n')
+      f.write(f'gemm.{tA}.{tB} {alpha}, %a, %b, {beta}, %c : {scalar_ty}, {mat_type(A)}, {mat_type(B)}, {scalar_ty}, {mat_type(C)}\n')
+      f.write("""})tinytc\";
+    auto source_ctx = tinytc::make_source_context();
+        try {
+	        auto program = tinytc::parse_string(source, source_ctx);
+            auto info = tinytc::make_core_info(queue.get_device());
+	        auto binary = tinytc::compile_to_binary(program, info, tinytc::bundle_format::native, source_ctx);
+	        auto bundle = tinytc::make_kernel_bundle(queue.get_context(), queue.get_device(), binary);
+	        auto kernel = tinytc::make_kernel(bundle, "gemm");
+            auto group_size = tinytc::get_group_size(kernel);
+            return {std::move(kernel), std::move(group_size)};
+        } catch (tinytc::status const& st) {
+            throw std::runtime_error(source_ctx.get_error_log());
+        }
+    }""")
+      f.write(f'(*static_cast<::sycl::queue*>({BatchedOperationsAux.STREAM_PTR_NAME}));\n')
+      args = []
+      for op in ops:
+        args += call_args(op)
+      args_str = ', '.join(args)
+      f.write(f"""    static_cast<::sycl::queue*>({BatchedOperationsAux.STREAM_PTR_NAME})->submit([&](::sycl::handler &h) {{
+        h.set_args({args_str});
+        h.parallel_for(::sycl::nd_range{{tinytc::get_global_size({BatchedOperationsAux.NUM_ELEMENTS_NAME}, k.group_size), k.group_size}}, k.kernel);
+    }}).wait();
+}}
+""")
+
     return func_signature + ";"

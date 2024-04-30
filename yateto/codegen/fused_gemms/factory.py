@@ -15,6 +15,7 @@ except:
   raise ('Found chainforge spec but cannot load. Please, check installation of chainforge')
 
 from .tinytc import FusedGemmsTinytc
+from ...gemm_configuration import tinytc
 
 
 class Description(object):
@@ -43,10 +44,11 @@ class Description(object):
       raise StopIteration
 
 
-def generator(arch, descr, target):
-  if target == 'gpu' and gb_spec:
-    return FusedGemms(arch, descr)
-  elif target == 'gpu':
-    return FusedGemmsTinytc(arch, descr)
-  else:
-    raise NotImplementedError(f'no implementation found for {target} target')
+def generator(arch, descr, gemm_cfg, target):
+  if target == 'gpu':
+      hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
+      if hasTinytc:
+          return FusedGemmsTinytc(arch, descr)
+      elif gb_spec:
+          return FusedGemms(arch, descr)
+  raise NotImplementedError(f'no implementation found for {target} target')

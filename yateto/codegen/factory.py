@@ -111,7 +111,7 @@ class OptimisedKernelFactory(KernelFactory):
 
   def create_FusedGEMMs(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = fused_gemms.Description(node, result, arguments, add, scalar)
-    generator = fused_gemms.generator(self._arch, description, self._target)
+    generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
   
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):

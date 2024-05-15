@@ -596,9 +596,7 @@ func @gemm(""")
     auto source_ctx = tinytc::make_source_context();
         try {
 	        auto program = tinytc::parse_string(source, source_ctx);
-            auto info = tinytc::make_core_info(queue.get_device());
-	        auto binary = tinytc::compile_to_binary(program, info, tinytc::bundle_format::native, source_ctx);
-	        auto bundle = tinytc::make_kernel_bundle(queue.get_context(), queue.get_device(), binary);
+            auto bundle = tinytc::make_kernel_bundle(queue.get_context(), queue.get_device(), std::move(program), 0, source_ctx);
 	        auto kernel = tinytc::make_kernel(bundle, "gemm");
             auto group_size = tinytc::get_group_size(kernel);
             return {std::move(kernel), std::move(group_size)};

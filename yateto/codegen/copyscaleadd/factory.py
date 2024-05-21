@@ -1,6 +1,19 @@
 from ..common import *
 from .generic import Generic
-from .csa_gen import CopyScaleAddGenerator
+from ...gemm_configuration import tinytc
+from .tinytc import CopyScaleAddTinytc
+
+import importlib
+gf_spec = importlib.util.find_spec('gemmforge')
+try:
+  if gf_spec:
+    gf = gf_spec.loader.load_module()
+  from .csa_gen import CopyScaleAddGenerator
+except RuntimeError as err:
+  raise err
+except:
+  raise ('gemmforge module is not found. You can install it with pip3. e.g., pip3 install gemmforge')
+
 
 class Description(object):
   def __init__(self, alpha, beta, result: IndexedTensorDescription, term: IndexedTensorDescription):
@@ -20,5 +33,13 @@ class Description(object):
     self.loopRanges = rA
     
 
-def generator(arch, descr, target):
-  return Generic(arch, descr) if target == 'cpu' else CopyScaleAddGenerator(arch, descr)
+def generator(arch, descr, gemm_cfg, target):
+  if target == 'gpu':
+      hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
+      if hasTinytc:
+          return CopyScaleAddTinytc(arch, descr)
+      elif gf_spec:
+          return CopyScaleAddGenerator(arch, descr)
+      else:
+          raise NotImplementedError(f'no implementation found for {target} target')
+  return Generic(arch, descr)

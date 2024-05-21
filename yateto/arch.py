@@ -155,7 +155,7 @@ def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_back
     alignment = 64
   elif 'gfx' in device_arch: 
     alignment = 128
-  elif device_arch in ['dg1', 'bdw', 'skl', 'Gen8', 'Gen9', 'Gen11', 'Gen12LP']:
+  elif device_arch in ['dg1', 'bdw', 'skl', 'Gen8', 'Gen9', 'Gen11', 'Gen12LP', 'pvc']:
     alignment = 32
   else:
     raise ValueError(f'Unknown device arch: {device_arch}')

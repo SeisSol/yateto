@@ -22,7 +22,7 @@ class KernelFactory(object):
   def generic_create(self, node, *args):
     raise NotImplementedError
 
-  def simple(self, result, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     raise NotImplementedError
 
   def temporary(self, bufname, size, iniZero=False, memory=list()):
@@ -141,20 +141,20 @@ class OptimisedKernelFactory(KernelFactory):
     description = copyscaleadd.Description(
       alpha = scalar,
       beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()),
-      term = IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())
+      result = IndexedTensorDescription.fromVar(result, node.indices),
+      term = IndexedTensorDescription.fromVar(term, node.term().indices)
     )
-    generator = copyscaleadd.generator(self._arch, description, self._target)
+    generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache)
   
-  def simple(self, result, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
       alpha = scalar,
       beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()),
-      term = IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())
+      result = IndexedTensorDescription.fromVar(result, self._indices(result)),
+      term = IndexedTensorDescription.fromVar(term, self._indices(term))
     )
-    generator = copyscaleadd.generator(self._arch, description, self._target)
+    generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache)
 
 class UnitTestFactory(KernelFactory):
@@ -213,7 +213,7 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, indices, ranges, AssignBody(), pragmaSimd=False)
 
-  def simple(self, result, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     g = self._indices(result)
 
     resultTerm = self._formatTerm(result, g)

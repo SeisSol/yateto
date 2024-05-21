@@ -612,7 +612,7 @@ func @gemm(""")
       f.write(f"""    static_cast<::sycl::queue*>({BatchedOperationsAux.STREAM_PTR_NAME})->submit([&](::sycl::handler &h) {{
         h.set_args({args_str});
         h.parallel_for(::sycl::nd_range{{tinytc::get_global_size({BatchedOperationsAux.NUM_ELEMENTS_NAME}, k.group_size), k.group_size}}, k.kernel);
-    }}).wait();
+    }});
 }}
 """)
 

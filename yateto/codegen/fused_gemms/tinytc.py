@@ -1,6 +1,6 @@
 from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from ...ast.indices import BoundingBox
-from ..cache import RoutineGenerator, GpuRoutineGenerator
+from ..cache import TinytcWriter
 from ...ast.node import IndexedTensor
 from ...type import Tensor
 
@@ -172,32 +172,11 @@ class FusedGemmsTinytc:
     wrapper += f'    static_cast<::sycl::queue*>({BatchedOperationsAux.STREAM_PTR_NAME})->submit([&](::sycl::handler &h) {{\n';
     wrapper += f'        h.set_args({wrapper_call_args});\n'
     wrapper += f'        h.parallel_for(::sycl::nd_range{{tinytc::get_global_size({BatchedOperationsAux.NUM_ELEMENTS_NAME}, k.group_size), k.group_size}}, k.kernel);\n'
-    wrapper +=  '    }).wait();\n'
+    wrapper +=  '    });\n'
     wrapper += '}\n\n'
 
     cpp(f'{wrapper_name}({BatchedOperationsAux.NUM_ELEMENTS_NAME}, {BatchedOperationsAux.STREAM_PTR_NAME}, {call_args});')
 
-    routineCache.addRoutine(wrapper_signature, LibsmmWriter(wrapper_signature, wrapper))
+    routineCache.addRoutine(wrapper_signature, TinytcWriter(wrapper_signature, wrapper))
 
     return flops
-
-class LibsmmWriter(GpuRoutineGenerator):
-  def __init__(self, signature, source):
-    self._source = source
-    self._signature = signature
-
-  def __eq__(self, other):
-    return self._signature == other._signature
-
-  def header(self, cpp):
-    cpp.include('tinytc/tinytc.hpp')
-    cpp.include('tinytc/tinytc_sycl.hpp')
-    cpp.includeSys('sycl/sycl.hpp')
-    cpp.includeSys('stdexcept')
-    cpp.includeSys('utility')
-
-  def __call__(self, routineName, fileName):
-    with open(fileName, 'a') as f:
-      f.write(self._source)
-
-    return self._signature

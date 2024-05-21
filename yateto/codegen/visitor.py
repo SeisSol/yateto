@@ -93,7 +93,7 @@ class KernelGenerator(object):
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
-          hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
+          hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache, gemm_cfg)
     return hwFlops, required_tmp_mem
 
 class OptimisedKernelGenerator(KernelGenerator):

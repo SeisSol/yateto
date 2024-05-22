@@ -148,7 +148,7 @@ class FusedGemmsTinytc:
     hasher = hashlib.sha512()
     hasher.update(make_kernel.encode('utf-8'))
     wrapper_name = f'tinytc_wrapper_{hasher.hexdigest()}'
-    wrapper_args = [f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME}', f'void* {BatchedOperationsAux.STREAM_PTR_NAME}']
+    wrapper_args = [f'long {BatchedOperationsAux.NUM_ELEMENTS_NAME}', f'void* {BatchedOperationsAux.STREAM_PTR_NAME}']
     wrapper_call_args = []
     call_args = []
     for key in input_matrices.keys():
@@ -161,7 +161,7 @@ class FusedGemmsTinytc:
             wrapper_call_args.append(BatchedOperationsAux.NUM_ELEMENTS_NAME)
         elif not is_constant[key]:
             offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{var_name[key]}' 
-            wrapper_args.append(f'int {offset_name}')
+            wrapper_args.append(f'long {offset_name}')
             wrapper_call_args.append(offset_name)
             call_args.append(f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{key}')
     wrapper_call_args = ', '.join(wrapper_call_args)

@@ -521,7 +521,7 @@ class TinytcGemmGen(GpuRoutineGenerator):
     starsA = stars(self.gemm_descr['addrA'])
     starsB = stars(self.gemm_descr['addrB'])
     starsC = stars(self.gemm_descr['addrC'])
-    return f'void {routineName}({typ} const{starsA} A, int offsetA, {typ} const{starsB} B, int offsetB, {typ}{starsC} C, int offsetC, unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME}, void* {BatchedOperationsAux.STREAM_PTR_NAME})'
+    return f'void {routineName}({typ} const{starsA} A, long offsetA, {typ} const{starsB} B, long offsetB, {typ}{starsC} C, long offsetC, long {BatchedOperationsAux.NUM_ELEMENTS_NAME}, void* {BatchedOperationsAux.STREAM_PTR_NAME})'
 
   def memref_type(self, addr, M, N, stride, dist):
       if addr == 'pointer_based':
@@ -541,7 +541,7 @@ class TinytcGemmGen(GpuRoutineGenerator):
       Operand = namedtuple('Operand', ['name', 'addr', 'rows', 'cols', 'ld', 'dist'])
       def data_type(op):
         if op.addr == 'pointer_based':
-          return f'group<memref<{scalar_ty}x{op.rows}x{op.cols},strided<1,{op.ld}>, offset: ?>'
+          return f'group<memref<{scalar_ty}x{op.rows}x{op.cols},strided<1,{op.ld}>>, offset: ?>'
         elif op.addr == 'strided':
           return f'memref<{scalar_ty}x{op.rows}x{op.cols}x?,strided<1,{op.ld},{op.dist}>>'
         elif op.addr == 'none':
@@ -552,9 +552,9 @@ class TinytcGemmGen(GpuRoutineGenerator):
         if op.addr == 'pointer_based':
           return f'load %{op.name}[%gid] : {data_type(op)}'
         elif op.addr == 'strided':
-          return f'load %{op.name}[:,:,%gid] : {data_type(op)}'
+          return f'subview %{op.name}[:,:,%gid] : {data_type(op)}'
         elif op.addr == 'none':
-          return f'load %{op.name}[:,:] : {data_type(op)}'
+          return f'subview %{op.name}[:,:] : {data_type(op)}'
         else:
           raise NameError(op.addr)
       def mat_type(op):

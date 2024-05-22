@@ -166,7 +166,7 @@ class TinytcWrapper:
     hasher.update(self.source.encode('utf-8'))
     self.name = f'tinytc_wrapper_{hasher.hexdigest()}'
     
-    self.wrapper_args = [f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME}', f'void* {BatchedOperationsAux.STREAM_PTR_NAME}']
+    self.wrapper_args = [f'long {BatchedOperationsAux.NUM_ELEMENTS_NAME}', f'void* {BatchedOperationsAux.STREAM_PTR_NAME}']
     self.wrapper_call_args = []
     self.call_args = []
     for arg in arguments:
@@ -185,7 +185,7 @@ class TinytcWrapper:
             self.wrapper_call_args.append(BatchedOperationsAux.NUM_ELEMENTS_NAME)
           elif not arg.constant:
             offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{arg.name}' 
-            self.wrapper_args.append(f'int {offset_name}')
+            self.wrapper_args.append(f'long {offset_name}')
             self.wrapper_call_args.append(offset_name)
             self.call_args.append(f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{arg.call_expr}')
 

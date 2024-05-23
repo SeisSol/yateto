@@ -1,7 +1,7 @@
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
 
-from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
+from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, makeMemrefType, makeBatchType, makeLoad
 from ..cache import TinytcWriter
 from ..tiny_tensor_language import *
 
@@ -18,37 +18,6 @@ class CopyScaleAddTinytc:
 
     def generate(self, cpp, routineCache):
         d = self._descr
-
-        def MakeMemrefType(ml, needsBatchMode):
-            shape = tuple(r.size() for r in ml.bbox())
-            stride = ml.stride()
-            if needsBatchMode:
-                shape = shape + (DYNAMIC, )
-                stride = stride + (ml.requiredReals(), )
-            return MemrefType(self._ty, shape, stride)
-
-        def MakeBatchType(var):
-            ml = var.memoryLayout
-            if var.is_compute_constant:
-                return MakeMemrefType(ml, False)
-            elif var.is_temporary:
-                return MakeMemrefType(ml, True)
-            else:
-                return GroupType(MakeMemrefType(ml, False), DYNAMIC)
-
-        def MakeLoad(bb, var, operand, gid):
-            if var.is_compute_constant:
-                return operand
-            elif var.is_temporary:
-                offset_list = [IntImmValue(IntegerType.index, 0)
-                               ] * (operand.type().order() - 1)
-                size_list = [IntImmValue(IntegerType.index, DYNAMIC)
-                             ] * (operand.type().order() - 1)
-                offset_list.append(gid)
-                size_list.append(None)
-                return bb.add(SubviewInst(operand, offset_list, size_list))
-            else:
-                return bb.add(LoadInst(operand, [gid]))
 
         # Order can be 1 or 2
         def MakeLoopOverAxpby(d, order, transpose, A, B):
@@ -93,14 +62,22 @@ class CopyScaleAddTinytc:
             return csa_region
 
         alpha = LocalValue(self._ty, 'alpha')
-        Abatch = LocalValue(MakeBatchType(d.term), 'A')
-        Bbatch = LocalValue(MakeBatchType(d.result), 'B')
+        Abatch = LocalValue(
+            makeBatchType(self._ty, d.term.memoryLayout,
+                          d.term.is_compute_constant, d.term.is_temporary),
+            'A')
+        Bbatch = LocalValue(
+            makeBatchType(self._ty, d.result.memoryLayout,
+                          d.result.is_compute_constant, d.result.is_temporary),
+            'B')
         kernel = Function('copyscaleadd', [alpha, Abatch, Bbatch], None)
 
         bb = RegionBuilder()
         gid = bb.add(GroupIdInst())
-        A = MakeLoad(bb, d.term, Abatch, gid)
-        B = MakeLoad(bb, d.result, Bbatch, gid)
+        A = makeLoad(bb, Abatch, gid, d.term.is_compute_constant,
+                     d.term.is_temporary)
+        B = makeLoad(bb, Bbatch, gid, d.result.is_compute_constant,
+                     d.result.is_temporary)
 
         trans = Transpose.n
         if len(d.result.indices) == 0:

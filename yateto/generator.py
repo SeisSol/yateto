@@ -268,9 +268,6 @@ class Generator(object):
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
-    for tool in gemm_cfg.gemmTools:
-        print(tool, isinstance(tool, tinytc))
-
     hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
     enableFusedGemm = bool(chainforge_spec) or hasTinytc
 

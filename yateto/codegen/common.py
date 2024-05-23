@@ -1,7 +1,7 @@
 from .. import aspp
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
-from .tiny_tensor_language import Dump, Function
+from .tiny_tensor_language import Dump, Function, IntegerType, MemrefType, GroupType, IntImmValue, DYNAMIC, SubviewInst, LoadInst
 import hashlib
 
 
@@ -232,3 +232,30 @@ class TinytcWrapper:
   def prototype(self):
     return f'void {self.name}({", ".join(self.wrapper_args)});'
 
+def makeMemrefType(scalarTy, memoryLayout, needsBatchMode: bool):
+  shape = tuple(r.size() for r in memoryLayout.bbox())
+  stride = memoryLayout.stride()
+  if needsBatchMode:
+    shape = shape + (DYNAMIC, )
+    stride = stride + (memoryLayout.requiredReals(), )
+  return MemrefType(scalarTy, shape, stride)
+
+def makeBatchType(scalarTy, memoryLayout, isComputeConstant: bool, isTemporary: bool):
+  if isComputeConstant:
+    return makeMemrefType(scalarTy, memoryLayout, False)
+  elif isTemporary:
+    return makeMemrefType(scalarTy, memoryLayout, True)
+  else:
+    return GroupType(makeMemrefType(scalarTy, memoryLayout, False), DYNAMIC)
+
+def makeLoad(bb, operand, gid, isComputeConstant: bool, isTemporary: bool):
+  if isComputeConstant:
+    return operand
+  elif isTemporary:
+    offsetList = [IntImmValue(IntegerType.index, 0)] * (operand.type().order() - 1)
+    sizeList = [IntImmValue(IntegerType.index, DYNAMIC)] * (operand.type().order() - 1)
+    offsetList.append(gid)
+    sizeList.append(None)
+    return bb.add(SubviewInst(operand, offsetList, sizeList))
+  else:
+    return bb.add(LoadInst(operand, [gid]))

@@ -123,6 +123,7 @@ class Transpose(Enum):
     n = 0,
     t = 1
 
+
 class Arithmetic(Enum):
     add = 0,
     sub = 1,
@@ -150,7 +151,9 @@ class AxpbyInst(Inst):
     def value(self):
         return None
 
+
 class ArithInst(Inst):
+
     def __init__(self, operation_type: Arithmetic, a: Value, b: Value):
         self.operation_type = operation_type
         self.a = a
@@ -159,6 +162,30 @@ class ArithInst(Inst):
 
     def value(self):
         return self.result
+
+
+class GemmInst(Inst):
+
+    def __init__(self,
+                 transA: Transpose,
+                 transB: Transpose,
+                 alpha: Value,
+                 a: Value,
+                 b: Value,
+                 beta: Value,
+                 c: Value,
+                 atomic: bool = False):
+        self.transA = transA
+        self.transB = transB
+        self.alpha = alpha
+        self.a = a
+        self.b = b
+        self.beta = beta
+        self.c = c
+        self.atomic = atomic
+
+    def value(self):
+        return None
 
 
 #class AllocaInst(ValueInst):
@@ -189,6 +216,7 @@ class LoadInst(Inst):
     def value(self):
         return self.result
 
+
 class ForInst(Inst):
 
     def __init__(self, loop_var: Value, start: Value, stop: Value,
@@ -200,6 +228,7 @@ class ForInst(Inst):
 
     def value(self):
         return None
+
 
 class StoreInst(Inst):
 
@@ -215,20 +244,25 @@ class StoreInst(Inst):
 
 class SubviewInst(Inst):
 
-    def __init__(self, operand: Value, offset_list: list[Value], size_list: list[Value]):
+    def __init__(self, operand: Value, offset_list: list[Value],
+                 size_list: list[Value]):
         if not isinstance(operand.type(), MemrefType):
             raise RuntimeError('Subview instruction expects memref type')
-        if len(offset_list) != len(size_list) or len(offset_list) != len(operand.type().shape):
-            raise RuntimeError('Subview slice list length must match tensor order')
+        if len(offset_list) != len(size_list) or len(offset_list) != len(
+                operand.type().shape):
+            raise RuntimeError(
+                'Subview slice list length must match tensor order')
 
-        sliced_modes = [i for i,v in enumerate(size_list) if v is not None]
+        sliced_modes = [i for i, v in enumerate(size_list) if v is not None]
         shape = []
         stride = []
         for mode in sliced_modes:
             size = DYNAMIC
             if isinstance(size_list[mode], IntImmValue):
                 size = size_list[mode].value
-                if size == DYNAMIC and isinstance(offset_list[mode], IntImmValue) and operand.type().shape[mode] != DYNAMIC:
+                if size == DYNAMIC and isinstance(
+                        offset_list[mode],
+                        IntImmValue) and operand.type().shape[mode] != DYNAMIC:
                     size = operand.type().shape[mode] - offset_list[mode].value
             shape.append(size)
             stride.append(operand.type().stride[mode])
@@ -240,8 +274,6 @@ class SubviewInst(Inst):
 
     def value(self):
         return self.result
-
-
 
 
 # Function
@@ -298,6 +330,13 @@ class Traversal(Visitor):
     def visit_LocalValue(self, node):
         self.visit(node.type())
 
+    def visit_GemmInst(self, node):
+        self.visit(node.alpha)
+        self.visit(node.a)
+        self.visit(node.b)
+        self.visit(node.beta)
+        self.visit(node.c)
+
     def visit_GroupIdInst(self, node):
         self.visit(node.result)
 
@@ -336,6 +375,7 @@ class Traversal(Visitor):
         for v in node.size_list:
             if v is not None:
                 self.visit(v)
+
 
 class AssignIdentifiers(Traversal):
 
@@ -392,6 +432,15 @@ class Dump(Visitor):
 
     def visit_ArithInst(self, node):
         return f'{self.visit(node.value())} = arith.{node.operation_type.name} {self.visit(node.a)}, {self.visit(node.b)} : {self.visit(node.a.type())}'
+
+    def visit_GemmInst(self, node):
+        opcode = f'gemm.{node.transA.name}.{node.transB.name}'
+        if node.atomic:
+            opcode += '.atomic'
+        args = (node.alpha, node.a, node.b, node.beta, node.c)
+        args_str = ', '.join(self.visit(arg) for arg in args)
+        type_str = ', '.join(self.visit(arg.type()) for arg in args)
+        return f'{opcode} {args_str} : {type_str}'
 
     def visit_GroupIdInst(self, node):
         return f'{self.visit(node.value())} = group_id'

@@ -132,6 +132,15 @@ class Arithmetic(Enum):
     rem = 4
 
 
+class AllocaInst(Inst):
+
+    def __init__(self, ty: MemrefType):
+        self.result = LocalValue(ty)
+
+    def value(self):
+        return self.result
+
+
 class AxpbyInst(Inst):
 
     def __init__(self,
@@ -188,14 +197,6 @@ class GemmInst(Inst):
         return None
 
 
-#class AllocaInst(ValueInst):
-#
-#    def __init__(self, ty: MemrefType):
-#        self.value = Value(ty)
-#
-#    def value(self):
-#        return self.value
-#
 class GroupIdInst(Inst):
 
     def __init__(self):
@@ -316,6 +317,9 @@ class Traversal(Visitor):
     def visit_FloatImmValue(self, node):
         pass
 
+    def visit_AllocaInst(self, node):
+        self.visit(node.result)
+
     def visit_AxpbyInst(self, node):
         self.visit(node.alpha)
         self.visit(node.a)
@@ -420,6 +424,9 @@ class Dump(Visitor):
 
     def visit_LocalValue(self, node):
         return f'%{node.name}'
+
+    def visit_AllocaInst(self, node):
+        return f'{self.visit(node.value())} = alloca -> {self.visit(node.value().type())}'
 
     def visit_AxpbyInst(self, node):
         opcode = f'axpby.{node.trans.name}'

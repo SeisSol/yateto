@@ -127,7 +127,7 @@ class CopyScaleAddTinytc:
         ]
         wrapper = TinytcWrapper(kernel, args, self._arch.typename)
 
-        prototype = f'{wrapper.prototype()}'
+        prototype = wrapper.prototype()
         routineCache.addRoutine(prototype,
                                 TinytcWriter(prototype, wrapper.definition()))
 

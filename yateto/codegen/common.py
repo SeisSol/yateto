@@ -135,7 +135,7 @@ class BatchedOperationsAux:
 
 class TinytcKernelArgument:
 
-  def __init__(self, name: str, call_expr: str, constant: bool, temporary: bool, modified: bool):
+  def __init__(self, name: str, call_expr: str, constant: bool, temporary: bool, modified: bool, offset: int = 0):
     """Kernel argument for TinytcWrapper.
 
     Arguments:
@@ -150,6 +150,7 @@ class TinytcKernelArgument:
     self.constant = constant
     self.temporary = temporary
     self.modified = modified
+    self.offset = offset
 
 class TinytcScalarKernelArgument:
 
@@ -159,12 +160,15 @@ class TinytcScalarKernelArgument:
 
 class TinytcWrapper:
 
-  def __init__(self, kernel: Function, arguments: list[TinytcKernelArgument | TinytcScalarKernelArgument], real_type: str):
+  def __init__(self, kernel: Function, arguments: list[TinytcKernelArgument | TinytcScalarKernelArgument], real_type: str, name: str = ''):
     self.kernel_name = kernel.name
     self.source = Dump().visit(kernel)
-    hasher = hashlib.sha512()
-    hasher.update(self.source.encode('utf-8'))
-    self.name = f'tinytc_wrapper_{hasher.hexdigest()}'
+    if name:
+      self.name = name
+    else:
+      hasher = hashlib.sha512()
+      hasher.update(self.source.encode('utf-8'))
+      self.name = f'tinytc_wrapper_{hasher.hexdigest()}'
     
     self.wrapper_args = [f'long {BatchedOperationsAux.NUM_ELEMENTS_NAME}', f'void* {BatchedOperationsAux.STREAM_PTR_NAME}']
     self.wrapper_call_args = []
@@ -188,6 +192,8 @@ class TinytcWrapper:
             self.wrapper_args.append(f'long {offset_name}')
             self.wrapper_call_args.append(offset_name)
             self.call_args.append(f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{arg.call_expr}')
+          if arg.offset:
+            self.call_args[-1] += f' + {arg.offset}'
 
   def definition(self):
     make_kernel = """    struct custom_kernel { ::sycl::kernel kernel; ::sycl::range<3u> group_size; };

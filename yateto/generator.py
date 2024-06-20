@@ -254,8 +254,12 @@ class Generator(object):
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
       family.add(indexedName, ast, prefetch, namespace, target=target)
   
-  def _headerGuardName(self, namespace, fileBaseName):
-    partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
+  def _headerGuardName(self, namespace, template, fileBaseName):
+    if template[1] is None:
+      templateparts = []
+    else:
+      templateparts = template[1].upper().split(',')
+    partlist = namespace.upper().split('::') + templateparts + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
 
   def generate(self,
@@ -263,7 +267,8 @@ class Generator(object):
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
                cost_estimator=BoundingBoxCostEstimator,
-               include_tensors=set()):
+               include_tensors=set(),
+               template=(None, None)):
 
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
@@ -291,14 +296,14 @@ class Generator(object):
     print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
         for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg, testFramework)
+            UnitTestGenerator(self._arch, template).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg, testFramework)
         for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, testFramework, group)
+                UnitTestGenerator(self._arch, template).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, testFramework, group)
     with Cpp(fUTdoctest.cpp) as cpp:
         Doctest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
     with Cpp(fUTcxxtest.h) as cpp:
-        with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
+        with cpp.HeaderGuard(self._headerGuardName(namespace, template, self.CXXTEST_FILE_NAME.replace('.', '_'))):
             CxxTest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
 
 
@@ -314,20 +319,19 @@ class Generator(object):
     kernel_dict = {}
     for kernel in self._kernels:
       if kernel.namespace in kernel_dict:
-        kernel_dict[kernel.namespace].append(kernel)
+        kernel_dict[kernel.namespace].append(('kernel', kernel))
       else:
-        kernel_dict[kernel.namespace] = [kernel]
+        kernel_dict[kernel.namespace] = [('kernel', kernel)]
 
-    kernel_family_dict = {}
     for family in self._kernelFamilies.values():
-      if family.namespace in kernel_family_dict:
-        kernel_family_dict[family.namespace].append(family)
+      if family.namespace in kernel_dict:
+        kernel_dict[family.namespace].append(('family', family))
       else:
-        kernel_family_dict[family.namespace] = [family]
+        kernel_dict[family.namespace] = [('family', family)]
 
     print('Generating kernels...')
     cache = RoutineCache()
-    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
+    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache, template)
 
     kernelSource = StringIO()
     kernelSourceContent = ''
@@ -339,35 +343,37 @@ class Generator(object):
 
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
-        with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
+        with header.HeaderGuard(self._headerGuardName(namespace, template, self.KERNELS_FILE_NAME)):
           header.includeSys('cmath')
           header.includeSys('limits')
           header.include('yateto.h')
           header.include(fTensors.hName)
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace), header.Namespace(namespace):
-              # Group kernels by namespace
-              for kernel_namespace, kernels in kernel_dict.items():
-                for kernel in kernels:
-                  kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
-                                                                           kernel.cfg,
-                                                                           gemm_cfg,
-                                                                           kernel.target)
-                  with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
-                    optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
+            header.TemplateStructForward(optKernelGenerator.NAMESPACE, template[0])
+            with header.TemplateStruct(optKernelGenerator.NAMESPACE, template[1]):
+              # Group kernels and families by namespace
+              for kernel_namespace, kernelsfamilies in kernel_dict.items():
+                with header.Struct(kernel_namespace):
+                  for ktype, kernel in kernelsfamilies:
+                    if ktype == 'kernel':
+                      kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
+                                                                              kernel.cfg,
+                                                                              gemm_cfg,
+                                                                              kernel.target)
+                      
+                      optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline], kernel_namespace)
+                    else:
+                      family = kernel
+                      kernelOutlines = [None] * len(family)
+                      for group, kernel in family.items():
+                        kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
+                                                                                        kernel.cfg,
+                                                                                        gemm_cfg,
+                                                                                        kernel.target)
 
-              # Group families by namespace
-              for family_namespace, families in kernel_family_dict.items():
-                for family in families:
-                  kernelOutlines = [None] * len(family)
-                  for group, kernel in family.items():
-                    kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
-                                                                                     kernel.cfg,
-                                                                                     gemm_cfg,
-                                                                                     kernel.target)
-
-                  with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
-                    optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
+                      optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, kernel_namespace, family.stride())
+                    
       kernelSourceContent = kernelSource.getvalue()
 
     with Cpp(fKernels.cpp) as cpp:
@@ -380,7 +386,7 @@ class Generator(object):
 
     print('Calling external code generators...')
     with Cpp(fRoutines.h) as header:
-      with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
+      with header.HeaderGuard(self._headerGuardName(namespace, template, self.ROUTINES_FILE_NAME)):
         cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
 
     # Mapping basename -> tensor
@@ -406,9 +412,9 @@ class Generator(object):
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
-    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key))
+    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key), template)
     with Cpp(fTensors.h) as header:
-      with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
+      with header.HeaderGuard(self._headerGuardName(namespace, template, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):
           initGen.generateTensorsH(header)
     with Cpp(fTensors.cpp) as cpp:
@@ -416,7 +422,7 @@ class Generator(object):
       with cpp.Namespace(namespace):
         initGen.generateTensorsCpp(cpp)
     with Cpp(fInit.h) as header:
-      with header.HeaderGuard(self._headerGuardName(namespace, self.INIT_FILE_NAME)):
+      with header.HeaderGuard(self._headerGuardName(namespace, template, self.INIT_FILE_NAME)):
         header.include(fTensors.hName)
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):

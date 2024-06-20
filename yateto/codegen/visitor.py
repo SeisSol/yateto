@@ -48,8 +48,9 @@ class KernelGenerator(object):
   PREFETCHVAR_NAME = '_prefetch'
   BUFFER_NAME = '_buffer'
 
-  def __init__(self, arch):
+  def __init__(self, arch, template):
     self._arch = arch
+    self._template = template
 
   @classmethod
   def _bufferName(cls, buf):
@@ -108,8 +109,8 @@ class OptimisedKernelGenerator(KernelGenerator):
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
 
   
-  def __init__(self, arch, routineCache):
-    super().__init__(arch)
+  def __init__(self, arch, routineCache, template):
+    super().__init__(arch, template)
     self._routineCache = routineCache
   
   class KernelOutline(object):
@@ -203,7 +204,8 @@ class OptimisedKernelGenerator(KernelGenerator):
         entries[key] = entries[key] | value
     
 
-  def generate(self, cpp, header, name, kernelOutlines, familyStride=None):
+  def generate(self, cpp, header, name, kernelOutlines, namespace, familyStride=None):
+    templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
     tensors = collections.OrderedDict()
     prefetch = collections.OrderedDict()
     writable = dict()
@@ -235,152 +237,152 @@ class OptimisedKernelGenerator(KernelGenerator):
       formatArray = lambda lst: lst[0]
       brackets = ''
 
-    with header.Namespace(self.NAMESPACE):
-      with header.Struct(name):
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.NONZEROFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.HARDWAREFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
+    with header.Struct(name):
+      header('{} {} const {}{} = {};'.format(
+        MODIFIERS,
+        self._arch.ulongTypename,
+        self.NONZEROFLOPS_NAME,
+        brackets,
+        formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
+      ))
+      header('{} {} const {}{} = {};'.format(
+        MODIFIERS,
+        self._arch.ulongTypename,
+        self.HARDWAREFLOPS_NAME,
+        brackets,
+        formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
+      ))
 
-        # tmp mem required by a kernel(s)
-        tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
-        header('{} {} const {}{} = {};'.format(MODIFIERS,
-                                               self._arch.ulongTypename,
-                                               self.TEMP_MEM_REQUIRED_NAME,
-                                               brackets,
-                                               formatArray(tmp_mem_list)))
+      # tmp mem required by a kernel(s)
+      tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
+      header('{} {} const {}{} = {};'.format(MODIFIERS,
+                                              self._arch.ulongTypename,
+                                              self.TEMP_MEM_REQUIRED_NAME,
+                                              brackets,
+                                              formatArray(tmp_mem_list)))
 
-        header('{} {} const {} = {};'.format(MODIFIERS,
-                                             self._arch.ulongTypename,
-                                             self.TEMP_MAX_MEM_REQUIRED_NAME,
-                                             max(tmp_mem_list)))
+      header('{} {} const {} = {};'.format(MODIFIERS,
+                                            self._arch.ulongTypename,
+                                            self.TEMP_MAX_MEM_REQUIRED_NAME,
+                                            max(tmp_mem_list)))
 
-        if target == 'gpu':
-          # LinearAllocatorT controls external extra mem. allocated on gpu for tmp. variables
-          header(f'yateto::LinearAllocatorT<{self._arch.typename}> linearAllocator;')
+      if target == 'gpu':
+        # LinearAllocatorT controls external extra mem. allocated on gpu for tmp. variables
+        header(f'yateto::LinearAllocatorT<{self._arch.typename}> linearAllocator;')
 
-        header.emptyline()
+      header.emptyline()
 
-        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, target):
-          prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
-          typ = self._arch.typename
-          ptr_type = '**' if not is_constant and target == 'gpu' else '*'
-          if not writable:
-            typ += ' const'
-          if len(next(iter(groups))) > 0:
-            class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
-            container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
-            header(f'{class_name}::{container_type} {base_name};')
-          else:
-            header(f'{typ}{ptr_type} {base_name}{{}};')
-        
-        def scalarArgs(base_name_with_namespace, groups):
-          prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
-          typ = self._arch.typename
-          if len(next(iter(groups))) > 0:
-            class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
-            container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}>'
-            header(f'{class_name}::{container_type} {base_name};')
-          else:
-            header(f'{typ} {base_name} = std::numeric_limits<{typ}>::signaling_NaN();')
-
-        for baseName, groups in scalars.items():
+      def kernelArgs(base_name_with_namespace, groups, writable, is_constant, target):
+        prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+        typ = self._arch.typename
+        ptr_type = '**' if not is_constant and target == 'gpu' else '*'
+        if not writable:
+          typ += ' const'
+        if len(next(iter(groups))) > 0:
+          class_name = f'{InitializerGenerator.TENSOR_NAMESPACE}{templateval}::{base_name_with_namespace}'
+          container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
+          header(f'{class_name}::{container_type} {base_name};')
+        else:
+          header(f'{typ}{ptr_type} {base_name}{{}};')
+      def scalarArgs(base_name_with_namespace, groups):
+        prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+        typ = self._arch.typename
+        if len(next(iter(groups))) > 0:
+          class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}{templateval}::{base_name}'
+          container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}>'
+          header(f'{class_name}::{container_type} {base_name};')
+        else:
+          header(f'{typ} {base_name} = std::numeric_limits<{typ}>::signaling_NaN();')
+      
+      for baseName, groups in scalars.items():
           scalarArgs(baseName,
                      groups)
-        for baseName, groups in tensors.items():
-          kernelArgs(baseName,
-                     groups,
-                     writable[baseName],
-                     is_compute_constant_tensors[baseName],
-                     target)
+      for baseName, groups in tensors.items():
+        kernelArgs(baseName,
+                    groups,
+                    writable[baseName],
+                    is_compute_constant_tensors[baseName],
+                    target)
+      header.emptyline()
+
+      # containers with extra offsets for GPU-like computations
+      if target == 'gpu':
+        header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
+        header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
+        header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+
+        def generate_extra_offset_args(base_name_with_namespace, groups):
+          prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+          offset_type = 'int'
+          offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{base_name}'
+          if len(next(iter(groups))) > 0:
+            class_name = f'{InitializerGenerator.TENSOR_NAMESPACE}{templateval}::{base_name_with_namespace}'
+            container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{offset_type}>'
+            header(f'{class_name}::{container_type} {offset_name};')
+          else:
+            header(f'{offset_type} {offset_name}{{}};')
+
+        for base_name, groups in tensors.items():
+          generate_extra_offset_args(base_name, groups)
+      header.emptyline()
+
+      if len(prefetch) > 0:
+        with header.Struct(self.PREFETCHSTRUCT_NAME):
+          for baseName, groups in prefetch.items():
+            kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
+        header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
         header.emptyline()
 
-        # containers with extra offsets for GPU-like computations
-        if target == 'gpu':
-          header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
-          header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
-          header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+      for index, kernelOutline in enumerate(kernelOutlines):
+        if kernelOutline:
+          header.functionDeclaration(executeName(index))
 
-          def generate_extra_offset_args(base_name_with_namespace, groups):
-            prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
-            offset_type = 'int'
-            offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{base_name}'
-            if len(next(iter(groups))) > 0:
-              class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
-              container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{offset_type}>'
-              header(f'{class_name}::{container_type} {offset_name};')
-            else:
-              header(f'{offset_type} {offset_name}{{}};')
+      if familyStride is not None:
+        header('using {} = void ({}::*)();'.format(self.MEMBER_FUNCTION_PTR_NAME, name))
+        header('{} {} {}[] = {};'.format(
+          MODIFIERS,
+          self.MEMBER_FUNCTION_PTR_NAME,
+          self.EXECUTE_ARRAY_NAME,
+          formatArray(['&{}::{}'.format(name, executeName(index)) if kernelOutline else 'nullptr' for index, kernelOutline in enumerate(kernelOutlines)])
+        ))
+        args = typedNdArgs(len(familyStride), self._arch.uintTypename)
+        indexF = indexFun(familyStride)
+        with header.Function(self.FIND_EXECUTE_NAME, args, '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
+          header('return {}[{}];'.format(self.EXECUTE_ARRAY_NAME, indexF))
+        with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
+          header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
-          for base_name, groups in tensors.items():
-            generate_extra_offset_args(base_name, groups)
-        header.emptyline()
+        aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
+        for function in aux_functions:
+          funName = function[:1].lower() + function[1:]
+          with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
+            header('return {}[{}];'.format(function, indexF))
 
-        if len(prefetch) > 0:
-          with header.Struct(self.PREFETCHSTRUCT_NAME):
-            for baseName, groups in prefetch.items():
-              kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
-          header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
-          header.emptyline()
-
-        for index, kernelOutline in enumerate(kernelOutlines):
-          if kernelOutline:
-            header.functionDeclaration(executeName(index))
-
-        if familyStride is not None:
-          header('using {} = void ({}::*)();'.format(self.MEMBER_FUNCTION_PTR_NAME, name))
-          header('{} {} {}[] = {};'.format(
-            MODIFIERS,
-            self.MEMBER_FUNCTION_PTR_NAME,
-            self.EXECUTE_ARRAY_NAME,
-            formatArray(['&{}::{}'.format(name, executeName(index)) if kernelOutline else 'nullptr' for index, kernelOutline in enumerate(kernelOutlines)])
-          ))
-          args = typedNdArgs(len(familyStride), self._arch.uintTypename)
-          indexF = indexFun(familyStride)
-          with header.Function(self.FIND_EXECUTE_NAME, args, '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
-            header('return {}[{}];'.format(self.EXECUTE_ARRAY_NAME, indexF))
-          with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
-            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
-
-          aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
-          for function in aux_functions:
-            funName = function[:1].lower() + function[1:]
-            with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(function, indexF))
-
+    namespaceval = '' if namespace == '' or namespace is None else f'{namespace}::'
     flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
-    for fc in flopCounters:
-      cpp('{} {} const {}::{}::{}{};'.format(
-        CONSTEXPR,
-        self._arch.ulongTypename,
-        self.NAMESPACE,
-        name,
-        fc,
-        brackets
-      ))
-    if familyStride is not None:
-      cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
-        CONSTEXPR,
-        self.NAMESPACE,
-        name,
-        self.MEMBER_FUNCTION_PTR_NAME,
-        self.EXECUTE_ARRAY_NAME
-      ))
+    #for fc in flopCounters:
+    #  header('{} {} static const {}{}{};'.format(
+    #    CONSTEXPR,
+    #    self._arch.ulongTypename,
+    #    name,
+    #    fc,
+    #    brackets
+    #  ))
+    #if familyStride is not None:
+    #  cpp('{0} {1}{2}::{3}{4}::{5} {1}{2}::{3}{4}::{6}[];'.format(
+    #    CONSTEXPR,
+    #    self.NAMESPACE,
+    #    templateval,
+    #    namespaceval,
+    #    name,
+    #    self.MEMBER_FUNCTION_PTR_NAME,
+    #    self.EXECUTE_ARRAY_NAME
+    #  ))
     for index, kernelOutline in enumerate(kernelOutlines):
       if kernelOutline is None:
         continue
 
-      with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
+      with cpp.Function('{}{}::{}{}::{}'.format(self.NAMESPACE, templateval, namespaceval, name, executeName(index))):
         for base_name_with_namespace, groups in kernelOutline.scalars.items():
           base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
           if len(next(iter(groups))) > 0:
@@ -405,8 +407,8 @@ class OptimisedKernelGenerator(KernelGenerator):
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
   
-  def __init__(self, arch):
-    super().__init__(arch)
+  def __init__(self, arch, template):
+    super().__init__(arch, template)
 
   def deduce_single_scalar(self, scalar):
     if scalar is None:
@@ -461,6 +463,7 @@ class UnitTestGenerator(KernelGenerator):
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
+    templateparam = '' if self._template[1] is None else '<' + self._template[1] + '>'
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
       factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
@@ -484,8 +487,9 @@ class UnitTestGenerator(KernelGenerator):
           )
         )
         prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
-        cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
+        cpp( '{prefix}{initNS}{template}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
             initNS = InitializerGenerator.INIT_NAMESPACE,
+            template = templateparam,
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             groupTemplate=self._groupTemplate(var.tensor),
             prefix=prefix,
@@ -498,7 +502,7 @@ class UnitTestGenerator(KernelGenerator):
         )
         cpp.emptyline()
 
-      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+      cpp( '{}{}{}::{} {};'.format(kernel_prefix, OptimisedKernelGenerator.NAMESPACE, templateparam, kernelClass, self.KERNEL_VAR) )
       for var in scalars:
         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
       for var in variables:
@@ -589,8 +593,9 @@ class InitializerGenerator(object):
       cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
       cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
 
-  def __init__(self, arch, tensors, scalars):
+  def __init__(self, arch, tensors, scalars, template):
     self._arch = arch
+    self._template = template
     self._numberType = '{} const'.format(self._arch.uintTypename)
     self._realType = '{} const'.format(self._arch.typename)
     self._realPtrType = self._realType + '*'
@@ -672,74 +677,97 @@ class InitializerGenerator(object):
     yield cur_namespace, cur_dict
 
   def generateTensorsH(self, header):
-    for namespace, tensor_dict in self.iterate_collect():
-      with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
-        for (baseName, baseNameWithoutNamespace), tensors in tensor_dict.items():        
-          with header.Struct(baseNameWithoutNamespace):
-            groupSize = self._groupSize[baseName]
-            self._tensor(header, '', tensors, groupSize, False)
-            args = ndargs(len(groupSize))
-            typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
-            returnType = '{} {}'.format(MODIFIERS, self._arch.uintTypename)
-            if len(groupSize) > 0:
-              with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
-                header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
-            with header.Function(self.SIZE_FUN_NAME, typedArgs, returnType):
-              if len(groupSize) == 0:
-                header('return {};'.format(self.SIZE_NAME))
-              else:
-                header('return {}[{}({})];'.format(self.SIZE_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-            if len(groupSize) > 0:
-              header('template<typename T>')
-              with header.Struct(self.CONTAINER_CLASS_NAME):
-                header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
-                header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
-                  header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
-                  header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-    for namespace, scalar_dict in self.iterate_collect_scalar():
-      with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
-        for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():        
-          with header.Struct(baseNameWithoutNamespace):
-            groupSize = self._groupSizeScalar[baseName]
-            args = ndargs(len(groupSize))
-            typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
-            if len(groupSize) > 0:
-              with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
-                header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
-            if len(groupSize) > 0:
-              header('template<typename T>')
-              with header.Struct(self.CONTAINER_CLASS_NAME):
-                header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
-                with header.Function(self.CONTAINER_CLASS_NAME, '', ''):
-                  pass
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
-                  header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
-                  header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+    header.TemplateStructForward(self.TENSOR_NAMESPACE, self._template[0])
+    with header.TemplateStruct(self.TENSOR_NAMESPACE, self._template[1]):
+      for namespace, tensor_dict in self.iterate_collect():
+        with header.Struct(namespace):
+          for (baseName, baseNameWithoutNamespace), tensors in tensor_dict.items():        
+            with header.Struct(baseNameWithoutNamespace):
+              groupSize = self._groupSize[baseName]
+              self._tensor(header, '', tensors, groupSize, False)
+              args = ndargs(len(groupSize))
+              typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
+              returnType = '{} {}'.format(MODIFIERS, self._arch.uintTypename)
+              if len(groupSize) > 0:
+                with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                  header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
+              with header.Function(self.SIZE_FUN_NAME, typedArgs, returnType):
+                if len(groupSize) == 0:
+                  header('return {};'.format(self.SIZE_NAME))
+                else:
+                  header('return {}[{}({})];'.format(self.SIZE_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+              if len(groupSize) > 0:
+                header('template<typename T>')
+                with header.Struct(self.CONTAINER_CLASS_NAME):
+                  header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
+                  header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
+                  with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                    header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+                  with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                    header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+      for namespace, scalar_dict in self.iterate_collect_scalar():
+        with header.Struct(namespace):
+          for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():        
+            with header.Struct(baseNameWithoutNamespace):
+              groupSize = self._groupSizeScalar[baseName]
+              args = ndargs(len(groupSize))
+              typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
+              if len(groupSize) > 0:
+                with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                  header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
+              if len(groupSize) > 0:
+                header('template<typename T>')
+                with header.Struct(self.CONTAINER_CLASS_NAME):
+                  header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
+                  with header.Function(self.CONTAINER_CLASS_NAME, '', ''):
+                    pass
+                  with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                    header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+                  with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                    header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
   
   def generateTensorsCpp(self, cpp):
-    for namespace, tensor_dict in self.iterate_collect():
-      with cpp.Namespace(namespace):
-        for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-          self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
-  
-  def generateInitH(self, header):
-    for namespace, tensor_dict in self.iterate_collect():
-      with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
-        for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-          self._init(header, base_name, base_name_without_namespace, '', tensors, False)
-
-  def generateInitCpp(self, cpp):
+    templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
     for namespace, tensor_dict in self.iterate_collect():
       for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-        prefix_parts = []
+        prefix_parts = [f'{self.TENSOR_NAMESPACE}{templateval}']
         if len(namespace) > 0:
-          prefix_parts.append(namespace)
-        prefix_parts +=  [self.INIT_NAMESPACE, base_name_without_namespace, '']
+          prefix_parts += [namespace]
+        prefix_parts += [base_name_without_namespace, '']
+        prefix = '::'.join(prefix_parts)
+        self._tensor(cpp, prefix, tensors, self._groupSize[base_name], True)
+  
+  def generateInitH(self, header):
+    templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
+    header.TemplateStructForward(self.INIT_NAMESPACE, self._template[0])
+    with header.TemplateStruct(self.INIT_NAMESPACE, self._template[1]):
+      for namespace, tensor_dict in self.iterate_collect():
+        with header.Struct(namespace):
+          for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
+            prefix_parts = [f'{self.TENSOR_NAMESPACE}{templateval}']
+            if len(namespace) > 0:
+              prefix_parts += [namespace]
+            prefix = '::'.join(prefix_parts)
+            self._init(header, base_name, base_name_without_namespace, '', tensors, False, prefix=prefix)
+    for namespace, tensor_dict in self.iterate_collect():
+      prefix_parts = [f'{self.INIT_NAMESPACE}{templateval}']
+      if len(namespace) > 0:
+        prefix_parts += [namespace]
+      prefix = '::'.join(prefix_parts)
+      for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
+        self._init2(header, base_name, base_name_without_namespace, prefix, tensors, False)
+
+  def generateInitCpp(self, cpp):
+    templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
+    for namespace, tensor_dict in self.iterate_collect():
+      for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
+        prefix_parts = [f'{self.INIT_NAMESPACE}{templateval}']
+        if len(namespace) > 0:
+          prefix_parts += [namespace]
+        prefix_parts += [base_name_without_namespace, '']
         prefix = '::'.join(prefix_parts)
         self._init(cpp, base_name, base_name_without_namespace, prefix, tensors, True)
+        self._init2(cpp, base_name, base_name_without_namespace, prefix, tensors, True)
 
   def _tensor(self, cpp, name, tensors, groupSize, declarationOnly):
     shape = {group: tensor.shape() for group,tensor in tensors.items()}
@@ -747,16 +775,16 @@ class InitializerGenerator(object):
     self._array(cpp, self._numberType, name + self.SHAPE_NAME, shape, groupSize, declarationOnly)
     self._array(cpp, self._numberType, name + self.SIZE_NAME, size, groupSize, declarationOnly, alwaysArray=False)
 
-  def _init(self, cpp, baseName, baseNameWithoutNamespace, name, tensors, declarationOnly):
+  def _init(self, cpp, baseName, baseNameWithoutNamespace, name, tensors, declarationOnly, prefix=''):
     groupSize = self._groupSize[baseName]
     stride = groupSizeToStride(groupSize)
     index = lambda group: str(address(group, stride)) if len(group) > 0 else ''
 
     if declarationOnly:
-      for group,tensor in tensors.items():
-        ml = tensor.memoryLayout()
-        tv = self._tensorViewGenerator(ml)
-        tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
+      # for group,tensor in tensors.items():
+      #  ml = tensor.memoryLayout()
+      #  tv = self._tensorViewGenerator(ml)
+      #  tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
       valueNames = dict()
       for group,tensor in tensors.items():
         values = tensor.values()
@@ -771,7 +799,8 @@ class InitializerGenerator(object):
       if len(valueNames) > 1:
         self._array(cpp, self._realPtrType, name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
     else:
-      with cpp.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):
+      templateval = '' if self._template[1] is None else '<' + self._template[1] + '>'
+      with cpp.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, prefix)):
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
           tv = self._tensorViewGenerator(ml)
@@ -803,6 +832,13 @@ class InitializerGenerator(object):
           typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
           cpp('template<{}> struct {} {{}};'.format(typedArgs, self.VIEW_STRUCT_NAME))
 
+  def _init2(self, cpp, baseName, baseNameWithoutNamespace, prefix, tensors, declarationOnly):
+    groupSize = self._groupSize[baseName]
+    stride = groupSizeToStride(groupSize)
+    index = lambda group: str(address(group, stride)) if len(group) > 0 else ''
+    viewArgs = self.TensorView.arguments(self._arch)
+
+    if not declarationOnly:
       if len(groupSize) > 0:
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
@@ -810,7 +846,7 @@ class InitializerGenerator(object):
           typename = tv.typename(len(ml.shape()), self._arch)
           special = ','.join(str(g) for g in group)
           cpp('template<>')
-          with cpp.Struct('{}::{}<{}>'.format(baseNameWithoutNamespace, self.VIEW_STRUCT_NAME, special)):
+          with cpp.Struct('{}::{}::{}<{}>'.format(prefix, baseNameWithoutNamespace, self.VIEW_STRUCT_NAME, special)):
             cpp('typedef {} {};'.format(typename, self.VIEW_TYPE_NAME))
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, index(group))

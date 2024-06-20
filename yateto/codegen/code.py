@@ -163,12 +163,26 @@ class Cpp:
   
   def classDeclaration(self, name):
     return self.__call__('class {};'.format(name))
+
+  def TemplateStructForward(self, name, params):
+    if params is None:
+      return self.__call__(f'struct {name};')
+    else:
+      return self.__call__(f'template<{params}> struct {name};')
+
+  def TemplateStruct(self, name, values):
+    if values is None:
+      return Block(self, f'struct {name}', foot=';')
+    else:
+      return Block(self, f'template<> struct {name} <{values}>', foot=';')
   
   def forwardStruct(self, name):
     self.__call__('struct {};'.format(name))
 
   def Struct(self, name):
-    return Block(self, 'struct ' + name, foot=';')
+    if len(name) == 0:
+      return NoScope()
+    return Block(self, 'struct ' + name, foot='; // struct ' + name)
     
   def HeaderGuard(self, name):
     return HeaderGuard(self, name)

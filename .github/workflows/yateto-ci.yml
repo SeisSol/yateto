@@ -20,7 +20,6 @@ jobs:
         
     - name: Interface Tests
       run: |
-        . /etc/profile.d/z10_spack_environment.sh && . /etc/profile.d/z20_additional_env.sh
         cd ./tests/interface
         for build_type in Debug Release; do
           mkdir -p ./build-${build_type} && cd ./build-${build_type}

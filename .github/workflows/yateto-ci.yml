@@ -12,7 +12,7 @@ jobs:
 
     - name: Install Yateto
       run: |
-        pip3 install -e .
+        pip3 install -e . --break-system-packages
     
     - name: Python Tests
       run: |
@@ -45,7 +45,7 @@ jobs:
 
     - name: Install Yateto
       run: |
-        pip3 install -e .
+        pip3 install -e . --break-system-packages
 
     - name: Codegen Tests
       run: |

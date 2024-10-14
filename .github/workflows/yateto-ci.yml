@@ -6,7 +6,7 @@ jobs:
   general:
     runs-on: ubuntu-latest
     container: 
-      image: ravilmobile/yateto-env:latest
+      image: seissol/gha-cpu:davschneller-gpu-image
     steps:
     - uses: actions/checkout@v4
 
@@ -33,7 +33,7 @@ jobs:
   codegen:
     runs-on: ubuntu-latest
     container: 
-      image: ravilmobile/yateto-env:latest
+      image: seissol/gha-cpu:davschneller-gpu-image
     env:
       CTEST_OUTPUT_ON_FAILURE: 1
     strategy:

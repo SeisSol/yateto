@@ -48,7 +48,6 @@ jobs:
 
     - name: Codegen Tests
       run: |
-        . /etc/profile.d/z10_spack_environment.sh && . /etc/profile.d/z20_additional_env.sh
         cd ./tests/code-gen
         for example in matmul minimal; do
           for build_type in Debug Release; do

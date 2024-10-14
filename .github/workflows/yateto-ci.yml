@@ -6,21 +6,29 @@ jobs:
   general:
     runs-on: ubuntu-latest
     container: 
-      image: ravilmobile/yateto-env:latest
+      image: seissol/gha-cpu:davschneller-gpu-image
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Install Yateto
       run: |
-        pip3 install -e .
+        pip3 install -e . --break-system-packages
     
     - name: Python Tests
       run: |
         python3 -m unittest tests/internals/*.py
+    
+    - name: install-packages
+      run: |
+        apt-get update -y
+        apt-get install -y software-properties-common
+        add-apt-repository ppa:deadsnakes/ppa
+        apt-get update -y
+        apt-get install -y libomp-dev libopenmpi-dev openmpi-bin openmpi-common ninja-build
+        apt-get install -y cxxtest
         
     - name: Interface Tests
       run: |
-        . /etc/profile.d/z10_spack_environment.sh && . /etc/profile.d/z20_additional_env.sh
         cd ./tests/interface
         for build_type in Debug Release; do
           mkdir -p ./build-${build_type} && cd ./build-${build_type}
@@ -33,23 +41,38 @@ jobs:
   codegen:
     runs-on: ubuntu-latest
     container: 
-      image: ravilmobile/yateto-env:latest
+      image: seissol/gha-cpu:davschneller-gpu-image
     env:
       CTEST_OUTPUT_ON_FAILURE: 1
     strategy:
+      fail-fast: false
       matrix:
-        generator: [Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS]
+        generator: [Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS, PSpaMM]
         
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Install Yateto
       run: |
-        pip3 install -e .
+        pip3 install -e . --break-system-packages
+        
+    - name: install-packages
+      run: |
+        apt-get update -y
+        apt-get install -y software-properties-common
+        add-apt-repository ppa:deadsnakes/ppa
+        apt-get update -y
+        apt-get install -y libomp-dev libopenmpi-dev openmpi-bin openmpi-common ninja-build
+        apt-get install -y cxxtest
+    
+    - name: install-libxsmm
+      if: ${{ matrix.generator == 'LIBXSMM_JIT' }}
+      run: |
+        git clone --branch 1.17 https://github.com/libxsmm/libxsmm
+        make install
 
     - name: Codegen Tests
       run: |
-        . /etc/profile.d/z10_spack_environment.sh && . /etc/profile.d/z20_additional_env.sh
         cd ./tests/code-gen
         for example in matmul minimal; do
           for build_type in Debug Release; do
@@ -61,7 +84,7 @@ jobs:
               echo "==========================="
               mkdir -p ./build-${example}-${build_type}-${precision}
               cd ./build-${example}-${build_type}-${precision}
-              cmake .. -DEXAMPLES=${example} -DCMAKE_BUILD_TYPE=${build_type} -DPRECISION=${precision} -DVARIANT=${{ matrix.generator }} -DARCH=snb
+              cmake .. -DEXAMPLES=${example} -DCMAKE_BUILD_TYPE=${build_type} -DPRECISION=${precision} -DVARIANT=${{ matrix.generator }} -DARCH=hsw
               make
               make test
               cd ..

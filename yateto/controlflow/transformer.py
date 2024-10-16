@@ -1,5 +1,8 @@
 from .graph import *
 from collections import deque
+from ..ast.node import LoopOverGEMM
+from .fused_gemm_automata import Context as FusedGemmsContext
+
 
 class MergeScalarMultiplications(object):   
   def visit(self, cfg):
@@ -148,4 +151,16 @@ class DetermineLocalInitialization(object):
 
     if len(cfg) > 0:
       cfg[0].initBuffer = bufferSize
+    return cfg
+
+
+class FindFusedGemms(object):
+  def visit(self, cfg):
+    context = FusedGemmsContext.get_finite_automata()
+    try:
+      for pp in cfg:
+        context.process(pp)
+      cfg = context.get_cfg()
+    except Expression as err:
+      print(f'Warning: {err}')
     return cfg

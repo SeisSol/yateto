@@ -15,7 +15,8 @@ class RoutineCache(object):
   
   def addRoutine(self, name, generator):
     if name in self._routines and not self._routines[name] == generator:
-      raise RuntimeError('{} is already in RoutineCache but the generator is not equal. (That is, a name was given twice for different routines.)')
+      raise RuntimeError(f'`{name}` is already in RoutineCache but the generator is not equal. '
+                         f'(That is, a name was given twice for different routines.)')
     self._routines[name] = generator
     
     generatorName = type(generator).__name__
@@ -37,3 +38,24 @@ class RoutineCache(object):
       else:
         declaration = generator(name, cppFileName)
       header(declaration)
+
+class TinytcWriter(GpuRoutineGenerator):
+  def __init__(self, signature, source):
+    self._source = source
+    self._signature = signature
+
+  def __eq__(self, other):
+    return self._signature == other._signature
+
+  def header(self, cpp):
+    cpp.include('tinytc/tinytc.hpp')
+    cpp.include('tinytc/tinytc_sycl.hpp')
+    cpp.includeSys('sycl/sycl.hpp')
+    cpp.includeSys('stdexcept')
+    cpp.includeSys('utility')
+
+  def __call__(self, routineName, fileName):
+    with open(fileName, 'a') as f:
+      f.write(self._source)
+
+    return self._signature

@@ -38,7 +38,8 @@ class BLASlike(GemmTool):
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, alignedA, B, ldB, beta, C, ldC, alignedC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     parameters = [
       'CblasColMajor',
       self.bool2Trans(transA),
@@ -65,7 +66,8 @@ class BLIS(BLASlike):
   def bool2Trans(self, trans):
     return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_')
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, alignedA, B, ldB, beta, C, ldC, alignedC):
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     init = '_blis_alpha = {}; _blis_beta = {};'.format(alpha, beta)
     parameters = [
       self.bool2Trans(transA),
@@ -91,13 +93,15 @@ class Eigen(BLASlike):
   def sizeTrans(self, rows, cols, trans):
     return '{},{}'.format(cols,rows) if trans else '{},{}'.format(rows,cols)
 
-  def align(self, ld, is_aligned):
+  def align(self, ld):
     aligned = 'Unaligned'
-    if is_aligned and self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
+    if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
       aligned = 'Aligned{}'.format(self._arch.alignment)
     return aligned
 
-  def call(self, transA, transB, M, N, K, alpha, A, ldA, alignedA, B, ldB, beta, C, ldC, alignedC):
+
+  def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
+           alignedA, alignedC, prefetchName):
     AxB = '{alpha}_mapA{transA}*_mapB{transB}'.format(
             alpha=str(alpha) + '*' if alpha != 1.0 else '',
             transA=self.bool2Trans(transA), transB=self.bool2Trans(transB),
@@ -122,15 +126,57 @@ class Eigen(BLASlike):
                sizeA=self.sizeTrans(M,K,transA),
                sizeB=self.sizeTrans(K,N,transB),
                ldA=ldA, ldB=ldB, ldC=ldC, A=A, B=B, C=C,
-               alignA=self.align(ldA, alignedA), alignC=self.align(ldC, alignedC),
+               alignA=self.align(ldA), alignC=self.align(ldC),
                code=code)
     return code
 
+
 class CodeGenerator(GemmTool):
-  def __init__(self, operation_name: str, includes: List[str], cmd: str, arch):
+  def __init__(self, operation_name: str,
+               includes: List[str],
+               cmd: str,
+               arch,
+               is_internal=False):
     super().__init__(operation_name, includes)
     self.cmd = cmd
     self._arch = arch
+    self._is_internal = is_internal
+
+  def is_internal(self):
+    return self._is_internal
+
+
+class LIBXSMM_JIT(CodeGenerator):
+  def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
+    super().__init__('libxsmm_jit',
+                     ['libxsmm.h'],
+                     cmd,
+                     arch,
+                     is_internal=True)
+    self._threshold = threshold
+    self._arch = arch
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+    if (m*n*k)**(1./3.) <= self._threshold:
+      return Preference.HIGH
+    return Preference.LOW
+
+  def _archSupported(self):
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512', 'apple-m1', "apple-m2"}
+
+    if self._arch.name.lower() in supported_set:
+      return True
+    else:
+      return self._arch.host_name and self._arch.host_name.lower() in supported_set
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
+                beta, alignedA, alignedC, target):
+    # Note:
+    # Libxsmm falls back to blas for transA and more general alpha/beta
+    # See e.g. here:
+    # https://libxsmm.readthedocs.io/en/latest/libxsmm_qna/#what-is-a-small-matrix-multiplication
+    # https://github.com/hfp/libxsmm/issues/396#issuecomment-674741063
+    return self._archSupported() and not (sparseA or sparseB) and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
 class LIBXSMM(CodeGenerator):
   def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
@@ -138,7 +184,7 @@ class LIBXSMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'rome'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo'}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -164,7 +210,7 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'thunderx2t99', 'knl', 'skx'}
+    supported_set = {'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1', 'apple-m2'}
     if self._arch.name.lower() in supported_set:
       return True
     else:
@@ -193,11 +239,11 @@ class PSpaMM(CodeGenerator):
 
 class GemmForge(CodeGenerator):
   def __init__(self, arch, threshold: int = 256):
-    super().__init__('', ['gemmgen_aux.h'], '', arch)
+    super().__init__('', ['gemmforge_aux.h'], '', arch)
     self._threshold = threshold
 
   def _is_arch_supported(self):
-    return self._arch.name.lower() in {'nvidia'}
+    return self._arch.backend.lower() in {'cuda', 'hip', 'oneapi', 'hipsycl'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -211,6 +257,21 @@ class GemmForge(CodeGenerator):
     if m < 16:
       return Preference.LOWEST
     return Preference.HIGH
+
+class tinytc(CodeGenerator):
+  def __init__(self, arch):
+    super().__init__('', [], '', arch)
+    self._arch = arch
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+    return Preference.HIGHEST
+
+  def _archSupported(self):
+      return self._arch.backend.lower() == 'oneapi'
+
+  def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
+                beta, alignedA, alignedC, target):
+    return self._archSupported() and not (sparseA or sparseB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'gpu'
 
 
 class GeneratorCollection(object):
@@ -240,6 +301,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
   def __init__(self, arch):
     super().__init__([])
     libxsmm = LIBXSMM(arch)
+    libxsmm_jit = LIBXSMM_JIT(arch)
     pspamm = PSpaMM(arch)
     mkl = MKL(arch)
     blis = BLIS(arch)
@@ -247,18 +309,35 @@ class DefaultGeneratorCollection(GeneratorCollection):
     eigen = Eigen(arch)
     forge = GemmForge(arch)
     defaults = {
-      'snb' : [libxsmm, mkl, blis, eigen],
-      'hsw' : [libxsmm, mkl, blis, eigen],
-      'rome' : [libxsmm, blis, eigen],
-      'knl' : [libxsmm, pspamm, mkl, blis, eigen],
-      'skx' : [libxsmm, pspamm, mkl, blis, eigen],
-      'thunderx2t99' : [pspamm, openblas, blis, eigen],
-      'nvidia': [forge]
+      'snb' : [libxsmm_jit, libxsmm, mkl, blis, eigen],
+      'hsw' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
+      'naples' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
+      'rome' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
+      'milan' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
+      'bergamo' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
+      'knl' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
+      'skx' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
+      'thunderx2t99' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'apple-m1' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'apple-m2' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'a64fx' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'neon' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'sve128' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'sve256' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'sve512' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'sve1024' : [pspamm, openblas, blis, eigen],
+      'sve2048' : [pspamm, openblas, blis, eigen],
+      'power9' : [openblas, blis, eigen]
     }
 
     if arch.name in defaults:
       self.gemmTools = defaults[arch.name]
-      if arch.host_name:
-        self.gemmTools.extend(defaults[arch.host_name])
+    elif arch.host_name in defaults:
+      self.gemmTools = defaults[arch.host_name]
+      if arch.is_accelerator:
+        if arch.backend == 'oneapi':
+            self.gemmTools.extend([tinytc(arch)])
+        else:
+            self.gemmTools.extend([forge])
     else:
       raise Exception("Default generator collection for architecture {} is missing.".format(arch))

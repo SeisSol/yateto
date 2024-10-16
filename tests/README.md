@@ -37,7 +37,7 @@ in you current working environment.
 | code-gen  |     2 tests     |
 
 
-## Running tests
+## Running tests manually
 ### Interface
 ```console
 cd mkdir interface/build && cd interface/build
@@ -75,3 +75,14 @@ cmake .. -DPRECISION=single -DVARIANT=LIBXSMM
 make
 ctest
 ```
+
+## Running tests automatically
+The following [pipeline](Jenkinsfile) has been implemented to run the aforementioned tests automatically. As a regular user, you can see results of the last few runs of the pipeline [here](http://vmbungartz10.informatik.tu-muenchen.de/seissol/view/Yateto/job/yateto-codegen/). 
+
+You can trigger the pipeline and thus run all tests if you a member of SeisSol in github. To achive this, please, perform the following steps:
+
+- open this [page](http://vmbungartz10.informatik.tu-muenchen.de/seissol/view/Yateto/job/yateto-codegen/)
+- click on `log in` button at the top right corner and follow the authentication procedure
+- click on `Build with Parameters` button. You will be forwarded to the next page where you can adjust parameters. We do not recommend to make any changes in `AGENT` and `BUILD_ENV_IMAGE` fields
+- click on `Build` to trigger the pipeline. 
+- After that, you will see a new flashing entry at the very top of `Build History` field. If you want to see a detail status information about all steps involved in the pipeline then click on a dropdown widget of the flashing entry and select `Console Output`

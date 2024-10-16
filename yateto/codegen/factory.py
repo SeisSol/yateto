@@ -3,7 +3,7 @@ from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
 from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
-from . import copyscaleadd, indexsum, log, product
+from . import copyscaleadd, indexsum, log, product, fused_gemms
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -22,7 +22,7 @@ class KernelFactory(object):
   def generic_create(self, node, *args):
     raise NotImplementedError
 
-  def simple(self, result, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     raise NotImplementedError
 
   def temporary(self, bufname, size, iniZero=False, memory=list()):
@@ -30,8 +30,6 @@ class KernelFactory(object):
 
     if self._target == 'cpu':
       if self._arch.onHeap(size):
-        if memory:
-          raise NotImplementedError('Direct temporary initialization is not supported for heap-allocated memory.')
         if len(self._freeList) == 0:
           self._cpp('int {};'.format(self.ERROR_NAME))
         self._cpp('{}* {};'.format(self._arch.typename, bufname))
@@ -43,6 +41,9 @@ class KernelFactory(object):
                     self._arch.typename))
         if iniZero:
           self._cpp.memset(bufname, size, self._arch.typename)
+        if memory:
+          for i, data in enumerate(memory):
+            self._cpp(f'{bufname}[{i}] = {data};')
         self._freeList.append(bufname)
       else:
         ini = ''
@@ -72,7 +73,15 @@ class KernelFactory(object):
     if self._target == 'cpu':
       pass
     elif self._target == 'gpu':
-      self._cpp(f'{BatchedOperationsAux.STREAM_PTR_NAME} = nullptr;')
+      self._cpp(f'{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
+    else:
+      raise RuntimeError('unknown compute target')
+
+  def reset_flags(self):
+    if self._target == 'cpu':
+      pass
+    elif self._target == 'gpu':
+      self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
     else:
       raise RuntimeError('unknown compute target')
 
@@ -98,6 +107,11 @@ class OptimisedKernelFactory(KernelFactory):
       prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description, self._target)
+    return generator.generate(self._cpp, routineCache, gemm_cfg)
+
+  def create_FusedGEMMs(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    description = fused_gemms.Description(node, result, arguments, add, scalar)
+    generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
   
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -128,20 +142,20 @@ class OptimisedKernelFactory(KernelFactory):
     description = copyscaleadd.Description(
       alpha = scalar,
       beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()),
-      term = IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())
+      result = IndexedTensorDescription.fromVar(result, node.indices),
+      term = IndexedTensorDescription.fromVar(term, node.term().indices)
     )
-    generator = copyscaleadd.generator(self._arch, description, self._target)
+    generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache)
   
-  def simple(self, result, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
       alpha = scalar,
       beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()),
-      term = IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())
+      result = IndexedTensorDescription.fromVar(result, self._indices(result)),
+      term = IndexedTensorDescription.fromVar(term, self._indices(term))
     )
-    generator = copyscaleadd.generator(self._arch, description, self._target)
+    generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache)
 
 class UnitTestFactory(KernelFactory):
@@ -200,7 +214,7 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, indices, ranges, AssignBody(), pragmaSimd=False)
 
-  def simple(self, result, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     g = self._indices(result)
 
     resultTerm = self._formatTerm(result, g)

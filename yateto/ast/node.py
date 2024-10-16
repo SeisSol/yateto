@@ -59,7 +59,7 @@ class Node(ABC):
     pass
 
   def permute(self, indices, spp):
-    perm = tuple([indices.find(idx) for idx in self.indices])
+    perm = tuple(indices.find(idx) for idx in self.indices)
     return spp.transposed(perm)
 
   def _checkMultipleScalarMults(self):
@@ -174,7 +174,7 @@ class Op(Node):
     if str(indices) == str(self.indices):
       return
 
-    p = tuple([self.indices.find(idx) for idx in indices])
+    p = tuple(self.indices.find(idx) for idx in indices)
     if self._eqspp is not None:
       if permuteEqspp:
         self._eqspp = self._eqspp.transposed(p)
@@ -446,3 +446,37 @@ class LoopOverGEMM(BinOp):
     Bstr = self.indexString('B', [self._k, self._n], self.rightTerm().indices, self._transB)
     Cstr = self.indexString('C', [self._m, self._n], self.indices)
     return '{} [{}]: {} = {} {}'.format(type(self).__name__, self.indices, Cstr, Astr, Bstr)
+
+  def is_pure_gemm(self):
+    left_indices = self.leftTerm().indices
+    right_indices = self.rightTerm().indices
+    if not (len(left_indices) == 2 and len(right_indices) == 2):
+      return False
+
+    return True if len(left_indices - right_indices) == 1 else False
+
+
+class FusedGEMMs(Op):
+  def __init__(self):
+    super().__init__()
+
+  def add(self, node):
+    if isinstance(node, LoopOverGEMM):
+      self._children.append(node)
+    else:
+      raise ValueError(f'expected LoopOverGEMM, received: {type(node)}')
+
+  def get_children(self):
+    return self._children
+
+  def get_child(self, index):
+    return self._children[index]
+
+  def nonZeroFlops(self):
+    nzFlops = 0
+    for child in self._children:
+      nzFlops += child.nonZeroFlops()
+    return nzFlops
+
+  def is_empty(self):
+    return len(self._children) == 0

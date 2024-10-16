@@ -1,9 +1,13 @@
 import hashlib
 import subprocess
 import tempfile
-from ..cache import RoutineGenerator, GpuRoutineGenerator
-from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge
-from ..common import BatchedOperationsAux
+from abc import ABC
+from collections import namedtuple
+
+from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
+from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
+from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
+from ..tiny_tensor_language import *
 import importlib.util
 
 
@@ -45,17 +49,21 @@ class GemmGen(object):
       sha = hashlib.md5()
       sha.update(str(spp).encode())
       name += 'sparse_' + sha.hexdigest()
-    return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_{prefetch}'.format(
+    return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
       name=name,
       alphaSubs=self._alpha(gemm['alpha']),
       betaSubs=self._beta(gemm['beta']),
       **gemm
     )
-  
-  def _pointer(self, term, offset2, transpose):
+
+  def _offset(self, term, offset2, transpose):
     if transpose:
+      # swaps elements of tuple if transpose
       offset2 = offset2[::-1]
-    o = term.memoryLayout.subtensorOffset(offset2)
+    return term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
+
+  def _pointer(self, term, offset2, transpose):
+    o = self._offset(term, offset2, transpose)
     if o > 0:
       return '{} + {}'.format(term.name, o)
     return term.name
@@ -86,14 +94,20 @@ class GemmGen(object):
       flops = 2 * m.size() * n.size() * k.size()
     
     if isinstance(self._gemm_cfg, BLASlike):
+      ptr_a = self._pointer(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
+      ptr_b = self._pointer(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
+      ptr_c = self._pointer(term=d.result, offset2=(m.start, n.start), transpose=False)
+
       cpp(  self._gemm_cfg.call(d.transA,
                                 d.transB,
                                 m.size(), n.size(), k.size(),
-                                d.alpha, self._pointer(d.leftTerm, (m.start, k.start), d.transA),
-                                ldA, d.alignedA,
-                                self._pointer(d.rightTerm, (k.start, n.start), d.transB), ldB,
-                                d.beta, self._pointer(d.result, (m.start, n.start), False), ldC, d.alignedC))
-
+                                d.alpha,
+                                ptr_a, ldA,
+                                ptr_b, ldB,
+                                d.beta, ptr_c, ldC,
+                                alignedA=d.alignedA,
+                                alignedC=d.alignedC,
+                                prefetchName=d.prefetchName))
     elif isinstance(self._gemm_cfg, GemmForge):
 
       if gf_spec:
@@ -115,24 +129,28 @@ class GemmGen(object):
                                                            transpose=False)
 
         try:
-          forge_generator = gf.GemmGenerator(gf.arch.produce(self._arch.name, self._arch.sub_name),
-                                             self._arch.typename)
-          forge_generator.generate(matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
+          vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=self._arch.typename)
+          forge_generator = gf.GemmGenerator(vm)
+          forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
-          args = [aux.deduce_arg(d.leftTerm, as_const=True),
-                  aux.deduce_arg(d.rightTerm, as_const=True),
-                  aux.deduce_arg(d.result, as_const=False),
+          args = [aux.deduce_ptr_arg(d.leftTerm, as_const=True),
+                  aux.deduce_offset_arg(d.leftTerm),
+                  aux.deduce_ptr_arg(d.rightTerm, as_const=True),
+                  aux.deduce_offset_arg(d.rightTerm),
+                  aux.deduce_ptr_arg(d.result, as_const=False),
+                  aux.deduce_offset_arg(d.result),
                   BatchedOperationsAux.NUM_ELEMENTS_NAME,
+                  BatchedOperationsAux.FLAGS_NAME,
                   BatchedOperationsAux.STREAM_PTR_NAME]
           args_str = ', '.join(args)
 
           if not isinstance(d.alpha, float):
             args_str = f'{d.alpha}, {args_str}'
 
-          cpp("{}({});".format(routine_name, args_str))
+          cpp(f'{routine_name}({args_str});')
 
-          routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator))
+          routineCache.addRoutine(routine_name, GemmForgeWriter(forge_generator, vm.get_headers()))
 
         except gf.GenerationError as err:
           print(f'ERROR from GemmForge: {err}')
@@ -140,11 +158,45 @@ class GemmGen(object):
       else:
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
+    elif isinstance(self._gemm_cfg, tinytc):
+      aux = BatchedOperationsAux(self._arch.typename)
+      gemm = {
+        'M':            m.size(),
+        'N':            n.size(),
+        'K':            k.size(),
+        'LDA':          ldA,
+        'addrA':        aux.deduce_addresing(d.leftTerm),
+        'distA':        d.leftTerm.memoryLayout.requiredReals(),
+        'LDB':          ldB,
+        'addrB':        aux.deduce_addresing(d.rightTerm),
+        'distB':        d.rightTerm.memoryLayout.requiredReals(),
+        'LDC':          ldC,
+        'addrC':        aux.deduce_addresing(d.result),
+        'distC':        d.result.memoryLayout.requiredReals(),
+        'alpha':        self._alpha(d.alpha),
+        'beta':         self._beta(d.beta),
+        'transA':       d.transA,
+        'transB':       d.transB,
+      }
 
+      kernel = tinytcGemmGen(self._arch, gemm)
 
+      def call_arg(name, term, modified, offset):
+          return TinytcKernelArgument(name, term.name, term.is_compute_constant, term.is_temporary, modified, offset)
+      offset_a = self._offset(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
+      offset_b = self._offset(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
+      offset_c = self._offset(term=d.result, offset2=(m.start, n.start), transpose=False)
+      args = [TinytcScalarKernelArgument('alpha', str(gemm['alpha'])),
+              call_arg('A', d.leftTerm, False, offset_a),
+              call_arg('B', d.rightTerm, False, offset_b),
+              call_arg('C', d.result, True, offset_c)]
+      routine_name = 'tinytc_wrapper_{typename}_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_tA{transA}_tB{transB}'.format(typename=self._arch.typename, **gemm)
+      wrapper = TinytcWrapper(kernel, args, self._arch.typename, routine_name)
+
+      cpp(wrapper.call())
+      prototype = wrapper.prototype()
+      routineCache.addRoutine(prototype, TinytcWriter(prototype, wrapper.definition()))
     else:
-      assert not (d.transA or d.transB)
-
       gemm = {
         'M':            m.size(),
         'N':            n.size(),
@@ -156,10 +208,14 @@ class GemmGen(object):
         'beta':         self._beta(d.beta),
         'alignedA':     int(d.alignedA),
         'alignedC':     int(d.alignedC),
-        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly'
+        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly',
+        'transA': d.transA,
+        'transB': d.transB,
+
       }
 
       routineName = self.generateRoutineName(gemm, spp)
+
 
       if self._mode == 'pspamm':
         cpp( '{}({}, {}, {}, {}, {}, {});'.format(
@@ -180,8 +236,12 @@ class GemmGen(object):
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
 
-      routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._gemm_cfg))
-    
+      if self._gemm_cfg.is_internal():
+        routineCache.addRoutine(routineName, LibxsmmGemmGen(
+          self._arch, gemm, spp, sppRows, self._gemm_cfg))
+      else:
+        routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._gemm_cfg))
+
     return flops
 
 class ExecuteGemmGen(RoutineGenerator):  
@@ -207,15 +267,35 @@ class ExecuteGemmGen(RoutineGenerator):
       cpp.includeSys('immintrin.h')
 
   def _callGenerator(self, argList):
+    resultCode = 1
     try:
-      subprocess.call([str(arg) for arg in argList])
+      strcmd = [str(arg) for arg in argList]
+      result = subprocess.run(strcmd)
     except OSError:
-      raise RuntimeError('GEMM code generator executable "{}" not found. (Make sure to add the folder containing the executable to your PATH.)'.format(self._cmd))
+      raise RuntimeError(f'GEMM code generator executable "{self._cmd}" not found. (Make sure to add the folder containing the executable to your PATH environment variable.)')
+    if result.returncode != 0:
+      raise RuntimeError(f"""GEMM code generator executable "{self._cmd}" failed. Thus, the kernel generation may be incomplete.
+Given command: {' '.join(strcmd)}
+Stdout: {result.stdout}
+Stderr: {result.stderr}""")
   
   def __call__(self, routineName, fileName):
     cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
 
     if self._mode == 'pspamm':
+      pspamm_arch = cpu_arch
+      if cpu_arch == 'a64fx':
+        pspamm_arch = 'arm_sve512'
+      elif cpu_arch in ['apple-m1', 'thunderx2t99', 'neon']:
+        pspamm_arch = 'arm'
+      elif cpu_arch.startswith('sve'):
+        pspamm_arch = f'arm_{cpu_arch}' # TODO(David): rename to sveLEN only
+      elif cpu_arch in ['naples', 'rome', 'milan']:
+        # names are Zen1, Zen2, Zen3, respectively
+        # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
+        pspamm_arch = 'hsw'
+      elif cpu_arch in ['bergamo']:
+        pspamm_arch = 'skx'
       argList = [
         self._cmd,
         self._gemmDescr['M'],
@@ -227,7 +307,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        cpu_arch,
+        pspamm_arch, 
         '--prefetching',
         self._gemmDescr['prefetch'],
         '--output_funcname',
@@ -240,6 +320,13 @@ class ExecuteGemmGen(RoutineGenerator):
       for key, val in self._blockSize.items():
         argList.extend(['--' + key, val])
     else:
+      libxsmm_arch = cpu_arch
+      if cpu_arch in ['naples', 'rome', 'milan']:
+        # names are Zen1, Zen2, Zen3, respectively
+        # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
+        libxsmm_arch = 'hsw'
+      elif cpu_arch in ['bergamo']:
+        libxsmm_arch = 'skx'
       argList = [
         self._cmd,
         'dense',
@@ -255,7 +342,7 @@ class ExecuteGemmGen(RoutineGenerator):
         self._gemmDescr['beta'],
         self._gemmDescr['alignedA'],
         self._gemmDescr['alignedC'],
-        'hsw' if cpu_arch == 'rome' else cpu_arch, # libxsmm has no support for rome, hsw works well in practice
+        libxsmm_arch, # libxsmm has no support for rome, hsw works well in practice
         self._gemmDescr['prefetch'],
         self._arch.precision + 'P'
       ]
@@ -287,11 +374,10 @@ class ExecuteGemmGen(RoutineGenerator):
   
 
 class GemmForgeWriter(GpuRoutineGenerator):
-  def __init__(self, forge_generator):
+  def __init__(self, forge_generator, headers):
+    self._generator = forge_generator
     self._basename = forge_generator.get_base_name()
-    self._declaration = forge_generator.get_launcher_header()
-    self._launcher = forge_generator.get_launcher()
-    self._kernel = forge_generator.get_kernel()
+    self._headers = headers
 
   def __eq__(self, other):
     if isinstance(other, GemmForgeWriter):
@@ -300,11 +386,166 @@ class GemmForgeWriter(GpuRoutineGenerator):
       return False
 
   def header(self, cpp):
-    cpp.include('gemmgen_aux.h')
+    cpp.includes(self._headers)
 
   def __call__(self, routineName, fileName):
-    with open(fileName, "a") as file:
-      file.write(self._kernel)
-      file.write(self._launcher)
+    self._generator.generate()
+    declaration = self._generator.get_launcher_header()
+    launcher = self._generator.get_launcher()
+    kernel = self._generator.get_kernel()
 
-    return self._declaration
+    with open(fileName, "a") as file:
+      file.write(kernel)
+      file.write(launcher)
+
+    return declaration
+
+
+class LibxsmmGemmGen(ExecuteGemmGen):
+  def __init__(self,
+               arch,
+               gemm_descr,
+               spp,
+               spp_rows,
+               gemm_cfg):
+    super().__init__(arch, gemm_descr, spp, spp_rows, gemm_cfg)
+
+  def header(self, cpp):
+    super().header(cpp)
+    cpp.include('libxsmm.h')
+
+  def _kernel(self, routine_name):
+    M = self._gemmDescr['M']
+    N = self._gemmDescr['N']
+    K = self._gemmDescr['K']
+    ldA = self._gemmDescr['LDA']
+    ldB = self._gemmDescr['LDB']
+    ldC = self._gemmDescr['LDC']
+    alpha = self._gemmDescr['alpha']
+    beta = self._gemmDescr['beta']
+    alignedA = self._gemmDescr['alignedA']
+    alignedC = self._gemmDescr['alignedC']
+    prefetch = self._gemmDescr['prefetch']
+    transA = self._gemmDescr['transA']
+    transB = self._gemmDescr['transB']
+
+    flags = ["LIBXSMM_GEMM_FLAG_NONE"]
+    if transA:
+      flags += ['LIBXSMM_GEMM_FLAG_TRANS_A']
+    if transB:
+      flags += ['LIBXSMM_GEMM_FLAG_TRANS_B']
+
+    # Note: Alignment is currently a bit buggy.
+    # Enabling alignedC leads to wrong results currenty.
+    # See:
+    # https://github.com/SeisSol/yateto/issues/15
+    #if alignedA:
+    #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_A"]
+    #if alignedC:
+    #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
+    libxsmm_flag_str = " | ".join(flags)
+
+    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_NONE" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
+
+    kernel_var_name = f'{routine_name}_var'
+    return """
+static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
+  {flag}, // flag
+  {M}, // M
+  {N}, // N
+  {K}, // K
+  {ldA}, // lda
+  {ldB}, // ldb
+  {ldC}, // ldc
+  {alpha}, // alpha
+  {beta}, // beta
+  {prefetch_flag} // prefetch
+); 
+""".format(kernel_var_name=kernel_var_name,
+           prec=self._arch.typename, M=M, N=N, K=K,
+           ldA=ldA, ldB=ldB, ldC=ldC,
+           alpha=alpha, beta=beta,
+           flag=libxsmm_flag_str,
+           prefetch_flag=prefetch_flag,
+           prefetch=prefetch,
+ )
+
+  def _call(self, routineName):
+    # See: https://github.com/libxsmm/libxsmm/blob/180aae45a74731c3f8fb697b62dcb6c336c218ac/src/generator_gemm_common.c#L1971
+    #flops=2*M*N*K
+    M = self._gemmDescr['M']
+    N = self._gemmDescr['N']
+    K = self._gemmDescr['K']
+    flops = 2 * M * N * K;
+    return f"""
+{{
+    {routineName}_var(A, B, C, A_prefetch, B_prefetch, C_prefetch);
+#ifndef NDEBUG
+#ifdef _OPENMP
+#pragma omp atomic
+#endif
+    libxsmm_num_total_flops += {flops}; // 2 * {M} * {N} * {K}
+#endif
+}}
+"""
+
+  def _functionSignature(self, routineName):
+    return 'void {routineName}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch)'.format(routineName=routineName, type=self._arch.typename)
+
+  def __call__(self, routineName, fileName):
+    func_signature = self._functionSignature(routineName)
+    with open(fileName, "a") as file:
+      file.write(self._kernel(routineName))
+      file.write(f"{func_signature}")
+      file.write(self._call(routineName))
+    return func_signature + ";"
+
+def tinytcGemmGen(arch, gd):
+  scalar_ty = ScalarType(FloatingType.f64) if arch.bytesPerReal == 8 else ScalarType(FloatingType.f32)
+
+  Operand = namedtuple('Operand', ['name', 'addr', 'rows', 'cols', 'ld', 'dist'])
+  def data_type(op):
+    if op.addr == 'pointer_based':
+      return GroupType(MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld)), DYNAMIC)
+    elif op.addr == 'strided':
+      return MemrefType(scalar_ty, (op.rows, op.cols, DYNAMIC), (1, op.ld, op.dist))
+    elif op.addr == 'none':
+      return MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld))
+    else:
+      raise NameError(op.addr)
+  def load_inst(op, batch, gid):
+    zero = IntImmValue(IntegerType.index, 0)
+    dyn = IntImmValue(IntegerType.index, DYNAMIC)
+    if op.addr == 'pointer_based':
+      return LoadInst(batch, [gid])
+    elif op.addr == 'strided':
+      return SubviewInst(batch, [zero,zero,gid], [dyn,dyn,None])
+    elif op.addr == 'none':
+      return SubviewInst(batch, [zero,zero], [dyn,dyn])
+    else:
+      raise NameError(op.addr)
+
+  opA = Operand('A', gd['addrA'], gd['M'], gd['K'], gd['LDA'], gd['distA'])
+  opB = Operand('B', gd['addrB'], gd['K'], gd['N'], gd['LDB'], gd['distB'])
+  opC = Operand('C', gd['addrC'], gd['M'], gd['N'], gd['LDC'], gd['distC'])
+
+  T = lambda x: Transpose.t if x else Transpose.n
+  tA = T(gd['transA'])
+  tB = T(gd['transB'])
+  beta = gd['beta']
+
+  alpha = LocalValue(scalar_ty, 'alpha')
+  Abatch = LocalValue(data_type(opA), 'Abatch')
+  Bbatch = LocalValue(data_type(opB), 'Bbatch')
+  Cbatch = LocalValue(data_type(opC), 'Cbatch')
+  kernel = Function('gemm', [alpha, Abatch, Bbatch, Cbatch], None)
+  bb = RegionBuilder()
+  gid = bb.add(GroupIdInst())
+  A = bb.add(load_inst(opA, Abatch, gid))
+  B = bb.add(load_inst(opB, Bbatch, gid))
+  C = bb.add(load_inst(opC, Cbatch, gid))
+  bb.add(GemmInst(tA, tB, alpha, A, B, FloatImmValue(scalar_ty, beta), C))
+  kernel.body = bb.get_product()
+  AssignIdentifiers().visit(kernel)
+
+  return kernel

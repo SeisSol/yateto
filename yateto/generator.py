@@ -14,9 +14,12 @@ from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
-from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike
+from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc
 from typing import List
 from io import StringIO
+import importlib.util
+chainforge_spec = importlib.util.find_spec('chainforge')
+
 
 class Kernel(object):
   BASE_NAME = r'[a-zA-Z]\w*'
@@ -53,7 +56,7 @@ class Kernel(object):
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
-  
+
   def prepareUntilUnitTest(self):
     self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
@@ -62,12 +65,12 @@ class Kernel(object):
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
   
-  def prepareUntilCodeGen(self, costEstimator):
+  def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool):
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
       ast = EquivalentSparsityPattern(groupSpp=False).visit(ast)
-      ast = StrengthReduction(costEstimator).visit(ast)
+      ast = StrengthReduction(cost_estimator).visit(ast)
       ast = SetSparsityPattern().visit(ast)
       self.nonZeroFlops += ComputeOptimalFlopCount().visit(ast)
 
@@ -75,7 +78,7 @@ class Kernel(object):
     prefetch = copy.copy(self._prefetch)
     for ast in self.ast:
       ast = EquivalentSparsityPattern().visit(ast)
-      ast = StrengthReduction(costEstimator).visit(ast)
+      ast = StrengthReduction(cost_estimator).visit(ast)
       ast = FindContractions().visit(ast)
       ast = ComputeMemoryLayout().visit(ast)
       permutationVariants = FindIndexPermutations().visit(ast)
@@ -99,7 +102,10 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
-    
+    if self.target == 'gpu' and enableFusedGemm:
+      self.cfg = FindFusedGemms().visit(self.cfg)
+      self.cfg = LivenessAnalysis().visit(self.cfg)
+
 class KernelFamily(object):
   GROUP_INDEX = r'\((0|[1-9]\d*)\)'
   VALID_NAME = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX)
@@ -170,9 +176,9 @@ class KernelFamily(object):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest()
   
-  def prepareUntilCodeGen(self, costEstimator):
+  def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
-      kernel.prepareUntilCodeGen(costEstimator)
+      kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
 
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
@@ -209,7 +215,7 @@ class Generator(object):
 
   def arch(self):
     return self._arch
-  
+
   def add(self, name: str, ast: Node, prefetch=None, namespace=None, target='cpu'):
     if KernelFamily.isValidName(name):
       baseName = KernelFamily.baseName(name)
@@ -252,14 +258,18 @@ class Generator(object):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
 
-  def generate( self,
-                outputDir: str,
-                namespace = 'yateto',
-                gemm_cfg: GeneratorCollection = None,
-                costEstimator = BoundingBoxCostEstimator,
-                include_tensors = set()):
+  def generate(self,
+               outputDir: str,
+               namespace='yateto',
+               gemm_cfg: GeneratorCollection = None,
+               cost_estimator=BoundingBoxCostEstimator,
+               include_tensors=set()):
+
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
+
+    hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
+    enableFusedGemm = bool(chainforge_spec) or hasTinytc
 
     print('Deducing indices...')
     for kernel in self._kernels:
@@ -278,24 +288,24 @@ class Generator(object):
     print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
         for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg, testFramework)
+            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, kernel.target, gemm_cfg, testFramework)
         for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, testFramework, group)
+                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, group)
     with Cpp(fUTdoctest.cpp) as cpp:
-        Doctest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+        Doctest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
     with Cpp(fUTcxxtest.h) as cpp:
         with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
-            CxxTest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+            CxxTest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
-      print(kernel.name)
-      kernel.prepareUntilCodeGen(costEstimator)
+      print(f'{kernel.name} ({len(kernel.ast)} AST(s))')
+      kernel.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
     for family in self._kernelFamilies.values():
-      print(family.name)
-      family.prepareUntilCodeGen(costEstimator)
-
+      print(f'{family.name} ({sum(len(kernel.ast) for kernel in family.kernels())} AST(s))')
+      family.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
 
     # Create mapping from namespace to kernel/family
     kernel_dict = {}
@@ -322,6 +332,7 @@ class Generator(object):
       cpp.includeSys('cassert')
       cpp.includeSys('cstring')
       cpp.includeSys('cstdlib')
+      cpp.includeSys('limits')
 
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
@@ -362,15 +373,16 @@ class Generator(object):
           cpp.include(inc)
         if isinstance(gemm_tool, BLASlike):
           cpp(gemm_tool.c_code_init)
-      cpp.out.write(kernelSourceContent)      
+      cpp.out.write(kernelSourceContent)
 
     print('Calling external code generators...')
     with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
         cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
-    
+
     # Mapping basename -> tensor
     tensors = dict()
+    scalars = set()
 
     # Mapping namespace -> (basename -> tensor)
     tensors_dict = collections.defaultdict(dict)
@@ -381,15 +393,17 @@ class Generator(object):
     for kernel in self._kernels:
         tensors.update( FindTensors().visit(kernel.ast) )
         tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        scalars.update(ScalarsSet().visit(kernel.cfg))
     for family in self._kernelFamilies.values():
       for group, kernel in family.items():
         tensors.update( FindTensors().visit(kernel.ast) )
         tensors_dict[''].update( FindTensors().visit(kernel.ast) )
-    
+        scalars.update(ScalarsSet().visit(kernel.cfg))
+
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
-    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key))
+    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key))
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):

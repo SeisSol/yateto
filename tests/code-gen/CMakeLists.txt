@@ -1,12 +1,16 @@
 cmake_minimum_required(VERSION 3.5)
 project(unittest)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 set(EXAMPLES "matmul;minimal" CACHE STRING "a list of examples to run as tests")
 set(SAMPLES hosvd matmul minimal seissol_eqspp stock tce)
 set_property(CACHE EXAMPLES PROPERTY STRINGS ${SAMPLES})
 
 set(VARIANT "Eigen" CACHE STRING "example-specific variant")
-set(VARIANTS Eigen LIBXSMM OpenBLAS)
+set(VARIANTS Eigen LIBXSMM LIBXSMM_JIT OpenBLAS)
 set_property(CACHE VARIANT PROPERTY STRINGS ${VARIANTS})
 
 set(PRECISION "double" CACHE STRING "floating point type: double/single")
@@ -31,7 +35,6 @@ if (${ARCH} STREQUAL "thunderx2t99")
     set(CPU_FLAGS ${CPU_FLAGS} "-mcpu=native")
 endif()
 
-
 find_package(CxxTest REQUIRED)
 # attach all necessary external libs
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
@@ -39,7 +42,12 @@ if (VARIANT STREQUAL "OpenBLAS")
     find_package(OpenBLAS REQUIRED)
     set(EXTRA_INCLUDES ${OpenBLAS_INCLUDE_DIRS})
     set(EXTRA_LIBS ${OpenBLAS_LIBRARIES})
-elseif(VARIANT STREQUAL "LIBSXSMM")
+elseif(VARIANT STREQUAL "LIBXSMM_JIT")
+    find_package(LIBXSMM REQUIRED)
+    find_package(BLAS REQUIRED)
+    set(EXTRA_INCLUDES ${LIBXSMM_INCLUDE_DIRS} ${BLAS_INCLUDE_DIRS})
+    set(EXTRA_LIBS ${LIBXSMM_LIBRARIES} ${BLAS_LIBRARIES})
+elseif(VARIANT STREQUAL "LIBXSMM")
     find_package(Libxsmm_executable REQUIRED)
 elseif(VARIANT STREQUAL "Eigen")
     find_package(Eigen3 REQUIRED)
@@ -58,7 +66,7 @@ foreach(EXAMPLE ${EXAMPLES})
 
     # execute code generator
     add_custom_command(COMMAND
-                        python ${CMAKE_SOURCE_DIR}/generator.py
+                        python3 ${CMAKE_SOURCE_DIR}/generator.py
                         --arch ${ARCH_STR}
                         --variant ${VARIANT}
                         --output_dir ${CMAKE_BINARY_DIR}
@@ -70,6 +78,7 @@ foreach(EXAMPLE ${EXAMPLES})
                         ${GEN_DIR}/kernel.h
                         ${GEN_DIR}/tensor.h
                         ${GEN_DIR}/subroutine.h
+                        ${GEN_DIR}/KernelTest.t.h
                         COMMENT "Generating a source code")
 
 
@@ -86,9 +95,10 @@ foreach(EXAMPLE ${EXAMPLES})
     target_include_directories(${EXAMPLE}-target PUBLIC ${CMAKE_SOURCE_DIR}/common
                                                       ${CMAKE_SOURCE_DIR}/../../include
                                                       ${GEN_DIR}
+                                                      ${EXTRA_INCLUDES}
                                                       ${CXXTEST_INCLUDE_DIRS}
                                                       ${OpenBLAS_INCLUDE_DIRS})
     target_link_libraries(${EXAMPLE}-target PUBLIC ${EXTRA_LIBS})
-    target_compile_options(${EXAMPLE}-target PUBLIC "-std=c++11" ${CPU_FLAGS})
+    target_compile_options(${EXAMPLE}-target PUBLIC ${CPU_FLAGS})
     add_test(${EXAMPLE}-test ${EXAMPLE}-target)
 endforeach()

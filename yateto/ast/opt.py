@@ -6,7 +6,7 @@ def strengthReduction(terms, target_indices, cost_estimator, split = 0):
   
   indexList = [index for term in terms for index in term.indices]
   uniqueIndices = set(indexList)
-  summationIndices = set([index for index in uniqueIndices if indexList.count(index) == 1]) - set(target_indices)
+  summationIndices = set(index for index in uniqueIndices if indexList.count(index) == 1) - set(target_indices)
   
   while len(summationIndices) != 0:
     i = split
@@ -32,9 +32,14 @@ def strengthReduction(terms, target_indices, cost_estimator, split = 0):
       prodCost = cost_estimator.estimate(mulTerm)
       if best == None or prodCost < minCost:
         selection = set(range(n)) - set([i,j])
-        tree = strengthReduction([terms[i] for i in selection] + [mulTerm], target_indices, cost_estimator, j-1)
+        tree = strengthReduction([terms[i] for i in selection] + [mulTerm],
+                                 target_indices,
+                                 cost_estimator,
+                                 j-1)
+
         treeCost = cost_estimator.estimate(tree)
         if best == None or treeCost < minCost:
           best = tree
           minCost = treeCost
+
   return best

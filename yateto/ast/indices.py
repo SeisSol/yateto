@@ -25,7 +25,7 @@ class Indices(object):
     return self.subShape(self._indices)
   
   def subShape(self, indexNames):
-    return tuple([self._size[index] for index in indexNames])
+    return tuple(self._size[index] for index in indexNames)
 
   def indexSize(self, index):
     return self._size[index]
@@ -70,7 +70,7 @@ class Indices(object):
     
   def __le__(self, other):
     indexNamesContained = set(self._indices) <= set(other._indices)
-    return indexNamesContained and all([self._size[index] == other._size[index] for index in self._indices])
+    return indexNamesContained and all(self._size[index] == other._size[index] for index in self._indices)
   
   def __sub__(self, other):
     indexNames = [index for index in self._indices if index not in other]
@@ -89,7 +89,7 @@ class Indices(object):
     return self.tostring()
     
   def __repr__(self):
-    return '({})'.format(','.join(['{}={}'.format(index, self._size[index]) for index in self._indices]))
+    return '({})'.format(','.join('{}={}'.format(index, self._size[index]) for index in self._indices))
   
   def size(self):
     return self._size
@@ -143,8 +143,8 @@ class BoundingBox(object):
     if len(self) == 0:
       return True
     if isinstance(entry[0], Range):
-      return all([e in self[i] for i,e in enumerate(entry)])
-    return all([e >= self[i].start and e <= self[i].stop for i,e in enumerate(entry)])
+      return all(e in self[i] for i,e in enumerate(entry))
+    return all(e >= self[i].start and e <= self[i].stop for i,e in enumerate(entry))
   
   def __getitem__(self, key):
     return self._box[key]
@@ -156,10 +156,10 @@ class BoundingBox(object):
     return iter(self._box)
   
   def __eq__(self, other):
-    return all([s == o for s,o in zip(self,other)])
+    return all(s == o for s,o in zip(self,other))
   
   def __str__(self):
-    return '{}({})'.format(type(self).__name__, ', '.join([str(r) for r in self]))
+    return '{}({})'.format(type(self).__name__, ', '.join(str(r) for r in self))
 
 @functools.total_ordering
 class LoGCost(object):    

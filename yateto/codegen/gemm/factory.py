@@ -4,8 +4,21 @@ from ..common import TensorDescription
 from .generic import Generic
 from .gemmgen import GemmGen
 
+
 class Description(object):
-  def __init__(self, result: TensorDescription, leftTerm: TensorDescription, rightTerm: TensorDescription, transA, transB, alpha, beta, arch, alignedStartA, alignedStartC, prefetchName = None):
+  def __init__(self,
+               result: TensorDescription,
+               leftTerm: TensorDescription,
+               rightTerm: TensorDescription,
+               transA,
+               transB,
+               alpha,
+               beta,
+               arch,
+               alignedStartA,
+               alignedStartC,
+               prefetchName = None):
+
     self.result = result
     self.leftTerm = leftTerm
     self.rightTerm = rightTerm
@@ -53,6 +66,7 @@ class Description(object):
   def setBeta(self, beta):
     self.beta = beta
 
+
 def generator(arch, descr, gemm_cfg, target):
   AOk = descr.isACsc or descr.leftTerm.memoryLayout.stridei(0) == 1
   BOk = descr.isBCsc or descr.rightTerm.memoryLayout.stridei(0) == 1
@@ -75,4 +89,3 @@ def generator(arch, descr, gemm_cfg, target):
     if gemmTool:
       return GemmGen(arch, descr, gemmTool)
   return Generic(arch, descr)
-

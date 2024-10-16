@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 
 class TestFramework(ABC):
+    def __init__(self, arch):
+        self.arch = arch
+
     @abstractmethod
     def functionArgs(self, testName):
         """functionArgs.
@@ -27,14 +30,20 @@ class TestFramework(ABC):
         cpp.include(kernelsInclude)
         cpp.include(initInclude)
         cpp.include('yateto.h')
+        if self.arch.backend == 'oneapi':
+            cpp.includeSys('sycl/sycl.hpp')
         with cpp.PPIfndef('NDEBUG'):
-            cpp('long long libxsmm_num_total_flops = 0;')
-            cpp('long long pspamm_num_total_flops = 0;')
+            with cpp.PPIfndef('YATETO_TESTING_NO_FLOP_COUNTER'):
+                cpp('long long libxsmm_num_total_flops = 0;')
+                cpp('long long pspamm_num_total_flops = 0;')
 
 class CxxTest(TestFramework):
     TEST_CLASS = 'KernelTestSuite'
     TEST_NAMESPACE = 'unit_test'
     TEST_PREFIX = 'test'
+
+    def __init__(self, arch):
+        super().__init__(arch)
 
     def functionArgs(self, testName):
         return {'name': self.TEST_PREFIX + testName}
@@ -54,6 +63,9 @@ class CxxTest(TestFramework):
 
 class Doctest(TestFramework):
     TEST_CASE = 'yateto kernels'
+
+    def __init__(self, arch):
+        super().__init__(arch)
 
     def functionArgs(self, testName):
         """functionArgs.

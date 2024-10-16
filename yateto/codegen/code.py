@@ -132,6 +132,9 @@ class Cpp:
       
   def For(self, argument):
     return Block(self, 'for ({})'.format(argument))
+
+  def ForRange(self, variable, range):
+    return self.For(f'int {variable} = {range.start}; {variable} < {range.end}; ++{variable}')
     
   def Namespace(self, name):
     if len(name) == 0:
@@ -187,6 +190,10 @@ class Cpp:
   def include(self, header):
     self.__call__('#include "{}"'.format(header))
     
+  def includes(self, header_list):
+    for header in header_list:
+      self.include(header)
+
   def memset(self, name, numberOfValues, typename, offset=0):
     pointer = '&{}[{}]'.format(name, offset) if offset != 0 else name
     self.__call__('memset({}, 0, {} * sizeof({}));'.format(pointer, numberOfValues, typename))

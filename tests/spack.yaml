@@ -1,20 +1,28 @@
 spack:
+  definitions:
+  - packages: 
+    - eigen@3.3.7
+    - openblas@0.3.12
+    - libxsmm+generator+shared@master
+    - cmake@3.16.0
+  
   specs:
-  - eigen@3.3.7
-  - openblas@0.3.9
-  - libxsmm+generator
-  - cmake@3.16.0
+  - matrix:
+    - [\$packages]
+    - [arch=x86_64]
 
   container:
     format: docker
 
-    base:
-      image: "ubuntu:18.04"
-      spack: develop
+    images:
+      build: ravilmobile/spack-ubuntu-1804:latest
+      final: ubuntu:18.04
 
     strip: true
 
     os_packages:
+      command: apt
+      final:
       - python3
       - python3-pip
       - make

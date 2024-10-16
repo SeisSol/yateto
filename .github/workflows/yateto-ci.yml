@@ -1,0 +1,70 @@
+name: Yateto CI
+
+on: push
+
+jobs:
+  general:
+    runs-on: ubuntu-latest
+    container: 
+      image: ravilmobile/yateto-env:latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install Yateto
+      run: |
+        pip3 install -e .
+    
+    - name: Python Tests
+      run: |
+        python3 -m unittest tests/internals/*.py
+        
+    - name: Interface Tests
+      run: |
+        . /etc/profile.d/z10_spack_environment.sh && . /etc/profile.d/z20_additional_env.sh
+        cd ./tests/interface
+        for build_type in Debug Release; do
+          mkdir -p ./build-${build_type} && cd ./build-${build_type}
+          cmake .. -DCMAKE_BUILD_TYPE=${build_type}
+          make
+          make test
+          cd ..
+        done
+
+  codegen:
+    runs-on: ubuntu-latest
+    container: 
+      image: ravilmobile/yateto-env:latest
+    env:
+      CTEST_OUTPUT_ON_FAILURE: 1
+    strategy:
+      matrix:
+        generator: [Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS]
+        
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install Yateto
+      run: |
+        pip3 install -e .
+
+    - name: Codegen Tests
+      run: |
+        . /etc/profile.d/z10_spack_environment.sh && . /etc/profile.d/z20_additional_env.sh
+        cd ./tests/code-gen
+        for example in matmul minimal; do
+          for build_type in Debug Release; do
+            for precision in single double; do
+              echo " ====== Test Config: ======"
+              echo " Build: ${build_type}"
+              echo " Precision: ${precision}"
+              echo " Example: ${example}"
+              echo "==========================="
+              mkdir -p ./build-${example}-${build_type}-${precision}
+              cd ./build-${example}-${build_type}-${precision}
+              cmake .. -DEXAMPLES=${example} -DCMAKE_BUILD_TYPE=${build_type} -DPRECISION=${precision} -DVARIANT=${{ matrix.generator }} -DARCH=snb
+              make
+              make test
+              cd ..
+            done
+          done
+        done

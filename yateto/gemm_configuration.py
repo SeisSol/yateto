@@ -219,11 +219,13 @@ class PSpaMM(CodeGenerator):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
-    return self._archSupported() and alignedA and alignedC and \
-           not sparseA and (not transA and not transB) and target == 'cpu'
+    # NOTE: PSpaMM 0.3.0+ supports SIMD-aligned block sparsity in A (which is currently covered by sparseA + alignedA)
+    return self._archSupported() and alignedC and alignedA and (not transA and not transB) and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
     if sparseB:
+      return Preference.HIGH
+    if sparseA and alignedA:
       return Preference.HIGH
     if (m*n*k)**(1./3.) <= self._threshold:
       return Preference.HIGH

@@ -410,10 +410,9 @@ class LibxsmmGemmGen(ExecuteGemmGen):
   def __init__(self,
                arch,
                gemm_descr,
-               spp,
-               spp_rows,
+               sppA, sppARows, sppB, sppBRows,
                gemm_cfg):
-    super().__init__(arch, gemm_descr, spp, spp_rows, gemm_cfg)
+    super().__init__(arch, gemm_descr, sppA, sppARows, sppB, sppBRows, gemm_cfg)
 
   def header(self, cpp):
     super().header(cpp)

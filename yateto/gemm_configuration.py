@@ -162,7 +162,7 @@ class LIBXSMM_JIT(CodeGenerator):
     return Preference.LOW
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512', 'apple-m1', "apple-m2"}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', 'turin', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512', 'apple-m1', "apple-m2", "apple-m3", "apple-m4"}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -184,7 +184,7 @@ class LIBXSMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo'}
+    supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', 'turin'}
 
     if self._arch.name.lower() in supported_set:
       return True
@@ -210,7 +210,7 @@ class PSpaMM(CodeGenerator):
     self._threshold = threshold
 
   def _archSupported(self):
-    supported_set = {'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1', 'apple-m2'}
+    supported_set = {'rvv128', 'rvv256', 'rvv512', 'rvv1024', 'rvv2048', 'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'turin', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1', 'apple-m2', "apple-m3", "apple-m4"}
     if self._arch.name.lower() in supported_set:
       return True
     else:
@@ -302,6 +302,7 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'rome' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
       'milan' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
       'bergamo' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
+      'turin' : [libxsmm_jit, libxsmm, pspamm, blis, eigen],
       'knl' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
       'skx' : [libxsmm_jit, libxsmm, pspamm, mkl, blis, eigen],
       'thunderx2t99' : [libxsmm_jit, pspamm, openblas, blis, eigen],
@@ -314,7 +315,12 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'sve512' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'sve1024' : [pspamm, openblas, blis, eigen],
       'sve2048' : [pspamm, openblas, blis, eigen],
-      'power9' : [openblas, blis, eigen]
+      'power9' : [openblas, blis, eigen],
+      'rvv128': [pspamm, eigen],
+      'rvv256': [pspamm, eigen],
+      'rvv512': [pspamm, eigen],
+      'rvv1024': [pspamm, eigen],
+      'rvv2048': [pspamm, eigen]
     }
 
     if arch.name in defaults:

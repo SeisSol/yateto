@@ -127,6 +127,7 @@ def getArchitectureIdentifiedBy(ident):
     'rome': Architecture(name, precision, 32, True),
     'milan': Architecture(name, precision, 32, True),
     'bergamo': Architecture(name, precision, 64, True),
+    'turin': Architecture(name, precision, 64, True),
     'thunderx2t99': Architecture(name, precision, 16, True),
     'a64fx': Architecture(name, precision, 64, True),
     'neon': Architecture(name, precision, 16, True),
@@ -138,6 +139,11 @@ def getArchitectureIdentifiedBy(ident):
     'sve1024': Architecture(name, precision, 128, True),
     'sve2048': Architecture(name, precision, 256, True),
     'power9': Architecture(name, precision, 16, False),
+    'rvv128': Architecture(name, precision, 16, True),
+    'rvv256': Architecture(name, precision, 32, True),
+    'rvv512': Architecture(name, precision, 64, True),
+    'rvv1024': Architecture(name, precision, 128, True),
+    'rvv2048': Architecture(name, precision, 256, True)
   }
   return arch[name]
 

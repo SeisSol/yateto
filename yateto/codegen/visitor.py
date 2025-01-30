@@ -93,7 +93,7 @@ class KernelGenerator(object):
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
-          hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache)
+          hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache, gemm_cfg)
     return hwFlops, required_tmp_mem
 
 class OptimisedKernelGenerator(KernelGenerator):
@@ -404,6 +404,9 @@ class OptimisedKernelGenerator(KernelGenerator):
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
+  QUEUE = '_queue'
+  TMP_MEM = '_tmpMem'
+  TMP_SIZE = 128 * 8
   
   def __init__(self, arch):
     super().__init__(arch)
@@ -424,6 +427,22 @@ class UnitTestGenerator(KernelGenerator):
     group = var.tensor.group()
     terms = [baseName] + [str(g) for g in group]
     return '_'.join(terms)
+
+  @classmethod
+  def _devTensorName(cls, var):
+      return f'_dev_{cls._tensorName(var)}'
+
+  @classmethod
+  def _devPtrTensorName(cls, var):
+      return f'_dev_ptr_{cls._tensorName(var)}'
+
+  def _devTensorKernelArgument(self, var, writable):
+    if var.tensor.is_compute_constant():
+      return self._devTensorName(var)
+    elif writable[var.tensor.baseNameWithNamespace()]:
+      return self._devPtrTensorName(var)
+    else:
+      return f'const_cast<{self._arch.typename} const**>({self._devPtrTensorName(var)})'
 
   @classmethod
   def _nameS(cls, var):
@@ -457,7 +476,8 @@ class UnitTestGenerator(KernelGenerator):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
   
-  def generate(self, cpp, namespace, testName, kernelClass, cfg, gemm_cfg, testFramework, index=None):
+  def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
+    device_test = self._arch.backend == 'oneapi' and target == 'gpu'
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
@@ -498,14 +518,47 @@ class UnitTestGenerator(KernelGenerator):
         )
         cpp.emptyline()
 
+      kernelTensorName = self._tensorName
+      if device_test:
+        writable = dict()
+        for var in variables:
+          bn = var.tensor.baseNameWithNamespace()
+          writable[bn] = writable.get(bn, False) or var.writable
+
+        kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
+        cpp ( f'auto {self.QUEUE} = sycl::queue{{sycl::property::queue::in_order()}};' )
+        cpp ( f'auto {self.TMP_MEM} = ({self._arch.typename}*) sycl::malloc_device({self.TMP_SIZE}, {self.QUEUE});' )
+        for var in variables:
+          cpp( f'auto {self._devTensorName(var)} = ({self._arch.typename}*) sycl::malloc_device(sizeof({self._tensorName(var)}), {self.QUEUE});' )
+          cpp( f'auto {self._devPtrTensorName(var)} = ({self._arch.typename}**) sycl::malloc_device(sizeof({self._arch.typename}*), {self.QUEUE});' )
+          cpp( f'{self.QUEUE}.memcpy({self._devTensorName(var)}, {self._tensorName(var)}, sizeof({self._tensorName(var)})).wait();' )
+          cpp( f'{self.QUEUE}.memcpy({self._devPtrTensorName(var)}, &{self._devTensorName(var)}, sizeof({self._arch.typename}*)).wait();' )
+        cpp.emptyline()
+
+
       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
       for var in scalars:
         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
       for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), self._tensorName(var)) )
+        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
+
+      if device_test:
+        cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
+        cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
+        cpp( f'{self.KERNEL_VAR}.streamPtr = &{self.QUEUE};' )
 
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
+
+      if device_test:
+        cpp( f'{self.QUEUE}.wait();' )
+        cpp( f'sycl::free({self.TMP_MEM}, {self.QUEUE});' )
+        for var in variables:
+          if var.writable:
+            cpp( f'{self.QUEUE}.memcpy({self._tensorName(var)}, {self._devTensorName(var)}, sizeof({self._tensorName(var)})).wait();' )
+          cpp( f'sycl::free({self._devPtrTensorName(var)}, {self.QUEUE});' )
+          cpp( f'sycl::free({self._devTensorName(var)}, {self.QUEUE});' )
+        cpp.emptyline()
 
       super().generate(cpp, cfg, factory, None, gemm_cfg)
 

@@ -3,10 +3,12 @@ import subprocess
 import tempfile
 from abc import ABC
 import numpy as np
+from collections import namedtuple
 
-from ..cache import RoutineGenerator, GpuRoutineGenerator
-from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge
-from ..common import BatchedOperationsAux
+from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
+from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
+from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
+from ..tiny_tensor_language import *
 import importlib.util
 
 
@@ -68,12 +70,15 @@ class GemmGen(object):
       betaSubs=self._beta(gemm['beta']),
       **gemm
     )
-  
-  def _pointer(self, term, offset2, transpose):
+
+  def _offset(self, term, offset2, transpose):
     if transpose:
       # swaps elements of tuple if transpose
       offset2 = offset2[::-1]
-    o = term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
+    return term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
+
+  def _pointer(self, term, offset2, transpose):
+    o = self._offset(term, offset2, transpose)
     if o > 0:
       return '{} + {}'.format(term.name, o)
     return term.name
@@ -157,9 +162,12 @@ class GemmGen(object):
           forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
-          args = [aux.deduce_arg(d.leftTerm, as_const=True),
-                  aux.deduce_arg(d.rightTerm, as_const=True),
-                  aux.deduce_arg(d.result, as_const=False),
+          args = [aux.deduce_ptr_arg(d.leftTerm, as_const=True),
+                  aux.deduce_offset_arg(d.leftTerm),
+                  aux.deduce_ptr_arg(d.rightTerm, as_const=True),
+                  aux.deduce_offset_arg(d.rightTerm),
+                  aux.deduce_ptr_arg(d.result, as_const=False),
+                  aux.deduce_offset_arg(d.result),
                   BatchedOperationsAux.NUM_ELEMENTS_NAME,
                   BatchedOperationsAux.FLAGS_NAME,
                   BatchedOperationsAux.STREAM_PTR_NAME]
@@ -178,6 +186,44 @@ class GemmGen(object):
       else:
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
+    elif isinstance(self._gemm_cfg, tinytc):
+      aux = BatchedOperationsAux(self._arch.typename)
+      gemm = {
+        'M':            m.size(),
+        'N':            n.size(),
+        'K':            k.size(),
+        'LDA':          ldA,
+        'addrA':        aux.deduce_addresing(d.leftTerm),
+        'distA':        d.leftTerm.memoryLayout.requiredReals(),
+        'LDB':          ldB,
+        'addrB':        aux.deduce_addresing(d.rightTerm),
+        'distB':        d.rightTerm.memoryLayout.requiredReals(),
+        'LDC':          ldC,
+        'addrC':        aux.deduce_addresing(d.result),
+        'distC':        d.result.memoryLayout.requiredReals(),
+        'alpha':        self._alpha(d.alpha),
+        'beta':         self._beta(d.beta),
+        'transA':       d.transA,
+        'transB':       d.transB,
+      }
+
+      kernel = tinytcGemmGen(self._arch, gemm)
+
+      def call_arg(name, term, modified, offset):
+          return TinytcKernelArgument(name, term.name, term.is_compute_constant, term.is_temporary, modified, offset)
+      offset_a = self._offset(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
+      offset_b = self._offset(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
+      offset_c = self._offset(term=d.result, offset2=(m.start, n.start), transpose=False)
+      args = [TinytcScalarKernelArgument('alpha', str(gemm['alpha'])),
+              call_arg('A', d.leftTerm, False, offset_a),
+              call_arg('B', d.rightTerm, False, offset_b),
+              call_arg('C', d.result, True, offset_c)]
+      routine_name = 'tinytc_wrapper_{typename}_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_tA{transA}_tB{transB}'.format(typename=self._arch.typename, **gemm)
+      wrapper = TinytcWrapper(kernel, args, self._arch.typename, routine_name)
+
+      cpp(wrapper.call())
+      prototype = wrapper.prototype()
+      routineCache.addRoutine(prototype, TinytcWriter(prototype, wrapper.definition()))
     else:
       gemm = {
         'M':            m.size(),
@@ -505,3 +551,53 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
       file.write(f"{func_signature}")
       file.write(self._call(routineName))
     return func_signature + ";"
+
+def tinytcGemmGen(arch, gd):
+  scalar_ty = ScalarType(FloatingType.f64) if arch.bytesPerReal == 8 else ScalarType(FloatingType.f32)
+
+  Operand = namedtuple('Operand', ['name', 'addr', 'rows', 'cols', 'ld', 'dist'])
+  def data_type(op):
+    if op.addr == 'pointer_based':
+      return GroupType(MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld)), DYNAMIC)
+    elif op.addr == 'strided':
+      return MemrefType(scalar_ty, (op.rows, op.cols, DYNAMIC), (1, op.ld, op.dist))
+    elif op.addr == 'none':
+      return MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld))
+    else:
+      raise NameError(op.addr)
+  def load_inst(op, batch, gid):
+    zero = IntImmValue(IntegerType.index, 0)
+    dyn = IntImmValue(IntegerType.index, DYNAMIC)
+    if op.addr == 'pointer_based':
+      return LoadInst(batch, [gid])
+    elif op.addr == 'strided':
+      return SubviewInst(batch, [zero,zero,gid], [dyn,dyn,None])
+    elif op.addr == 'none':
+      return SubviewInst(batch, [zero,zero], [dyn,dyn])
+    else:
+      raise NameError(op.addr)
+
+  opA = Operand('A', gd['addrA'], gd['M'], gd['K'], gd['LDA'], gd['distA'])
+  opB = Operand('B', gd['addrB'], gd['K'], gd['N'], gd['LDB'], gd['distB'])
+  opC = Operand('C', gd['addrC'], gd['M'], gd['N'], gd['LDC'], gd['distC'])
+
+  T = lambda x: Transpose.t if x else Transpose.n
+  tA = T(gd['transA'])
+  tB = T(gd['transB'])
+  beta = gd['beta']
+
+  alpha = LocalValue(scalar_ty, 'alpha')
+  Abatch = LocalValue(data_type(opA), 'Abatch')
+  Bbatch = LocalValue(data_type(opB), 'Bbatch')
+  Cbatch = LocalValue(data_type(opC), 'Cbatch')
+  kernel = Function('gemm', [alpha, Abatch, Bbatch, Cbatch], None)
+  bb = RegionBuilder()
+  gid = bb.add(GroupIdInst())
+  A = bb.add(load_inst(opA, Abatch, gid))
+  B = bb.add(load_inst(opB, Bbatch, gid))
+  C = bb.add(load_inst(opC, Cbatch, gid))
+  bb.add(GemmInst(tA, tB, alpha, A, B, FloatImmValue(scalar_ty, beta), C))
+  kernel.body = bb.get_product()
+  AssignIdentifiers().visit(kernel)
+
+  return kernel

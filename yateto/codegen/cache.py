@@ -38,3 +38,24 @@ class RoutineCache(object):
       else:
         declaration = generator(name, cppFileName)
       header(declaration)
+
+class TinytcWriter(GpuRoutineGenerator):
+  def __init__(self, signature, source):
+    self._source = source
+    self._signature = signature
+
+  def __eq__(self, other):
+    return self._signature == other._signature
+
+  def header(self, cpp):
+    cpp.include('tinytc/tinytc.hpp')
+    cpp.include('tinytc/tinytc_sycl.hpp')
+    cpp.includeSys('sycl/sycl.hpp')
+    cpp.includeSys('stdexcept')
+    cpp.includeSys('utility')
+
+  def __call__(self, routineName, fileName):
+    with open(fileName, 'a') as f:
+      f.write(self._source)
+
+    return self._signature

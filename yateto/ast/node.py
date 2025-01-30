@@ -1,8 +1,9 @@
 import re
 from ..memory import DenseMemoryLayout
-from .indices import BoundingBox, Indices, LoGCost
+from .indices import BoundingBox, Indices, LoGCost, Range
 from abc import ABC, abstractmethod
 from .. import aspp
+import numpy as np
 
 class Node(ABC):
   def __init__(self):
@@ -114,10 +115,18 @@ class Node(ABC):
     return Assign(self, other)
 
 class IndexedTensor(Node):
-  def __init__(self, tensor, indexNames):
+  def __init__(self, tensor, indexNames, start=None, end=None):
     super().__init__()
     self.tensor = tensor
-    self.indices = Indices(indexNames, self.tensor.shape())
+
+    if start is None:
+      # whole tensor
+      self.indices = Indices(indexNames, self.tensor.shape())
+      self.ibbox = None
+    else:
+      # slice
+      self.indices = Indices(indexNames, [e-s for s,e in zip(start, end)])
+      self.ibbox = BoundingBox([Range(s, e) for s,e in zip(start, end)])
   
   def nonZeroFlops(self):
     return 0
@@ -126,7 +135,18 @@ class IndexedTensor(Node):
     assert str(indices) == str(self.indices)
   
   def spp(self, groupSpp=True):
-    return self.tensor.spp(groupSpp)
+    tensorspp = self.tensor.spp(groupSpp)
+    if self.ibbox is None:
+      return tensorspp
+    else:
+      nd = np.array(tensorspp.as_ndarray())
+      for dim, rng in enumerate(self.ibbox):
+        def filterAxis(x):
+          x[0:rng.start] = False
+          x[rng.stop:] = False
+          return x
+        nd = np.apply_along_axis(filterAxis, dim, nd)
+      return aspp.general(nd)
   
   def name(self):
     return self.tensor.name()

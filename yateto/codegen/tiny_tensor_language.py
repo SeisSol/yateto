@@ -1,6 +1,8 @@
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
 
+from __future__ import annotations
+
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Optional, Union, List

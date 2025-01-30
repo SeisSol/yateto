@@ -324,7 +324,7 @@ class Generator(object):
 
     print('Generating kernels...')
     cache = RoutineCache()
-    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache)
 
     kernelSource = StringIO()
     kernelSourceContent = ''

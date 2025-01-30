@@ -96,7 +96,7 @@ class KernelGenerator(object):
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache, gemm_cfg)
     return hwFlops, required_tmp_mem
 
-class OptimisedKernelGenerator(KernelGenerator):
+class OptimizedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'
   EXECUTE_NAME = 'execute'
   FIND_EXECUTE_NAME = 'findExecute'
@@ -177,7 +177,7 @@ class OptimisedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = OptimisedKernelFactory(fcpp, self._arch, target)
+      factory = OptimizedKernelFactory(fcpp, self._arch, target)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.freeTmp()
       factory.reset_stream()
@@ -536,7 +536,7 @@ class UnitTestGenerator(KernelGenerator):
         cpp.emptyline()
 
 
-      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
       for var in scalars:
         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
       for var in variables:
@@ -547,7 +547,7 @@ class UnitTestGenerator(KernelGenerator):
         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
         cpp( f'{self.KERNEL_VAR}.streamPtr = &{self.QUEUE};' )
 
-      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
+      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
       if device_test:

@@ -89,7 +89,7 @@ class KernelFactory(object):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
-class OptimisedKernelFactory(KernelFactory):
+class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target):
     super().__init__(cpp, arch, target)
 

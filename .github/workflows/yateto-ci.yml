@@ -69,7 +69,8 @@ jobs:
       if: ${{ matrix.generator == 'LIBXSMM_JIT' }}
       run: |
         git clone --branch 1.17 https://github.com/libxsmm/libxsmm
-        make install
+        cd libxsmm
+        make install-minimal PREFIX=/usr
 
     - name: Codegen Tests
       run: |

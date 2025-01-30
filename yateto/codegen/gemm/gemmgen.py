@@ -190,7 +190,7 @@ class GemmGen(object):
         'beta':         self._beta(d.beta),
         'alignedA':     int(d.alignedA),
         'alignedC':     int(d.alignedC),
-        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly',
+        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else None,
         'transA': d.transA,
         'transB': d.transB,
 
@@ -290,9 +290,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        pspamm_arch, 
-        '--prefetching',
-        self._gemmDescr['prefetch'],
+        pspamm_arch,
         '--output_funcname',
         routineName,
         '--output_filename',
@@ -300,6 +298,8 @@ Stderr: {result.stderr}""")
         '--precision',
         self._arch.precision
       ]
+      if self._gemmDescr['prefetch']:
+        argList.extend(['--prefetching', self._gemmDescr['prefetch']])
       if self._gemmDescr['transA']:
         argList.extend(['--atranspose', 'true'])
       if self._gemmDescr['transB']:
@@ -330,7 +330,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['alignedA'],
         self._gemmDescr['alignedC'],
         libxsmm_arch, # libxsmm has no support for rome, hsw works well in practice
-        self._gemmDescr['prefetch'],
+        self._gemmDescr['prefetch'] if self._gemmDescr['prefetch'] else 'nopf',
         self._arch.precision + 'P'
       ]
     class SparsityWrapper:
@@ -370,7 +370,9 @@ Stderr: {result.stderr}""")
           if afile is not None:
             argList.extend(['--amtx_filename', afile])
           if bfile is not None:
-            argList.extend(['--bmtx_filename', bfile])
+            # actually bmtx_filename
+            # take mtx_filename (alias) instead for backwards compatibility
+            argList.extend(['--mtx_filename', bfile])
         self._callGenerator(argList)
 
     if self._mode == 'pspamm':

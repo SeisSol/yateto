@@ -2,10 +2,13 @@ import hashlib
 import subprocess
 import tempfile
 from abc import ABC
+import numpy as np
+from collections import namedtuple
 
-from ..cache import RoutineGenerator, GpuRoutineGenerator
-from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge
-from ..common import BatchedOperationsAux
+from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
+from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
+from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
+from ..tiny_tensor_language import *
 import importlib.util
 
 
@@ -28,37 +31,55 @@ class GemmGen(object):
   def _is_special(self, value, specials):
     result = 'generic'
     try:
-      candidate = int(value)
-      if candidate in specials:
-        result = candidate
+      candidate = float(value)
+      for special in specials:
+        if abs(candidate - special) < 1e-10:
+          result = special
+          break
     except:
       pass
+    result = str(result).replace('-', 'm').replace('.', 'd')
     return result
 
   def _alpha(self, alpha):
-    return self._is_special(alpha, {1})
+    specials = {-1,1} if self._mode == 'pspamm' else {1}
+    return self._is_special(alpha, specials)
 
   def _beta(self, beta):
     return self._is_special(beta, {0,1})
 
-  def generateRoutineName(self, gemm, spp):
+  def generateRoutineName(self, gemm, sppA, sppB):
     name = self._gemm_cfg.operation_name
-    if spp is not None:
+    name += '_' + {
+      (True, True): 'dense',
+      (True, False): 'bsparse',
+      (False, True): 'asparse',
+      (False, False): 'absparse'
+    }[(sppA is None, sppB is None)]
+    if sppA is not None:
       sha = hashlib.md5()
-      sha.update(str(spp).encode())
-      name += 'sparse_' + sha.hexdigest()
-    return '{name}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
+      sha.update(str(sppA).encode())
+      name += '_' + sha.hexdigest()
+    if sppB is not None:
+      sha = hashlib.md5()
+      sha.update(str(sppB).encode())
+      name += '_' + sha.hexdigest()
+    return '{name}_{datatype}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
       name=name,
+      datatype=self._arch.typename,
       alphaSubs=self._alpha(gemm['alpha']),
       betaSubs=self._beta(gemm['beta']),
       **gemm
     )
-  
-  def _pointer(self, term, offset2, transpose):
+
+  def _offset(self, term, offset2, transpose):
     if transpose:
       # swaps elements of tuple if transpose
       offset2 = offset2[::-1]
-    o = term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
+    return term.memoryLayout.subtensorOffset(topLeftEntry=offset2)
+
+  def _pointer(self, term, offset2, transpose):
+    o = self._offset(term, offset2, transpose)
     if o > 0:
       return '{} + {}'.format(term.name, o)
     return term.name
@@ -74,17 +95,30 @@ class GemmGen(object):
     assert (d.transB and (n,k) in d.rightTerm.memoryLayout) or (not d.transB and (k,n) in d.rightTerm.memoryLayout)
     assert (m,n) in d.result.memoryLayout
 
-    spp = None
-    sppRows = None
+    sppA = None
+    sppARows = None
+    sppB = None
+    sppBRows = None
     flops = 0
     if d.isACsc:
-      spp = d.leftTerm.memoryLayout.entries(m, k)
-      sppRows = d.leftTerm.memoryLayout.shape()[0]
-      flops = 2 * len(spp) * n.size()
+      sppA = d.leftTerm.memoryLayout.entries(m, k)
+      sppARows = d.leftTerm.memoryLayout.shape()[0]
+    if d.isBCsc:
+      sppB = d.rightTerm.memoryLayout.entries(k, n)
+      sppBRows = d.rightTerm.memoryLayout.shape()[0]
+    
+    if d.isACsc and d.isBCsc:
+      # count the flops by splitting into outer products (i.e. partition by k)
+      # for each outer product, we need to compute all-by-all nonzero entries for m and n
+      # in essence: flops = 2 * sum(1 for ae in sppA for be in sppB if ae[1] == be[0]); then simplify this calculation
+
+      mcount = np.bincount([kk for _,kk in sppA], minlength=k.size())
+      ncount = np.bincount([kk for kk,_ in sppB], minlength=k.size())
+      flops = 2 * int(np.dot(ncount, mcount))
+    elif d.isACsc:
+      flops = 2 * n.size() * len(sppA)
     elif d.isBCsc:
-      spp = d.rightTerm.memoryLayout.entries(k, n)
-      sppRows = d.rightTerm.memoryLayout.shape()[0]
-      flops = 2 * m.size() * len(spp)
+      flops = 2 * m.size() * len(sppB)
     else:
       flops = 2 * m.size() * n.size() * k.size()
     
@@ -129,9 +163,12 @@ class GemmGen(object):
           forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
-          args = [aux.deduce_arg(d.leftTerm, as_const=True),
-                  aux.deduce_arg(d.rightTerm, as_const=True),
-                  aux.deduce_arg(d.result, as_const=False),
+          args = [aux.deduce_ptr_arg(d.leftTerm, as_const=True),
+                  aux.deduce_offset_arg(d.leftTerm),
+                  aux.deduce_ptr_arg(d.rightTerm, as_const=True),
+                  aux.deduce_offset_arg(d.rightTerm),
+                  aux.deduce_ptr_arg(d.result, as_const=False),
+                  aux.deduce_offset_arg(d.result),
                   BatchedOperationsAux.NUM_ELEMENTS_NAME,
                   BatchedOperationsAux.FLAGS_NAME,
                   BatchedOperationsAux.STREAM_PTR_NAME]
@@ -150,6 +187,44 @@ class GemmGen(object):
       else:
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
+    elif isinstance(self._gemm_cfg, tinytc):
+      aux = BatchedOperationsAux(self._arch.typename)
+      gemm = {
+        'M':            m.size(),
+        'N':            n.size(),
+        'K':            k.size(),
+        'LDA':          ldA,
+        'addrA':        aux.deduce_addresing(d.leftTerm),
+        'distA':        d.leftTerm.memoryLayout.requiredReals(),
+        'LDB':          ldB,
+        'addrB':        aux.deduce_addresing(d.rightTerm),
+        'distB':        d.rightTerm.memoryLayout.requiredReals(),
+        'LDC':          ldC,
+        'addrC':        aux.deduce_addresing(d.result),
+        'distC':        d.result.memoryLayout.requiredReals(),
+        'alpha':        self._alpha(d.alpha),
+        'beta':         self._beta(d.beta),
+        'transA':       d.transA,
+        'transB':       d.transB,
+      }
+
+      kernel = tinytcGemmGen(self._arch, gemm)
+
+      def call_arg(name, term, modified, offset):
+          return TinytcKernelArgument(name, term.name, term.is_compute_constant, term.is_temporary, modified, offset)
+      offset_a = self._offset(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
+      offset_b = self._offset(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
+      offset_c = self._offset(term=d.result, offset2=(m.start, n.start), transpose=False)
+      args = [TinytcScalarKernelArgument('alpha', str(gemm['alpha'])),
+              call_arg('A', d.leftTerm, False, offset_a),
+              call_arg('B', d.rightTerm, False, offset_b),
+              call_arg('C', d.result, True, offset_c)]
+      routine_name = 'tinytc_wrapper_{typename}_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_tA{transA}_tB{transB}'.format(typename=self._arch.typename, **gemm)
+      wrapper = TinytcWrapper(kernel, args, self._arch.typename, routine_name)
+
+      cpp(wrapper.call())
+      prototype = wrapper.prototype()
+      routineCache.addRoutine(prototype, TinytcWriter(prototype, wrapper.definition()))
     else:
       gemm = {
         'M':            m.size(),
@@ -162,14 +237,13 @@ class GemmGen(object):
         'beta':         self._beta(d.beta),
         'alignedA':     int(d.alignedA),
         'alignedC':     int(d.alignedC),
-        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'pfsigonly',
+        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'nopf',
         'transA': d.transA,
         'transB': d.transB,
 
       }
 
-      routineName = self.generateRoutineName(gemm, spp)
-
+      routineName = self.generateRoutineName(gemm, sppA, sppB)
 
       if self._mode == 'pspamm':
         cpp( '{}({}, {}, {}, {}, {}, {});'.format(
@@ -181,7 +255,7 @@ class GemmGen(object):
           str(d.beta),
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
-      else:
+      elif gemm['prefetch'] != 'nopf' or self._gemm_cfg.is_internal():
         cpp( '{}({}, {}, {}, nullptr, {}, nullptr);'.format(
           routineName,
           self._pointer(d.leftTerm, (m.start, k.start), d.transA),
@@ -189,21 +263,30 @@ class GemmGen(object):
           self._pointer(d.result, (m.start, n.start), False),
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
+      else:
+        cpp( '{}({}, {}, {});'.format(
+          routineName,
+          self._pointer(d.leftTerm, (m.start, k.start), d.transA),
+          self._pointer(d.rightTerm, (k.start, n.start), d.transB),
+          self._pointer(d.result, (m.start, n.start), False)
+        ))
 
       if self._gemm_cfg.is_internal():
         routineCache.addRoutine(routineName, LibxsmmGemmGen(
-          self._arch, gemm, spp, sppRows, self._gemm_cfg))
+          self._arch, gemm, sppA, sppARows, sppB, sppBRows, self._gemm_cfg))
       else:
-        routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, spp, sppRows, self._gemm_cfg))
+        routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, sppA, sppARows, sppB, sppBRows, self._gemm_cfg))
 
     return flops
 
-class ExecuteGemmGen(RoutineGenerator):  
-  def __init__(self, arch, gemmDescr, spp, sppRows, gemm_cfg):
+class ExecuteGemmGen(RoutineGenerator):
+  def __init__(self, arch, gemmDescr, sppA, sppARows, sppB, sppBRows, gemm_cfg):
     self._arch = arch
     self._gemmDescr = gemmDescr
-    self._spp = spp
-    self._sppRows = sppRows
+    self._sppA = sppA
+    self._sppARows = sppARows
+    self._sppB = sppB
+    self._sppBRows = sppBRows
     self._mode = gemm_cfg.operation_name
     self._cmd = gemm_cfg.cmd
     self._blockSize = gemm_cfg.blockSize(gemmDescr['M'], gemmDescr['N'], gemmDescr['K']) if hasattr(gemm_cfg, 'blockSize') else dict()
@@ -211,7 +294,8 @@ class ExecuteGemmGen(RoutineGenerator):
   def __eq__(self, other):
     return self._arch == other._arch and \
            self._gemmDescr == other._gemmDescr and \
-           self._spp == other._spp
+           self._sppA == other._sppA and \
+           self._sppB == other._sppB
   
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):
@@ -224,7 +308,7 @@ class ExecuteGemmGen(RoutineGenerator):
     resultCode = 1
     try:
       strcmd = [str(arg) for arg in argList]
-      result = subprocess.run(strcmd)
+      result = subprocess.run(strcmd, capture_output=True, text=True)
     except OSError:
       raise RuntimeError(f'GEMM code generator executable "{self._cmd}" not found. (Make sure to add the folder containing the executable to your PATH environment variable.)')
     if result.returncode != 0:
@@ -240,7 +324,7 @@ Stderr: {result.stderr}""")
       pspamm_arch = cpu_arch
       if cpu_arch == 'a64fx':
         pspamm_arch = 'arm_sve512'
-      elif cpu_arch in ['apple-m1', 'thunderx2t99', 'neon']:
+      elif cpu_arch in ['thunderx2t99', 'neon'] or cpu_arch.startswith('apple-m'):
         pspamm_arch = 'arm'
       elif cpu_arch.startswith('sve'):
         pspamm_arch = f'arm_{cpu_arch}' # TODO(David): rename to sveLEN only
@@ -248,7 +332,7 @@ Stderr: {result.stderr}""")
         # names are Zen1, Zen2, Zen3, respectively
         # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
         pspamm_arch = 'hsw'
-      elif cpu_arch in ['bergamo']:
+      elif cpu_arch in ['bergamo', 'turin']:
         pspamm_arch = 'skx'
       argList = [
         self._cmd,
@@ -261,9 +345,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['alpha'],
         self._gemmDescr['beta'],
         '--arch',
-        pspamm_arch, 
-        '--prefetching',
-        self._gemmDescr['prefetch'],
+        pspamm_arch,
         '--output_funcname',
         routineName,
         '--output_filename',
@@ -271,6 +353,12 @@ Stderr: {result.stderr}""")
         '--precision',
         self._arch.precision
       ]
+      if self._gemmDescr['prefetch'] != 'nopf':
+        argList.extend(['--prefetching', self._gemmDescr['prefetch']])
+      if self._gemmDescr['transA']:
+        argList.extend(['--atranspose', 'true'])
+      if self._gemmDescr['transB']:
+        argList.extend(['--btranspose', 'true'])
       for key, val in self._blockSize.items():
         argList.extend(['--' + key, val])
     else:
@@ -279,7 +367,7 @@ Stderr: {result.stderr}""")
         # names are Zen1, Zen2, Zen3, respectively
         # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
         libxsmm_arch = 'hsw'
-      elif cpu_arch in ['bergamo']:
+      elif cpu_arch in ['bergamo', 'turin']:
         libxsmm_arch = 'skx'
       argList = [
         self._cmd,
@@ -300,32 +388,56 @@ Stderr: {result.stderr}""")
         self._gemmDescr['prefetch'],
         self._arch.precision + 'P'
       ]
-    if self._spp is not None:
-      cols = self._gemmDescr['K'] if self._gemmDescr['LDA'] == 0 else self._gemmDescr['N']
-      rows = self._gemmDescr['M'] if self._gemmDescr['LDA'] == 0 else self._gemmDescr['K']
-      if self._mode == 'pspamm':
-        rows = self._sppRows
-      shape = (rows, cols)      
-      with tempfile.NamedTemporaryFile() as temp:
-        temp.write('%%MatrixMarket matrix coordinate real general\n'.encode())
-        temp.write('%\n'.encode())
-        temp.write('{} {} {}\n'.format(shape[0], shape[1], len(self._spp)).encode())
-        for r,c in self._spp:
-          temp.write('{} {} 1.0\n'.format(r+1,c+1).encode())
-        temp.flush()
+    class SparsityWrapper:
+      def __init__(self, shape, spp):
+        self._shape = shape
+        self._spp = spp
+        self._temp = None
+      
+      def __enter__(self):
+        if self._spp is not None:
+          self._temp = tempfile.NamedTemporaryFile()
+          self._temp.__enter__()
+          self._temp.write('%%MatrixMarket matrix coordinate real general\n'.encode())
+          self._temp.write('%\n'.encode())
+          self._temp.write('{} {} {}\n'.format(self._shape[0], self._shape[1], len(self._spp)).encode())
+          for r,c in self._spp:
+            self._temp.write('{} {} 1.0\n'.format(r+1,c+1).encode())
+          self._temp.flush()
+          return self._temp.name
+        return None
+      
+      def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._spp is not None:
+          self._temp.__exit__(exc_type, exc_val, exc_tb)
+    
+    with SparsityWrapper((self._gemmDescr['M'], self._gemmDescr['K']), self._sppA) as afile:
+      with SparsityWrapper((self._sppBRows if self._mode=='pspamm' else self._gemmDescr['K'], self._gemmDescr['N']), self._sppB) as bfile:
         if self._mode == 'libxsmm':
-          argList[1] = 'sparse'
+          assert afile is None or bfile is None
+          if afile is not None:
+            argList[1] = 'sparse'
+            argList.append(afile)
+          if bfile is not None:
+            argList[1] = 'sparse'
+            argList.append(bfile)
         if self._mode == 'pspamm':
-          argList.append('--mtx_filename')
-        argList.append(temp.name)
+          if afile is not None:
+            argList.extend(['--amtx_filename', afile])
+          if bfile is not None:
+            # actually bmtx_filename
+            # take mtx_filename (alias) instead for backwards compatibility
+            argList.extend(['--mtx_filename', bfile])
         self._callGenerator(argList)
-    else:
-      self._callGenerator(argList)
 
     if self._mode == 'pspamm':
       return 'void {name}(const {type}* A, const {type}* B, {type}* C, {type} alpha, {type} beta, const {type}* prefetch);'.format(name=routineName, type=self._arch.typename)
-    return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
-  
+
+    # LIBXSMM header
+    if self._gemmDescr['prefetch'] == 'nopf':
+      return 'void {name}(const {type}* A, const {type}* B, {type}* C);'.format(name=routineName, type=self._arch.typename)
+    else:
+      return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
 
 class GemmForgeWriter(GpuRoutineGenerator):
   def __init__(self, forge_generator, headers):
@@ -359,10 +471,9 @@ class LibxsmmGemmGen(ExecuteGemmGen):
   def __init__(self,
                arch,
                gemm_descr,
-               spp,
-               spp_rows,
+               sppA, sppARows, sppB, sppBRows,
                gemm_cfg):
-    super().__init__(arch, gemm_descr, spp, spp_rows, gemm_cfg)
+    super().__init__(arch, gemm_descr, sppA, sppARows, sppB, sppBRows, gemm_cfg)
 
   def header(self, cpp):
     super().header(cpp)
@@ -453,3 +564,53 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
       file.write(f"{func_signature}")
       file.write(self._call(routineName))
     return func_signature + ";"
+
+def tinytcGemmGen(arch, gd):
+  scalar_ty = ScalarType(FloatingType.f64) if arch.bytesPerReal == 8 else ScalarType(FloatingType.f32)
+
+  Operand = namedtuple('Operand', ['name', 'addr', 'rows', 'cols', 'ld', 'dist'])
+  def data_type(op):
+    if op.addr == 'pointer_based':
+      return GroupType(MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld)), DYNAMIC)
+    elif op.addr == 'strided':
+      return MemrefType(scalar_ty, (op.rows, op.cols, DYNAMIC), (1, op.ld, op.dist))
+    elif op.addr == 'none':
+      return MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld))
+    else:
+      raise NameError(op.addr)
+  def load_inst(op, batch, gid):
+    zero = IntImmValue(IntegerType.index, 0)
+    dyn = IntImmValue(IntegerType.index, DYNAMIC)
+    if op.addr == 'pointer_based':
+      return LoadInst(batch, [gid])
+    elif op.addr == 'strided':
+      return SubviewInst(batch, [zero,zero,gid], [dyn,dyn,None])
+    elif op.addr == 'none':
+      return SubviewInst(batch, [zero,zero], [dyn,dyn])
+    else:
+      raise NameError(op.addr)
+
+  opA = Operand('A', gd['addrA'], gd['M'], gd['K'], gd['LDA'], gd['distA'])
+  opB = Operand('B', gd['addrB'], gd['K'], gd['N'], gd['LDB'], gd['distB'])
+  opC = Operand('C', gd['addrC'], gd['M'], gd['N'], gd['LDC'], gd['distC'])
+
+  T = lambda x: Transpose.t if x else Transpose.n
+  tA = T(gd['transA'])
+  tB = T(gd['transB'])
+  beta = gd['beta']
+
+  alpha = LocalValue(scalar_ty, 'alpha')
+  Abatch = LocalValue(data_type(opA), 'Abatch')
+  Bbatch = LocalValue(data_type(opB), 'Bbatch')
+  Cbatch = LocalValue(data_type(opC), 'Cbatch')
+  kernel = Function('gemm', [alpha, Abatch, Bbatch, Cbatch], None)
+  bb = RegionBuilder()
+  gid = bb.add(GroupIdInst())
+  A = bb.add(load_inst(opA, Abatch, gid))
+  B = bb.add(load_inst(opB, Bbatch, gid))
+  C = bb.add(load_inst(opC, Cbatch, gid))
+  bb.add(GemmInst(tA, tB, alpha, A, B, FloatImmValue(scalar_ty, beta), C))
+  kernel.body = bb.get_product()
+  AssignIdentifiers().visit(kernel)
+
+  return kernel

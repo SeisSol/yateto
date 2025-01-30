@@ -14,7 +14,7 @@ from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
-from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike
+from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc
 from typing import List
 from io import StringIO
 import importlib.util
@@ -65,7 +65,7 @@ class Kernel(object):
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
   
-  def prepareUntilCodeGen(self, cost_estimator):
+  def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool):
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
@@ -102,7 +102,7 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
-    if self.target == 'gpu' and chainforge_spec:
+    if self.target == 'gpu' and enableFusedGemm:
       self.cfg = FindFusedGemms().visit(self.cfg)
       self.cfg = LivenessAnalysis().visit(self.cfg)
 
@@ -176,9 +176,9 @@ class KernelFamily(object):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest()
   
-  def prepareUntilCodeGen(self, costEstimator):
+  def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
-      kernel.prepareUntilCodeGen(costEstimator)
+      kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
 
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
@@ -291,6 +291,9 @@ class Generator(object):
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
+    hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
+    enableFusedGemm = bool(chainforge_spec) or hasTinytc
+
     print('Deducing indices...')
     for kernel in self._kernels:
       kernel.prepareUntilUnitTest()
@@ -308,24 +311,24 @@ class Generator(object):
     print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
         for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, gemm_cfg, testFramework)
+            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, kernel.target, gemm_cfg, testFramework)
         for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, gemm_cfg, testFramework, group)
+                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, group)
     with Cpp(fUTdoctest.cpp) as cpp:
-        Doctest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+        Doctest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
     with Cpp(fUTcxxtest.h) as cpp:
         with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
-            CxxTest().generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+            CxxTest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
 
 
     print('Optimizing ASTs...')
     for kernel in self._kernels:
       print(f'{kernel.name} ({len(kernel.ast)} AST(s))')
-      kernel.prepareUntilCodeGen(cost_estimator)
+      kernel.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
     for family in self._kernelFamilies.values():
       print(f'{family.name} ({sum(len(kernel.ast) for kernel in family.kernels())} AST(s))')
-      family.prepareUntilCodeGen(cost_estimator)
+      family.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
 
     # Create mapping from namespace to kernel/family
     kernel_dict = {}

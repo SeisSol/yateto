@@ -146,16 +146,33 @@ namespace yateto {
     template<typename... Entry>
     bool isInRange(Entry... entry) const {
       static_assert(sizeof...(entry) == Dim,
-                  "Number of arguments to isInRange(...) does not match Tensor's dimension.");
+                  "Number of arguments to isInRange(...) does not match the tensor dimension.");
       return isInRange(m_start, m_stop, 0, entry...);
     }
 
     template<typename... Entry>
     real_t& operator()(Entry... entry) {
       static_assert(sizeof...(entry) == Dim,
-                        "Number of arguments to operator() does not match Tensor's dimension.");
+                        "Number of arguments to operator() does not match the tensor dimension.");
       assert(isInRange(entry...));
       return m_values[address(entry...)];
+    }
+
+    template<typename... Entry>
+    real_t operator()(Entry... entry) const {
+      static_assert(sizeof...(entry) == Dim,
+                        "Number of arguments to operator() const does not match the tensor dimension.");
+      assert(isInRange(entry...));
+      return m_values[address(entry...)];
+    }
+
+    real_t operator[](uint_t const entry[Dim]) const {
+      uint_t addr = 0;
+      for (uint_t d = 0; d < Dim; ++d) {
+        assert(entry[d] >= m_start[d] && entry[d] < m_stop[d]);
+        addr += (entry[d] - m_start[d]) * m_stride[d];
+      }
+      return m_values[addr];
     }
 
     real_t& operator[](uint_t const entry[Dim]) {
@@ -168,7 +185,7 @@ namespace yateto {
     }
 
     template<class view_t>
-    void copyToView(view_t& other) {
+    void copyToView(view_t& other) const {
       assert(Dim == other.dim());
       
       uint_t entry[Dim];
@@ -200,8 +217,8 @@ namespace yateto {
     }
 
     template<typename... Entry>
-    auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t>  {
-      static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match Tensor's dimension.");
+    auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t> const {
+      static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
       uint_t begin[Dim];
       uint_t size[nSlices];
@@ -215,6 +232,10 @@ namespace yateto {
       return m_values;
     }
 
+    const real_t* data() const {
+      return m_values;
+    }
+
   protected:
     void computeStride() {
       m_stride[0] = 1;
@@ -224,26 +245,26 @@ namespace yateto {
     }
 
     template<typename Head>
-    uint_t address(Head head) {
+    uint_t address(Head head) const {
       assert(static_cast<uint_t>(head) >= m_start[Dim-1] && static_cast<uint_t>(head) < m_stop[Dim-1]);
       return (head - m_start[Dim-1]) * m_stride[Dim-1];
     }
 
     template<typename Head, typename... Tail>
-    uint_t address(Head head, Tail... tail) {
+    uint_t address(Head head, Tail... tail) const {
       uint_t const d = (Dim-1) - sizeof...(tail);
       assert(static_cast<uint_t>(head) >= m_start[d] && static_cast<uint_t>(head) < m_stop[d]);
       return (head - m_start[d]) * m_stride[d] + address(tail...);
     }
 
     template<typename T, typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
-    void extractDim(uint_t*& begin, uint_t*&, uint_t*&, uint_t dimNo, T entry) {
+    void extractDim(uint_t*& begin, uint_t*&, uint_t*&, uint_t dimNo, T entry) const {
       assert(static_cast<uint_t>(entry) >= m_start[dimNo] && static_cast<uint_t>(entry) < m_stop[dimNo]);
       *begin++ = entry;
     }
 
     template<typename T, typename std::enable_if<std::is_same<T, slice<uint_t>>::value, int>::type = 0>
-    void extractDim(uint_t*& begin, uint_t*& size, uint_t*& stride, uint_t dimNo, T dim) {
+    void extractDim(uint_t*& begin, uint_t*& size, uint_t*& stride, uint_t dimNo, T dim) const {
       *begin = std::max(m_start[dimNo], dim.start);
       *size++ = std::min(m_stop[dimNo], dim.stop) - *begin;
       ++begin;
@@ -251,12 +272,12 @@ namespace yateto {
     }
 
     template<typename Head>
-    void extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head) {
+    void extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head) const {
       extractDim<Head>(begin, size, stride, Dim-1, head);
     }
 
     template<typename Head, typename... Tail>
-    void extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head, Tail... tail) {
+    void extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head, Tail... tail) const {
       uint_t const d = (Dim-1) - sizeof...(tail);
       extractDim<Head>(begin, size, stride, d, head);
       extractSubtensor(begin, size, stride, tail...);
@@ -311,6 +332,21 @@ namespace yateto {
       memset(m_values, 0, size() * sizeof(real_t));
     }
 
+    real_t operator()(uint_t row, uint_t col) const {
+      assert(col >= 0 && col < this->shape(1));
+      uint_t addr = m_colPtr[ col ];
+      uint_t stop = m_colPtr[ col+1 ];
+      while (addr < stop) {
+        if (m_rowInd[addr] == row) {
+          break;
+        }
+        ++addr;
+      }
+      assert(addr != stop);
+
+      return m_values[addr];
+    }
+
     real_t& operator()(uint_t row, uint_t col) {
       assert(col >= 0 && col < this->shape(1));
       uint_t addr = m_colPtr[ col ];
@@ -340,7 +376,11 @@ namespace yateto {
       return false;
     }
 
-    real_t& operator[](uint_t entry[2]) {
+    real_t& operator[](const uint_t entry[2]) {
+      return operator()(entry[0], entry[1]);
+    }
+
+    real_t operator[](const uint_t entry[2]) const {
       return operator()(entry[0], entry[1]);
     }
 

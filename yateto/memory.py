@@ -247,16 +247,35 @@ class DenseMemoryLayout(MemoryLayout):
     return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)
 
 class CSCMemoryLayout(MemoryLayout):
-  def __init__(self, spp):
+  def __init__(self, spp, aligned=False):
     super().__init__(spp.shape)
+
+    self.aligned = aligned
     
     if len(self._shape) != 2:
       raise ValueError('CSCMemoryLayout may only be used for matrices.')
-    
+
     self._bbox = BoundingBox.fromSpp(spp)
+    if aligned:
+      range0 = self._bbox[0]
+      rnew = Range( DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(range0.start), DenseMemoryLayout.ALIGNMENT_ARCH.alignedUpper(range0.stop) )
+      self._bbox = BoundingBox([rnew] + self._bbox[1:])
     
     nonzeros = spp.nonzero()
     nonzeros = sorted(zip(nonzeros[0], nonzeros[1]), key=lambda x: (x[1], x[0]))
+
+    if aligned:
+      nonzeros_pre = set(nonzeros)
+      for nonzero in nonzeros:
+        lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
+        # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
+        upper = lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals
+
+        for i in range(lower, upper):
+          nonzeros_pre.add((np.int64(i), nonzero[1]))
+      
+      nonzeros = list(nonzeros_pre)
+      nonzeros = sorted(zip([nonzero[0] for nonzero in nonzeros], [nonzero[1] for nonzero in nonzeros]), key=lambda x: (x[1], x[0]))
     
     self._rowIndex = np.ndarray(shape=(len(nonzeros),), dtype=int)
     self._colPtr = np.ndarray(shape=(self._shape[1]+1,), dtype=int)
@@ -309,10 +328,10 @@ class CSCMemoryLayout(MemoryLayout):
     return e
 
   def alignedStride(self):
-    return False
+    return self.aligned
 
   def mayVectorizeDim(self, dim):
-    return False
+    return dim == 0 and self.aligned
 
   @classmethod
   def fromSpp(cls, spp, **kwargs):
@@ -326,3 +345,8 @@ class CSCMemoryLayout(MemoryLayout):
 
   def __eq__(self, other):
     return self._bbox == other._bbox and np.array_equal(self._rowIndex, other._rowIndex) and np.array_equal(self._colPtr, other._colPtr)
+
+class AlignedCSCMemoryLayout:
+  @classmethod
+  def fromSpp(cls, spp, **kwargs):
+    return CSCMemoryLayout(spp, aligned=True)

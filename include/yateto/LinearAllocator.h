@@ -1,7 +1,8 @@
 #ifndef YATETO_LINEAR_ALLOCATED_H_
 #define YATETO_LINEAR_ALLOCATED_H_
 
-#include <assert.h>
+#include <cassert>
+#include <cstddef>
 
 namespace yateto {
 template<typename T>

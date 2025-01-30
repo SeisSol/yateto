@@ -1,6 +1,8 @@
 #ifndef YATETO_MISC_H_
 #define YATETO_MISC_H_
 
+#include <cstddef>
+
 namespace yateto {
 
 template<typename KernelType>

@@ -265,7 +265,7 @@ class GemmGen(object):
 
       if self._gemm_cfg.is_internal():
         routineCache.addRoutine(routineName, LibxsmmGemmGen(
-          self._arch, gemm, spp, sppRows, self._gemm_cfg))
+          self._arch, gemm, sppA, sppARows, sppB, sppBRows, self._gemm_cfg))
       else:
         routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, sppA, sppARows, sppB, sppBRows, self._gemm_cfg))
 

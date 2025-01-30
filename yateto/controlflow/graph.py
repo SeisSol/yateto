@@ -16,13 +16,13 @@ class Variable(object):
     return {self}
 
   def maySubstitute(self, when, by):
-    return self.substituted(when, by).memoryLayout().isCompatible(self.eqspp())
+    return self.substituted(when, by).memoryLayout().isCompatible(self.memoryLayout(), self.eqspp())
   
   def substituted(self, when, by, memoryLayout=None):
     return by if self == when else self
 
   def resultCompatible(self, result):
-    return result.memoryLayout().isCompatible(self.eqspp())
+    return result.memoryLayout().isCompatible(self.memoryLayout(), self.eqspp())
 
   def isGlobal(self):
     return self.tensor is not None
@@ -75,7 +75,7 @@ class Expression(object):
 
   def maySubstitute(self, when, by):
     layouts = [var.substituted(when, by).memoryLayout() for var in self._variables]
-    c1 = all(layouts[i].isCompatible(var.eqspp()) for i,var in enumerate(self._variables))
+    c1 = all(layouts[i].isCompatible(var.memoryLayout(), var.eqspp()) for i,var in enumerate(self._variables))
     c2 = self.node.argumentsCompatible(layouts)
     return c1 and c2
 
@@ -83,7 +83,7 @@ class Expression(object):
     return Expression(self.node, memoryLayout, [var.substituted(when, by) for var in self._variables])
 
   def resultCompatible(self, result):
-    c1 = result.memoryLayout().isCompatible(self.eqspp())
+    c1 = result.memoryLayout().isCompatible(self.memoryLayout(), self.eqspp())
     c2 = self.node.resultCompatible(result.memoryLayout())
     return c1 and c2
 

@@ -205,7 +205,7 @@ class LIBXSMM(CodeGenerator):
     return Preference.LOW
 
 class PSpaMM(CodeGenerator):
-  def __init__(self, arch, cmd: str = 'pspamm.py', threshold: int = 128):
+  def __init__(self, arch, cmd: str = 'pspamm-generator', threshold: int = 128):
     super().__init__('pspamm', [], cmd, arch)
     self._threshold = threshold
 

@@ -74,18 +74,20 @@ class KernelGenerator(object):
     #       an provided by the user
     required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
-    localPtrs = set()
+    if factory.allocateTemporary():
+      localPtrs = set()
+      for pp in cfg:
+        localPtrs.update(pp.bufferMap.keys())
+      if localPtrs:
+        cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
     for pp in cfg:
-      localPtrs.update(pp.bufferMap.keys())
-    if localPtrs:
-      cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
-    for pp in cfg:
-      for buf, size in pp.initBuffer.items():
-        required_tmp_mem += size * self._arch.bytesPerReal
-        bufname = self._bufferName(buf)
-        factory.temporary(bufname, size)
-      for local, buf in pp.bufferMap.items():
-        cpp('{} = {};'.format(local, self._bufferName(buf)))
+      if factory.allocateTemporary():
+        for buf, size in pp.initBuffer.items():
+          required_tmp_mem += size * self._arch.bytesPerReal
+          bufname = self._bufferName(buf)
+          factory.temporary(bufname, size)
+        for local, buf in pp.bufferMap.items():
+          cpp('{} = {};'.format(local, self._bufferName(buf)))
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)

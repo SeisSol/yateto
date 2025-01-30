@@ -3,13 +3,8 @@
 
 #include "CopyPolicy.h"
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
-
-/*
-#ifdef ACL_DEVICE
-#include "device.h"
-#endif
-*/
 
 namespace yateto {
     /** Computes a number of tensors inside of a tensor family.

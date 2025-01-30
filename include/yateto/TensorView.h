@@ -146,14 +146,22 @@ namespace yateto {
     template<typename... Entry>
     bool isInRange(Entry... entry) const {
       static_assert(sizeof...(entry) == Dim,
-                  "Number of arguments to isInRange(...) does not match Tensor's dimension.");
+                  "Number of arguments to isInRange(...) does not match the tensor dimension.");
       return isInRange(m_start, m_stop, 0, entry...);
     }
 
     template<typename... Entry>
     real_t& operator()(Entry... entry) {
       static_assert(sizeof...(entry) == Dim,
-                        "Number of arguments to operator() does not match Tensor's dimension.");
+                        "Number of arguments to operator() does not match the tensor dimension.");
+      assert(isInRange(entry...));
+      return m_values[address(entry...)];
+    }
+
+    template<typename... Entry>
+    real_t operator()(Entry... entry) const {
+      static_assert(sizeof...(entry) == Dim,
+                        "Number of arguments to operator() const does not match the tensor dimension.");
       assert(isInRange(entry...));
       return m_values[address(entry...)];
     }
@@ -201,7 +209,7 @@ namespace yateto {
 
     template<typename... Entry>
     auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t>  {
-      static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match Tensor's dimension.");
+      static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
       uint_t begin[Dim];
       uint_t size[nSlices];
@@ -311,6 +319,21 @@ namespace yateto {
       memset(m_values, 0, size() * sizeof(real_t));
     }
 
+    real_t operator()(uint_t row, uint_t col) const {
+      assert(col >= 0 && col < this->shape(1));
+      uint_t addr = m_colPtr[ col ];
+      uint_t stop = m_colPtr[ col+1 ];
+      while (addr < stop) {
+        if (m_rowInd[addr] == row) {
+          break;
+        }
+        ++addr;
+      }
+      assert(addr != stop);
+
+      return m_values[addr];
+    }
+
     real_t& operator()(uint_t row, uint_t col) {
       assert(col >= 0 && col < this->shape(1));
       uint_t addr = m_colPtr[ col ];
@@ -340,7 +363,11 @@ namespace yateto {
       return false;
     }
 
-    real_t& operator[](uint_t entry[2]) {
+    real_t& operator[](const uint_t entry[2]) {
+      return operator()(entry[0], entry[1]);
+    }
+
+    real_t operator[](const uint_t entry[2]) const {
       return operator()(entry[0], entry[1]);
     }
 

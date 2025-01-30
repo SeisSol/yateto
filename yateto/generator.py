@@ -263,7 +263,9 @@ class Generator(object):
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
                cost_estimator=BoundingBoxCostEstimator,
-               include_tensors=set()):
+               include_tensors=set(),
+               routine_exporters={}
+               ):
 
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
@@ -324,7 +326,7 @@ class Generator(object):
 
     print('Generating kernels...')
     cache = RoutineCache()
-    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache)
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters)
 
     kernelSource = StringIO()
     kernelSourceContent = ''

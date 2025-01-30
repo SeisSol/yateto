@@ -57,6 +57,11 @@ class KernelFactory(object):
       total_size = f'{BatchedOperationsAux.NUM_ELEMENTS_NAME} * {size}'
       self._cpp(f'{declaration} = linearAllocator.allocate({total_size});')
 
+  def allocateTemporary(self):
+    return True
+  
+  def post_generate(self, routine_cache):
+    pass
 
   def freeTmp(self):
     if self._target == 'cpu':
@@ -262,4 +267,74 @@ class UnitTestFactory(KernelFactory):
       self.temporary(resultName, size, memory=memory)
     self._rand += 1
 
+class ExportGenerator:
+  def __init__(self, arch):
+    self.arch = arch
+  
+  def generate(self, cpp, cache):
+    pass
+  
+  def add_operation(self, dest, ops, target, permute, add):
+    pass
 
+class ExportFactory(KernelFactory):
+  def __init__(self, cpp, arch, target):
+    super().__init__(cpp, arch, target)
+    self.generator = GpuKernelGenerator(arch)
+  
+  def post_generate(self, routine_cache):
+    self.generator.generate(self._cpp, routine_cache)
+
+  def allocateTemporary(self):
+    return False
+  
+  def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert len(arguments) == 2
+    return self.handleLinear(IndexedTensorDescription.fromNode(result, node), [IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()), IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())], add, scalar, node.transA(), node.transB())
+  
+  def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert len(arguments) == 1
+    return self.handleLinear(IndexedTensorDescription.fromNode(result, node), [IndexedTensorDescription.fromNode(arguments[0], node.term())], add, scalar, False, False)
+  
+  def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert len(arguments) == 2
+    return self.handleLinear(IndexedTensorDescription.fromNode(result, node), [IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()), IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())], add, scalar, False, False)
+
+  def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    term = arguments[0]
+    return self.handleLinear(IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())], add, scalar, False, False)
+  
+  def simple(self, result, term, add, scalar, routineCache):
+    return self.handleLinear(IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())], add, scalar, False, False)
+
+  def getIndices(self, dest, ops):
+    if dest is None:
+      target_indices = []
+    else:
+      target_indices = dest.indices
+
+    indexindex = {index:i for i, index in enumerate(target_indices)}
+    contract_counter = -1
+
+    for op in ops:
+      for index in op.indices:
+        if index not in indexindex:
+          indexindex[index] = contract_counter
+          contract_counter -= 1
+
+    target = [[indexindex[index] for index in op.indices] for op in ops]
+    permute = [[i for i,_ in enumerate(op.indices)] for op in ops]
+
+    return target, permute
+
+  def handleLinear(self, dest, ops, add, scalar, transposeA, transposeB):
+    # convert indices to loop numbers
+
+    target, permute = self.getIndices(dest, ops)
+    
+    if not (scalar == 1 or scalar == 1.0):
+      ops += [scalar]
+      target += [[]]
+      permute += [[]]
+    
+    return self.generator.add_operation(dest, ops, target, permute, add)

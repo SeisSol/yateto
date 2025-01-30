@@ -108,9 +108,18 @@ class OptimizedKernelGenerator(KernelGenerator):
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
 
   
-  def __init__(self, arch, routineCache):
+  def __init__(self, arch, routineCache, routine_exporters):
     super().__init__(arch)
     self._routineCache = routineCache
+    self._routine_exporters = routine_exporters
+
+    self._routine_factories = {
+      'cpu': OptimizedKernelFactory,
+      'gpu': OptimizedKernelFactory
+    }
+
+    for entry in routine_exporters:
+      self._routine_factories[entry] = ExportFactory(routine_exporters[entry])
   
   class KernelOutline(object):
     def __init__(self,
@@ -177,8 +186,9 @@ class OptimizedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = OptimizedKernelFactory(fcpp, self._arch, target)
+      self._routine_factories[target](fcpp, self._arch, target)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
+      factory.post_generate(self._routineCache)
       factory.freeTmp()
       factory.reset_stream()
       factory.reset_flags()

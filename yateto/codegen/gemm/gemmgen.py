@@ -269,7 +269,7 @@ Stderr: {result.stderr}""")
       pspamm_arch = cpu_arch
       if cpu_arch == 'a64fx':
         pspamm_arch = 'arm_sve512'
-      elif cpu_arch in ['apple-m1', 'thunderx2t99', 'neon']:
+      elif cpu_arch in ['thunderx2t99', 'neon'] or cpu_arch.startswith('apple-m'):
         pspamm_arch = 'arm'
       elif cpu_arch.startswith('sve'):
         pspamm_arch = f'arm_{cpu_arch}' # TODO(David): rename to sveLEN only
@@ -277,7 +277,7 @@ Stderr: {result.stderr}""")
         # names are Zen1, Zen2, Zen3, respectively
         # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
         pspamm_arch = 'hsw'
-      elif cpu_arch in ['bergamo']:
+      elif cpu_arch in ['bergamo', 'turin']:
         pspamm_arch = 'skx'
       argList = [
         self._cmd,
@@ -312,7 +312,7 @@ Stderr: {result.stderr}""")
         # names are Zen1, Zen2, Zen3, respectively
         # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
         libxsmm_arch = 'hsw'
-      elif cpu_arch in ['bergamo']:
+      elif cpu_arch in ['bergamo', 'turin']:
         libxsmm_arch = 'skx'
       argList = [
         self._cmd,

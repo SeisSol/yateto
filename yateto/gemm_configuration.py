@@ -308,6 +308,8 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'thunderx2t99' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'apple-m1' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'apple-m2' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'apple-m3' : [libxsmm_jit, pspamm, openblas, blis, eigen],
+      'apple-m4' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'a64fx' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'neon' : [libxsmm_jit, pspamm, openblas, blis, eigen],
       'sve128' : [libxsmm_jit, pspamm, openblas, blis, eigen],

@@ -133,6 +133,8 @@ def getArchitectureIdentifiedBy(ident):
     'neon': Architecture(name, precision, 16, True),
     'apple-m1': Architecture(name, precision, 16, True),
     'apple-m2': Architecture(name, precision, 16, True),
+    'apple-m3': Architecture(name, precision, 16, True),
+    'apple-m4': Architecture(name, precision, 16, True),
     'sve128': Architecture(name, precision, 16, True),
     'sve256': Architecture(name, precision, 32, True),
     'sve512': Architecture(name, precision, 64, True),

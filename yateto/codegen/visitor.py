@@ -188,7 +188,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      self._routine_factories[target](fcpp, self._arch, target)
+      factory = self._routine_factories[target](fcpp, self._arch, target)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.post_generate(self._routineCache)
       factory.freeTmp()

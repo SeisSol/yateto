@@ -255,13 +255,20 @@ class GemmGen(object):
           str(d.beta),
           d.prefetchName if d.prefetchName is not None else 'nullptr'
         ))
-      else:
+      elif gemm['prefetch'] != 'nopf' or self._gemm_cfg.is_internal():
         cpp( '{}({}, {}, {}, nullptr, {}, nullptr);'.format(
           routineName,
           self._pointer(d.leftTerm, (m.start, k.start), d.transA),
           self._pointer(d.rightTerm, (k.start, n.start), d.transB),
           self._pointer(d.result, (m.start, n.start), False),
           d.prefetchName if d.prefetchName is not None else 'nullptr'
+        ))
+      else:
+        cpp( '{}({}, {}, {});'.format(
+          routineName,
+          self._pointer(d.leftTerm, (m.start, k.start), d.transA),
+          self._pointer(d.rightTerm, (k.start, n.start), d.transB),
+          self._pointer(d.result, (m.start, n.start), False)
         ))
 
       if self._gemm_cfg.is_internal():
@@ -424,8 +431,12 @@ Stderr: {result.stderr}""")
 
     if self._mode == 'pspamm':
       return 'void {name}(const {type}* A, const {type}* B, {type}* C, {type} alpha, {type} beta, const {type}* prefetch);'.format(name=routineName, type=self._arch.typename)
-    return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
-  
+
+    # LIBXSMM header
+    if self._gemmDescr['prefetch'] == 'nopf':
+      return 'void {name}(const {type}* A, const {type}* B, {type}* C);'.format(name=routineName, type=self._arch.typename)
+    else:
+      return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
 
 class GemmForgeWriter(GpuRoutineGenerator):
   def __init__(self, forge_generator, headers):

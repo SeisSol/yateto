@@ -268,6 +268,8 @@ class UnitTestFactory(KernelFactory):
     self._rand += 1
 
 class ExportGenerator:
+  INTERFACE_VERSION = 1
+
   def __init__(self, arch):
     self.arch = arch
   

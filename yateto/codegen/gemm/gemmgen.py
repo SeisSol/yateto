@@ -294,7 +294,8 @@ class ExecuteGemmGen(RoutineGenerator):
   def __eq__(self, other):
     return self._arch == other._arch and \
            self._gemmDescr == other._gemmDescr and \
-           self._sppA == other._sppA and self._sppB == other._sppB
+           self._sppA == other._sppA and \
+           self._sppB == other._sppB
   
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):

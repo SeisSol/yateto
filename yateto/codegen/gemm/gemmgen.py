@@ -236,7 +236,7 @@ class GemmGen(object):
         'beta':         self._beta(d.beta),
         'alignedA':     int(d.alignedA),
         'alignedC':     int(d.alignedC),
-        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else None,
+        'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'nopf',
         'transA': d.transA,
         'transB': d.transB,
 
@@ -344,7 +344,7 @@ Stderr: {result.stderr}""")
         '--precision',
         self._arch.precision
       ]
-      if self._gemmDescr['prefetch']:
+      if self._gemmDescr['prefetch'] != 'nopf':
         argList.extend(['--prefetching', self._gemmDescr['prefetch']])
       if self._gemmDescr['transA']:
         argList.extend(['--atranspose', 'true'])
@@ -376,7 +376,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['alignedA'],
         self._gemmDescr['alignedC'],
         libxsmm_arch, # libxsmm has no support for rome, hsw works well in practice
-        self._gemmDescr['prefetch'] if self._gemmDescr['prefetch'] else 'nopf',
+        self._gemmDescr['prefetch'],
         self._arch.precision + 'P'
       ]
     class SparsityWrapper:

@@ -3,6 +3,71 @@ from .ast.node import Node, IndexedTensor
 from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
 from . import aspp
+from enum import Enum
+
+class Datatype(Enum):
+  BOOL = 0
+  I8 = 1
+  I16 = 2
+  I32 = 3
+  I64 = 4
+  F32 = 5
+  F64 = 6
+  F16 = 7
+  BF16 = 8
+
+  def ctype(self):
+    return {
+      Datatype.BOOL: 'bool',
+      Datatype.I8: 'int8_t',
+      Datatype.I16: 'int16_t',
+      Datatype.I32: 'int32_t',
+      Datatype.I64: 'int64_t',
+      Datatype.F32: 'float',
+      Datatype.F64: 'double',
+      Datatype.F16: 'int16_t',
+      Datatype.BF16: 'int16_t',
+    }[self]
+  
+  def size(self):
+    # unpacked size
+    return {
+      Datatype.BOOL: 1,
+      Datatype.I8: 1,
+      Datatype.I16: 2,
+      Datatype.I32: 4,
+      Datatype.I64: 8,
+      Datatype.F32: 4,
+      Datatype.F64: 8,
+      Datatype.F16: 2,
+      Datatype.BF16: 2,
+    }[self]
+  
+  def literal(self, value):
+    # TODO: BF16, F16
+    return {
+      Datatype.BOOL: 'true' if value else 'false',
+      Datatype.I8: f'{int(value)}',
+      Datatype.I16: f'{int(value)}',
+      Datatype.I32: f'{int(value)}',
+      Datatype.I64: f'{int(value)}LL',
+      Datatype.F32: f'{float(value):.16}f',
+      Datatype.F64: f'{float(value):.16}'
+    }[self]
+
+class AddressingMode(Enum):
+  DIRECT = 0
+  STRIDED = 1
+  INDIRECT = 2
+  SCALAR = 3
+
+  def pointer_type(self):
+    return {
+      AddressingMode.DIRECT: '*',
+      AddressingMode.STRIDED: '*',
+      AddressingMode.INDIRECT: '**',
+      AddressingMode.SCALAR: '',
+    }[self]
 
 class AbstractType(object):
   @classmethod
@@ -18,13 +83,19 @@ class IdentifiedType(AbstractType):
   GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
   VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
 
-  def __init__(self, name, namespace=None):
+  def __init__(self, name, namespace=None, datatype=None):
     if not self.isValidName(name):
       raise ValueError('Invalid name (must match regexp {}): {}'.format(self.VALID_NAME, name))
     
     self._name = name
     self.namespace = namespace
-  
+
+    # datatype == None is treated as datatype == self._arch.datatype
+    self.datatype = datatype
+
+  def getDatatype(self, arch):
+    return self._arch.datatype if self.datatype is None else self.datatype
+
   def __str__(self):
     return self._name
 
@@ -68,8 +139,8 @@ class IdentifiedType(AbstractType):
     return hash(self._name)
 
 class Scalar(IdentifiedType):  
-  def __init__(self, name, namespace=None):
-    super().__init__(name, namespace=namespace)
+  def __init__(self, name, namespace=None, datatype=None):
+    super().__init__(name, namespace=namespace, datatype=datatype)
   
   def __hash__(self):
     return hash(self._name)
@@ -81,8 +152,10 @@ class Tensor(IdentifiedType):
                spp=None,
                memoryLayoutClass=DenseMemoryLayout,
                alignStride=False,
-               namespace=None):
-    super().__init__(name, namespace=namespace)
+               namespace=None,
+               datatype=None,
+               addressing=None):
+    super().__init__(name, namespace=namespace, datatype=datatype)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -95,6 +168,9 @@ class Tensor(IdentifiedType):
     self._name = name
     self._shape = shape
     self._values = None
+
+    # default addressing mode. If not given, deduce it
+    self.addressing = addressing
 
     if namespace is None:
       self.namespace = ''

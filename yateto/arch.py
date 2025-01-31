@@ -106,6 +106,9 @@ class Architecture(object):
 
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
+  
+  def __eq__(self, other):
+    return self.name == other.name
 
 
 def _get_name_and_precision(ident):

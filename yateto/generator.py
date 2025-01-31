@@ -186,6 +186,27 @@ def simpleParameterSpace(*args):
 def parameterSpaceFromRanges(*args):
   return list(itertools.product(*[list(i) for i in args]))
 
+class GlobalRoutineCache:
+  def __init__(self):
+    self.cache = RoutineCache()
+    self.dirs = []
+  
+  def register(self, outputDir):
+    self.dirs += [outputDir]
+  
+  def generate(self, outputDir, namespace='yateto'):
+    print('Calling external code generators...')
+    fRoutines = Generator.FileNames(outputDir, Generator.ROUTINES_FILE_NAME)
+    fGpulikeRoutines = Generator.FileNames(outputDir, Generator.GPULIKE_ROUTINES_FILE_NAME)
+    with Cpp(fRoutines.h) as header:
+      with header.HeaderGuard(Generator._headerGuardName(namespace, Generator.ROUTINES_FILE_NAME)):
+        self.cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
+    
+    for subdir in self.dirs:
+      relpath = os.path.relpath(outputDir, subdir)
+      rfRoutines = Generator.FileNames(subdir, Generator.ROUTINES_FILE_NAME)
+      with Cpp(rfRoutines.h) as header:
+        header.include(os.path.join(relpath, fRoutines.hName))
 
 class Generator(object):
   INIT_FILE_NAME = 'init'
@@ -254,6 +275,7 @@ class Generator(object):
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
       family.add(indexedName, ast, prefetch, namespace, target=target)
   
+  @classmethod
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
     return '_'.join(partlist)
@@ -263,7 +285,8 @@ class Generator(object):
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
                cost_estimator=BoundingBoxCostEstimator,
-               include_tensors=set()):
+               include_tensors=set(),
+               routine_cache=None):
 
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
@@ -280,10 +303,10 @@ class Generator(object):
     fUTdoctest = self.FileNames(outputDir, self.DOCTEST_FILE_NAME)
     fUTcxxtest = self.FileNames(outputDir, self.CXXTEST_FILE_NAME)
     fKernels = self.FileNames(outputDir, self.KERNELS_FILE_NAME)
-    fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
-    fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
     fTensors = self.FileNames(outputDir, self.TENSORS_FILE_NAME)
     fInit = self.FileNames(outputDir, self.INIT_FILE_NAME)
+    fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
+    fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)  
 
     print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
@@ -323,7 +346,10 @@ class Generator(object):
         kernel_family_dict[family.namespace] = [family]
 
     print('Generating kernels...')
-    cache = RoutineCache()
+    if routine_cache is None:
+      cache = RoutineCache()
+    else:
+      cache = routine_cache.cache
     optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
 
     kernelSource = StringIO()
@@ -375,10 +401,13 @@ class Generator(object):
           cpp(gemm_tool.c_code_init)
       cpp.out.write(kernelSourceContent)
 
-    print('Calling external code generators...')
-    with Cpp(fRoutines.h) as header:
-      with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
-        cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
+    if routine_cache is None:
+      print('Calling external code generators...')
+      with Cpp(fRoutines.h) as header:
+        with header.HeaderGuard(self._headerGuardName(namespace, self.ROUTINES_FILE_NAME)):
+          cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
+    else:
+      routine_cache.register(outputDir)
 
     # Mapping basename -> tensor
     tensors = dict()

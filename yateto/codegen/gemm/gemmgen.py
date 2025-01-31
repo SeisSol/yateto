@@ -56,12 +56,14 @@ class GemmGen(object):
       (False, True): 'asparse',
       (False, False): 'absparse'
     }[(sppA is None, sppB is None)]
+
     if sppA is not None:
-      sha = hashlib.md5()
+      # cf. https://stackoverflow.com/a/65766676
+      sha = hashlib.new('md5', usedforsecurity=False)
       sha.update(str(sppA).encode())
       name += '_' + sha.hexdigest()
     if sppB is not None:
-      sha = hashlib.md5()
+      sha = hashlib.new('md5', usedforsecurity=False)
       sha.update(str(sppB).encode())
       name += '_' + sha.hexdigest()
     return '{name}_{datatype}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(

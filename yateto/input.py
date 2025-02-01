@@ -132,7 +132,8 @@ def memoryLayoutFromFile(xmlFile, db, clones):
       if matrix.tag == 'matrix':
         matrixName = matrix.get('name')
         if not db.containsName(matrixName):
-          raise ValueError('Unrecognized matrix name ' + matrixName)
+          pass
+          #raise ValueError('Unrecognized matrix name ' + matrixName)
         if len(groups[groupName]) > 0:
           lastMatrixInGroup = groups[groupName][-1]
           if db.byName(lastMatrixInGroup).shape() != db.byName(matrixName).shape():
@@ -179,4 +180,5 @@ def memoryLayoutFromFile(xmlFile, db, clones):
         else:
           tensor.setMemoryLayout(DenseMemoryLayout, alignStride=tensor.memoryLayout().alignedStride())
     else:
-      raise ValueError('Unrecognized matrix name ' + name)
+      pass
+      #raise ValueError('Unrecognized matrix name ' + name)

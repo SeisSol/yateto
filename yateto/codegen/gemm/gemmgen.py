@@ -321,7 +321,7 @@ Stdout: {result.stdout}
 Stderr: {result.stderr}""")
   
   def __call__(self, routineName, fileName):
-    cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
+    cpu_arch = self._arch.host_name
 
     if self._mode == 'pspamm':
       pspamm_arch = cpu_arch

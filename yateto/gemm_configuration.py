@@ -163,11 +163,7 @@ class LIBXSMM_JIT(CodeGenerator):
 
   def _archSupported(self):
     supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', 'turin', "a64fx", "thunderx2t99", 'neon', 'sve128', 'sve256', 'sve512', 'apple-m1', "apple-m2", "apple-m3", "apple-m4"}
-
-    if self._arch.name.lower() in supported_set:
-      return True
-    else:
-      return self._arch.host_name and self._arch.host_name.lower() in supported_set
+    return self._arch.host_name.lower() in supported_set
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -185,11 +181,7 @@ class LIBXSMM(CodeGenerator):
 
   def _archSupported(self):
     supported_set = {'noarch', 'wsm', 'snb', 'hsw', 'skx', 'knc', 'knl', 'naples', 'rome', 'milan', 'bergamo', 'turin'}
-
-    if self._arch.name.lower() in supported_set:
-      return True
-    else:
-      return self._arch.host_name and self._arch.host_name.lower() in supported_set
+    return self._arch.host_name.lower() in supported_set
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -211,11 +203,7 @@ class PSpaMM(CodeGenerator):
 
   def _archSupported(self):
     supported_set = {'rvv128', 'rvv256', 'rvv512', 'rvv1024', 'rvv2048', 'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'turin', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1', 'apple-m2', "apple-m3", "apple-m4"}
-    if self._arch.name.lower() in supported_set:
-      return True
-    else:
-      return self._arch.host_name and self._arch.host_name.lower() in supported_set
-
+    return self._arch.host_name.lower() in supported_set
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -245,7 +233,7 @@ class GemmForge(CodeGenerator):
     self._threshold = threshold
 
   def _is_arch_supported(self):
-    return self._arch.backend.lower() in {'cuda', 'hip', 'oneapi', 'hipsycl'}
+    return self._arch.backend.lower() in {'cuda', 'hip', 'oneapi', 'acpp', 'hipsycl'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -269,7 +257,7 @@ class tinytc(CodeGenerator):
     return Preference.HIGHEST
 
   def _archSupported(self):
-      return self._arch.backend.lower() == 'oneapi'
+      return self._arch.backend.lower() in {'oneapi'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
@@ -340,14 +328,11 @@ class DefaultGeneratorCollection(GeneratorCollection):
       'rvv2048': [pspamm, eigen]
     }
 
-    if arch.name in defaults:
-      self.gemmTools = defaults[arch.name]
-    elif arch.host_name in defaults:
+    if arch.host_name in defaults:
       self.gemmTools = defaults[arch.host_name]
       if arch.is_accelerator:
         if arch.backend == 'oneapi':
-            self.gemmTools.extend([tinytc(arch)])
-        else:
-            self.gemmTools.extend([forge])
+          self.gemmTools.extend([tinytc(arch)])
+        self.gemmTools.extend([forge])    
     else:
-      raise Exception("Default generator collection for architecture {} is missing.".format(arch))
+      raise Exception(f"Default generator collection for architecture {arch} is missing.")

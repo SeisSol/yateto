@@ -86,6 +86,8 @@ class Architecture(object):
     self._tmpStackLimit = 524288
     self.is_accelerator = backend != 'cpp' and self.host_name != None
 
+    self.host_name = self.host_name or self.name
+
   def setTmpStackLimit(self, tmpStackLimit):
     self._tmpStackLimit = tmpStackLimit
 
@@ -106,6 +108,9 @@ class Architecture(object):
 
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
+  
+  def __eq__(self, other):
+    return self.name == other.name
 
 
 def _get_name_and_precision(ident):

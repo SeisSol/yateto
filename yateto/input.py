@@ -118,7 +118,7 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
 
   return create_collection(matrices)
 
-def memoryLayoutFromFile(xmlFile, db, clones):
+def memoryLayoutFromFile(xmlFile, db, clones, strict=False):
   tree = etree.parse(xmlFile)
   root = tree.getroot()
   strtobool = ['yes', 'true', '1']
@@ -131,9 +131,8 @@ def memoryLayoutFromFile(xmlFile, db, clones):
     for matrix in group:
       if matrix.tag == 'matrix':
         matrixName = matrix.get('name')
-        if not db.containsName(matrixName):
-          pass
-          #raise ValueError('Unrecognized matrix name ' + matrixName)
+        if not db.containsName(matrixName) and strict:
+          raise ValueError('Unrecognized matrix name ' + matrixName)
         if len(groups[groupName]) > 0:
           lastMatrixInGroup = groups[groupName][-1]
           if db.byName(lastMatrixInGroup).shape() != db.byName(matrixName).shape():
@@ -179,6 +178,5 @@ def memoryLayoutFromFile(xmlFile, db, clones):
           tensor.setMemoryLayout(CSCMemoryLayout)
         else:
           tensor.setMemoryLayout(DenseMemoryLayout, alignStride=tensor.memoryLayout().alignedStride())
-    else:
-      pass
-      #raise ValueError('Unrecognized matrix name ' + name)
+    elif strict:
+      raise ValueError('Unrecognized matrix name ' + name)

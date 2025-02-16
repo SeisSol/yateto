@@ -276,13 +276,16 @@ class ExportGenerator:
   def generate(self, cpp, cache):
     pass
   
-  def add_operation(self, dest, ops, target, permute, add):
+  def add_linear_operation(self, dest, ops, target, permute, add):
     pass
 
+def exportFactoryCreator(generator):
+  return lambda cpp, arch, target: ExportFactory(generator(arch), cpp, arch, target)
+
 class ExportFactory(KernelFactory):
-  def __init__(self, cpp, arch, target):
+  def __init__(self, generator, cpp, arch, target):
     super().__init__(cpp, arch, target)
-    self.generator = GpuKernelGenerator(arch)
+    self.generator = generator
   
   def post_generate(self, routine_cache):
     self.generator.generate(self._cpp, routine_cache)
@@ -339,4 +342,4 @@ class ExportFactory(KernelFactory):
       target += [[]]
       permute += [[]]
     
-    return self.generator.add_operation(dest, ops, target, permute, add)
+    return self.generator.add_linear_operation(dest, ops, target, permute, add)

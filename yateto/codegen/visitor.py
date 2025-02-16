@@ -121,7 +121,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     }
 
     for entry in routine_exporters:
-      self._routine_factories[entry] = ExportFactory(routine_exporters[entry])
+      self._routine_factories[entry] = exportFactoryCreator(routine_exporters[entry])
   
   class KernelOutline(object):
     def __init__(self,

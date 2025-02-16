@@ -14,11 +14,10 @@ from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
-from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc
+from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc, GemmForge
 from typing import List
 from io import StringIO
 import importlib.util
-chainforge_spec = importlib.util.find_spec('chainforge')
 
 
 class Kernel(object):
@@ -293,8 +292,11 @@ class Generator(object):
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
+    hasGemmforge = any([isinstance(tool, GemmForge) for tool in gemm_cfg.gemmTools])
     hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
-    enableFusedGemm = bool(chainforge_spec) or hasTinytc
+
+    chainforge_spec = importlib.util.find_spec('chainforge')
+    enableFusedGemm = (hasGemmforge and bool(chainforge_spec)) or hasTinytc
 
     print('Deducing indices...')
     for kernel in self._kernels:

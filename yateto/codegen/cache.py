@@ -3,10 +3,16 @@ from .code import Cpp
 class RoutineGenerator(object):
   def __call__(self, routineName, fileName):
     pass
+  
+  def target(self):
+    return 'cpu'
 
 class GpuRoutineGenerator(object):
   def __call__(self, routineName, fileName):
     pass
+  
+  def target(self):
+    return 'gpu'
 
 class RoutineCache(object):
   def __init__(self):
@@ -27,16 +33,20 @@ class RoutineCache(object):
     with Cpp(gpuFileName) as gpucpp:
       with Cpp(cppFileName) as cpp:
         for generator in self._generators.values():
-          if isinstance(generator, GpuRoutineGenerator):
+          if generator.target() == 'gpu':
             generator.header(gpucpp)
-          else:
+          elif generator.target() == 'cpu':
             generator.header(cpp)
+          else:
+            raise NotImplementedError(f'Unknown target: {generator.target()}')
 
     for name, generator in self._routines.items():
-      if isinstance(generator, GpuRoutineGenerator):
+      if generator.target() == 'gpu':
         declaration = generator(name, gpuFileName)
-      else:
+      elif generator.target() == 'cpu':
         declaration = generator(name, cppFileName)
+      else:
+        raise NotImplementedError(f'Unknown target: {generator.target()}')
       header(declaration)
 
 class TinytcWriter(GpuRoutineGenerator):

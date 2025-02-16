@@ -309,7 +309,7 @@ class ExportFactory(KernelFactory):
     term = arguments[0]
     return self.handleLinear(IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())], add, scalar, False, False)
   
-  def simple(self, result, term, add, scalar, routineCache):
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     return self.handleLinear(IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())], add, scalar, False, False)
 
   def getIndices(self, dest, ops):

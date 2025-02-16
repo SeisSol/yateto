@@ -7,7 +7,7 @@ import hashlib
 
 
 class TensorDescription(object):
-  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False):
+  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
     """
 
     Args:
@@ -24,31 +24,47 @@ class TensorDescription(object):
     self.eqspp = eqspp
     self.is_compute_constant = is_compute_constant
     self.is_temporary = is_temporary
-    BoundingBox(eqspp)
+    self.values = values
+    self.datatype = datatype
+    self.addressing = addressing
   
   @classmethod
   def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())
 
 class IndexedTensorDescription(TensorDescription):
-  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False):
+  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
     super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary)
     self.indices = indices
 
   @classmethod
   def fromNode(cls, var, node):
     is_const = False
+    values = None
+    datatype = None
+    addressing = None
     if hasattr(node, 'tensor'):
       is_const = node.tensor.is_compute_constant()
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary)
+      if is_const:
+        values = node.tensor.values()
+      datatype = None # node.tensor.datatype
+      addressing = None # node.tensor.addressing
+    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
   @classmethod
   def fromVar(cls, var, indices):
     is_const = False
+    values = None
+    datatype = None
+    addressing = None
     if hasattr(var, 'tensor'):
       if var.tensor is not None:
         is_const = var.tensor.is_compute_constant()
-    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary)
+        if is_const:
+          values = var.tensor.values()
+        datatype = None # var.tensor.datatype
+        addressing = None # var.tensor.addressing
+    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):
   flops = 0

@@ -34,7 +34,7 @@ class TensorDescription(object):
 
 class IndexedTensorDescription(TensorDescription):
   def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
-    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary)
+    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing)
     self.indices = indices
 
   @classmethod

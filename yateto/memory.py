@@ -294,6 +294,9 @@ class CSCMemoryLayout(MemoryLayout):
   def requiredReals(self):
     return len(self._rowIndex)
 
+  def bbox(self):
+    return self._bbox
+
   def bboxi(self, dim):
     return self._bbox[dim]
   

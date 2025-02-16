@@ -2,7 +2,7 @@ import re
 import itertools
 import json
 from . import Collection, Tensor
-from .memory import CSCMemoryLayout, DenseMemoryLayout
+from .memory import AlignedCSCMemoryLayout, CSCMemoryLayout, DenseMemoryLayout
 from . import aspp
 from .util import create_collection
 
@@ -152,6 +152,7 @@ def memoryLayoutFromFile(xmlFile, db, clones):
     group = matrix.get('group')
     name = matrix.get('name')
     sparse = matrix.get('sparse', '').lower() in strtobool
+    sparsealigned = matrix.get('sparse', '').lower() == 'aligned'
 
     if group in groups or name in clones or db.containsName(name):
       blocks = []
@@ -168,7 +169,12 @@ def memoryLayoutFromFile(xmlFile, db, clones):
       names = groups[group] if group in groups else (clones[name] if name in clones else [name])
       for n in names:
         tensor = db.byName(n)
-        if sparse:
+        if sparsealigned:
+          if tensor.memoryLayout().alignedStride():
+            tensor.setMemoryLayout(AlignedCSCMemoryLayout)
+          else:
+            tensor.setMemoryLayout(CSCMemoryLayout)
+        elif sparse:
           tensor.setMemoryLayout(CSCMemoryLayout)
         else:
           tensor.setMemoryLayout(DenseMemoryLayout, alignStride=tensor.memoryLayout().alignedStride())

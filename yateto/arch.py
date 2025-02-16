@@ -86,6 +86,8 @@ class Architecture(object):
     self._tmpStackLimit = 524288
     self.is_accelerator = backend != 'cpp' and self.host_name != None
 
+    self.host_name = self.host_name or self.name
+
   def setTmpStackLimit(self, tmpStackLimit):
     self._tmpStackLimit = tmpStackLimit
 
@@ -106,6 +108,9 @@ class Architecture(object):
 
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
+  
+  def __eq__(self, other):
+    return self.name == other.name
 
 
 def _get_name_and_precision(ident):
@@ -115,30 +120,37 @@ def _get_name_and_precision(ident):
 def getArchitectureIdentifiedBy(ident):
   name, precision = _get_name_and_precision(ident)
 
-  # NOTE: libxsmm currently supports prefetch only for KNL kernels
   arch = {
     'noarch': Architecture(name, precision, 16, False),
     'wsm': Architecture(name, precision, 16, False),
     'snb': Architecture(name, precision, 32, False),
-    'hsw': Architecture(name, precision, 32, False),
+    'hsw': Architecture(name, precision, 32, True),
     'skx': Architecture(name, precision, 64, True),
     'knc': Architecture(name, precision, 64, False),
     'knl': Architecture(name, precision, 64, True),
-    'naples': Architecture(name, precision, 32, False),
-    'rome': Architecture(name, precision, 32, False),
-    'milan': Architecture(name, precision, 32, False),
+    'naples': Architecture(name, precision, 32, True),
+    'rome': Architecture(name, precision, 32, True),
+    'milan': Architecture(name, precision, 32, True),
     'bergamo': Architecture(name, precision, 64, True),
-    'thunderx2t99': Architecture(name, precision, 16, False),
+    'turin': Architecture(name, precision, 64, True),
+    'thunderx2t99': Architecture(name, precision, 16, True),
     'a64fx': Architecture(name, precision, 64, True),
-    'neon': Architecture(name, precision, 16, False),
-    'apple-m1': Architecture(name, precision, 16, False),
-    'apple-m2': Architecture(name, precision, 16, False),
-    'sve128': Architecture(name, precision, 16, False),
-    'sve256': Architecture(name, precision, 32, False),
-    'sve512': Architecture(name, precision, 64, False),
-    'sve1024': Architecture(name, precision, 128, False),
-    'sve2048': Architecture(name, precision, 256, False),
+    'neon': Architecture(name, precision, 16, True),
+    'apple-m1': Architecture(name, precision, 16, True),
+    'apple-m2': Architecture(name, precision, 16, True),
+    'apple-m3': Architecture(name, precision, 16, True),
+    'apple-m4': Architecture(name, precision, 16, True),
+    'sve128': Architecture(name, precision, 16, True),
+    'sve256': Architecture(name, precision, 32, True),
+    'sve512': Architecture(name, precision, 64, True),
+    'sve1024': Architecture(name, precision, 128, True),
+    'sve2048': Architecture(name, precision, 256, True),
     'power9': Architecture(name, precision, 16, False),
+    'rvv128': Architecture(name, precision, 16, True),
+    'rvv256': Architecture(name, precision, 32, True),
+    'rvv512': Architecture(name, precision, 64, True),
+    'rvv1024': Architecture(name, precision, 128, True),
+    'rvv2048': Architecture(name, precision, 256, True)
   }
   return arch[name]
 

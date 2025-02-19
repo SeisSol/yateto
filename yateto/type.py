@@ -185,6 +185,29 @@ class Tensor(IdentifiedType):
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)
 
+  def slice(self, dimension, start, end=None):
+    # end == one after the last index (if end == None, then we assume end = start+1)
+    assert end is None or start < end
+    if end is None:
+      end = start + 1
+    return TensorView(self, [start if i == dimension else 0 for i in range(len(self._shape))], [end if i == dimension else shape for i,shape in enumerate(self._shape)])
+
+# a tensor slice
+class TensorView:
+  def __init__(self, tensor, start, end):
+    self.tensor = tensor
+    self.start = start
+    self.end = end
+  
+  def slice(self, dimension, start, end=None):
+    assert end is None or start < end
+    if end is None:
+      end = start + 1
+    return TensorView(self.tensor, [start if i == dimension else value for i,value in enumerate(self.start)], [end if i == dimension else shape for i,shape in enumerate(self.end)])
+  
+  def __getitem__(self, indexNames):
+    return IndexedTensor(self.tensor, indexNames, self.start, self.end)
+
 class Collection(object):
   def update(self, collection):
     self.__dict__.update(collection.__dict__)

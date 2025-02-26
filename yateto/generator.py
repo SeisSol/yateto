@@ -24,7 +24,7 @@ chainforge_spec = importlib.util.find_spec('chainforge')
 class Kernel(object):
   BASE_NAME = r'[a-zA-Z]\w*'
   VALID_NAME = r'^{}$'.format(BASE_NAME)
-  VALID_TARGETS = ['cpu', 'gpu']
+  VALID_TARGETS = ['cpu', 'gpu', 'igpu']
 
   def __init__(self, name, ast, prefetch=None, namespace=None, target='cpu'):
     self.name = name
@@ -367,6 +367,10 @@ class Generator(object):
           header.includeSys('limits')
           header.include('yateto.h')
           header.include(fTensors.hName)
+
+          for path in self._arch.headers():
+            header.includeSys(path)
+
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace), header.Namespace(namespace):
               # Group kernels by namespace

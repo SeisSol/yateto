@@ -21,7 +21,7 @@ class Description(object):
     
 
 def generator(arch, descr, target):
-  if target == 'cpu':
+  if target in ['cpu', 'igpu']:
     return Generic(arch, descr)
   elif target == 'gpu':
     raise RuntimeError("IndexSum operation has not been implemented for GPU-like architectures")

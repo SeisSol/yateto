@@ -25,7 +25,7 @@ class KernelFactory(object):
   def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     raise NotImplementedError
 
-  def temporary(self, bufname, size, iniZero=False, memory=list()):
+  def temporary(self, bufname, size, offset, iniZero=False, memory=list()):
     assert(iniZero == False or len(memory) == 0)
 
     if self._target == 'cpu':
@@ -52,6 +52,13 @@ class KernelFactory(object):
         elif memory:
           ini = ' = {{{}}}'.format(', '.join(memory))
         self._cpp(f'alignas({self._arch.alignment}) {self._arch.typename} {bufname}[{size}] {ini};')
+    elif self._target == 'igpu':
+      self._cpp(f'{self._arch.typename}* {bufname} = &sharedMemory[{offset}];')
+      if iniZero:
+        self._cpp.memset(bufname, size, self._arch.typename)
+      if memory:
+        for i, data in enumerate(memory):
+          self._cpp(f'{bufname}[{i}] = {data};')
     else:
       declaration = f'{self._arch.typename}* {bufname}'
       total_size = f'{BatchedOperationsAux.NUM_ELEMENTS_NAME} * {size}'
@@ -59,7 +66,7 @@ class KernelFactory(object):
 
 
   def freeTmp(self):
-    if self._target == 'cpu':
+    if self._target in ['cpu', 'igpu']:
       for free in self._freeList:
         self._cpp(f'free({free});')
     elif self._target == 'gpu':
@@ -70,7 +77,7 @@ class KernelFactory(object):
     self._freeList = []
 
   def reset_stream(self):
-    if self._target == 'cpu':
+    if self._target in ['cpu', 'igpu']:
       pass
     elif self._target == 'gpu':
       self._cpp(f'{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
@@ -78,7 +85,7 @@ class KernelFactory(object):
       raise RuntimeError('unknown compute target')
 
   def reset_flags(self):
-    if self._target == 'cpu':
+    if self._target in ['cpu', 'igpu']:
       pass
     elif self._target == 'gpu':
       self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
@@ -250,7 +257,7 @@ class UnitTestFactory(KernelFactory):
     spp = node.spp()
     isDense = spp.count_nonzero() == size
     if isDense:
-      self.temporary(resultName, size)
+      self.temporary(resultName, size, 0)
       with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
         self._cpp('{}[i] = static_cast<{}>((i + {}) % {} + 1);'.format(resultName, self._arch.typename, self._rand, maxValue))
     else:
@@ -259,7 +266,7 @@ class UnitTestFactory(KernelFactory):
       for entry in zip(*nz):
         addr = ml.address(entry)
         memory[addr] = str(float((addr + self._rand) % maxValue)+1.0)
-      self.temporary(resultName, size, memory=memory)
+      self.temporary(resultName, size, 0, memory=memory)
     self._rand += 1
 
 

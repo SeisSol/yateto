@@ -111,7 +111,35 @@ class Architecture(object):
   
   def __eq__(self, other):
     return self.name == other.name
+  
+  def indexing(self):
+    if self.backend in ['cuda', 'hip']:
+      return ('threadIdx.x', 'blockDim.x')
+    elif self.backend in ['omptarget']:
+      return ('omp_get_thread_num()', 'omp_get_num_threads()')
+    elif self.backend in ['oneapi', 'hipsycl', 'acpp']:
+      return ('item->get_local_id(0)', 'item->get_group().get_group_id(0)')
+    else:
+      raise NotImplementedError('Inline GPU kernel indexing not yet implemented for this type of backend')
 
+  def barrier(self):
+    # TODO: maybe also grid-wise syncs?
+    if self.backend in ['cuda', 'hip']:
+      return '__syncthreads();'
+    elif self.backend in ['omptarget']:
+      return '#pragma omp barrier'
+    elif self.backend in ['oneapi', 'hipsycl', 'acpp']:
+      return 'item->barrier(sycl::access::fence_space::local_space);'
+    else:
+      raise NotImplementedError('Inline GPU kernel barriers are not yet implemented for this type of backend')
+  
+  def headers(self):
+    if self.backend in ['cpp', 'cuda']:
+      return []
+    elif self.backend in ['hip']:
+      return ['hip/hip_runtime.h']
+    elif self.backend in ['oneapi', 'hipsycl', 'acpp']:
+      return ['sycl/sycl.hpp']
 
 def _get_name_and_precision(ident):
   return ident[1:], ident[0].upper()

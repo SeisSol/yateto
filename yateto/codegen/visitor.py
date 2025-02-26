@@ -73,19 +73,42 @@ class KernelGenerator(object):
     # NOTE: it is required to know in case if the memory is allocated on the heap
     #       an provided by the user
     required_tmp_mem = 0
+    memoffset = 0
     cfg = DetermineLocalInitialization().visit(cfg)
     localPtrs = set()
     for pp in cfg:
       localPtrs.update(pp.bufferMap.keys())
     if localPtrs:
       cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
+    
+    if len(cfg) > 0:
+      last = cfg[-1]
+      first = cfg[0]
+    else:
+      first = None
+      last = None
+    
+    used = set()
+
+    # TODO: rework synchronization
     for pp in cfg:
       for buf, size in pp.initBuffer.items():
         required_tmp_mem += size * self._arch.bytesPerReal
         bufname = self._bufferName(buf)
-        factory.temporary(bufname, size)
+        factory.temporary(bufname, size, memoffset)
+        memoffset += size
+      
+      needsBarrier = False
       for local, buf in pp.bufferMap.items():
-        cpp('{} = {};'.format(local, self._bufferName(buf)))
+        bufname = self._bufferName(buf)
+        cpp('{} = {};'.format(local, bufname))
+        if bufname in used:
+          needsBarrier = True
+        used.add(bufname)
+      
+      if needsBarrier or (pp.action and pp.action.result.is_temporary and not first):
+        cpp(self._arch.barrier())
+      
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)
@@ -94,6 +117,9 @@ class KernelGenerator(object):
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache, gemm_cfg)
+        
+        if action.result.is_temporary and pp is not last:
+          cpp(self._arch.barrier())
     return hwFlops, required_tmp_mem
 
 class OptimisedKernelGenerator(KernelGenerator):
@@ -324,6 +350,10 @@ class OptimisedKernelGenerator(KernelGenerator):
 
           for base_name, groups in tensors.items():
             generate_extra_offset_args(base_name, groups)
+        elif target == 'igpu':
+          header(f'{self._arch.typename}* sharedMemory = nullptr;')
+          if self._arch.backend in ['oneapi', 'acpp', 'hipsycl']:
+            header('sycl::nd_item<1>* item;')
         header.emptyline()
 
         if len(prefetch) > 0:
@@ -332,10 +362,14 @@ class OptimisedKernelGenerator(KernelGenerator):
               kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
           header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
           header.emptyline()
+        
+        hostdevice = 'YATETO_DEVICE' if target == 'igpu' else ''
 
         for index, kernelOutline in enumerate(kernelOutlines):
           if kernelOutline:
-            header.functionDeclaration(executeName(index))
+            header('#pragma omp declare target')
+            header.functionDeclaration(executeName(index), returnType=f'{hostdevice} void')
+            header('#pragma omp end declare target')
 
         if familyStride is not None:
           header('using {} = void ({}::*)();'.format(self.MEMBER_FUNCTION_PTR_NAME, name))
@@ -349,8 +383,14 @@ class OptimisedKernelGenerator(KernelGenerator):
           indexF = indexFun(familyStride)
           with header.Function(self.FIND_EXECUTE_NAME, args, '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
             header('return {}[{}];'.format(self.EXECUTE_ARRAY_NAME, indexF))
-          with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
-            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
+          with header.Function(self.EXECUTE_NAME, args, f'{hostdevice} {INLINE} void'):
+            if target == 'igpu':
+              header('const auto indexF = {indexF};')
+              for index, kernelOutline in enumerate(kernelOutline):
+                with header.If(f'(indexF == {index})'):
+                  header(f'{executeName(index)}();')
+            else:
+              header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
           aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
           for function in aux_functions:
@@ -379,28 +419,31 @@ class OptimisedKernelGenerator(KernelGenerator):
     for index, kernelOutline in enumerate(kernelOutlines):
       if kernelOutline is None:
         continue
+      
+      fileh = header if target == 'igpu' else cpp
 
-      with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
-        for base_name_with_namespace, groups in kernelOutline.scalars.items():
-          base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
-          if len(next(iter(groups))) > 0:
-            for gis in groups:
-              cpp('assert(!std::isnan({}({})));'.format(base_name, ','.join(str(gi) for gi in gis)))
-          else:
-            cpp(f'assert(!std::isnan({base_name}));')
-        for base_name_with_namespace, groups in kernelOutline.tensors.items():
-          base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
-          if len(next(iter(groups))) > 0:
-            for gis in groups:
-              cpp('assert({}({}) != nullptr);'.format(base_name, ','.join(str(gi) for gi in gis)))
-          else:
-            cpp(f'assert({base_name} != nullptr);')
+      with fileh.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index)), returnType=f'{hostdevice} void'):
+        if target != 'igpu':
+          for base_name_with_namespace, groups in kernelOutline.scalars.items():
+            base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
+            if len(next(iter(groups))) > 0:
+              for gis in groups:
+                fileh('assert(!std::isnan({}({})));'.format(base_name, ','.join(str(gi) for gi in gis)))
+            else:
+              fileh(f'assert(!std::isnan({base_name}));')
+          for base_name_with_namespace, groups in kernelOutline.tensors.items():
+            base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
+            if len(next(iter(groups))) > 0:
+              for gis in groups:
+                fileh('assert({}({}) != nullptr);'.format(base_name, ','.join(str(gi) for gi in gis)))
+            else:
+              fileh(f'assert({base_name} != nullptr);')
 
-        if target == 'gpu':
-          cpp(f'assert({BatchedOperationsAux.NUM_ELEMENTS_NAME} != 0);')
-          cpp(f'assert({BatchedOperationsAux.STREAM_PTR_NAME} != {BatchedOperationsAux.FORBIDDEN_STREAM_PTR});')
+          if target == 'gpu':
+            fileh(f'assert({BatchedOperationsAux.NUM_ELEMENTS_NAME} != 0);')
+            fileh(f'assert({BatchedOperationsAux.STREAM_PTR_NAME} != {BatchedOperationsAux.FORBIDDEN_STREAM_PTR});')
 
-        cpp(kernelOutline.function)
+        fileh(kernelOutline.function)
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
@@ -490,7 +533,7 @@ class UnitTestGenerator(KernelGenerator):
         
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
-        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
+        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), 0, iniZero=True)
         
         shape = var.memoryLayout().shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
@@ -534,7 +577,6 @@ class UnitTestGenerator(KernelGenerator):
           cpp( f'{self.QUEUE}.memcpy({self._devTensorName(var)}, {self._tensorName(var)}, sizeof({self._tensorName(var)})).wait();' )
           cpp( f'{self.QUEUE}.memcpy({self._devPtrTensorName(var)}, &{self._devTensorName(var)}, sizeof({self._arch.typename}*)).wait();' )
         cpp.emptyline()
-
 
       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
       for var in scalars:
@@ -746,10 +788,10 @@ class InitializerGenerator(object):
               header('template<typename T>')
               with header.Struct(self.CONTAINER_CLASS_NAME):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
-                header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                header('YATETO_HOSTDEVICE {}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
+                with header.Function('operator()', typedArgs, 'YATETO_HOSTDEVICE {} T&'.format(INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                with header.Function('operator()', typedArgs, 'YATETO_HOSTDEVICE {} T const&'.format(INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
     for namespace, scalar_dict in self.iterate_collect_scalar():
       with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
@@ -850,7 +892,7 @@ class InitializerGenerator(object):
           tv = self._tensorViewGenerator(ml)
           with cpp.Struct(self.VIEW_STRUCT_NAME):
             cpp('typedef {} {};'.format(tv.typename(len(ml.shape()), self._arch), self.VIEW_TYPE_NAME))
-            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='YATETO_HOSTDEVICE {} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, None)
         else:
           typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
@@ -865,7 +907,7 @@ class InitializerGenerator(object):
           cpp('template<>')
           with cpp.Struct('{}::{}<{}>'.format(baseNameWithoutNamespace, self.VIEW_STRUCT_NAME, special)):
             cpp('typedef {} {};'.format(typename, self.VIEW_TYPE_NAME))
-            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='YATETO_HOSTDEVICE {} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, index(group))
   
   def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True, constexpr=True, static=True):

@@ -25,8 +25,8 @@ class Description(object):
     self.loopRanges = rA    
 
 def generator(arch, descr, target):
-  if target == 'cpu':
-    return Generic(arch, descr)
+  if target in ['cpu', 'igpu']:
+    return Generic(arch, descr, target)
   elif target == 'gpu':
     raise RuntimeError("Product operation has not been implemented for GPU-like architectures")
 

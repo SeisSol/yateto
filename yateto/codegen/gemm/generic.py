@@ -4,8 +4,10 @@ class Generic(object):
   OUTER_INDEX = 'o'
   INNER_INDEX = 'i'
 
-  def __init__(self, arch, descr):
+  def __init__(self, arch, descr, target):
+    self._arch = arch
     self._descr = descr
+    self._target = target
 
   def _flopInit(self, beta):
     return 0 if beta in [0.0, 1.0] else 1
@@ -77,7 +79,15 @@ class Generic(object):
       sizes = {0: k.size(), 1: n.size(), self.OUTER_INDEX: m.size(), self.INNER_INDEX: n.size()}
       trans = d.transB
 
-    with cpp.For('int {0} = 0; {0} < {1}; ++{0}'.format(self.OUTER_INDEX, sizes[self.OUTER_INDEX])):
+    if self._target == 'igpu':
+      indexing = self._arch.indexing()
+      iterstart = indexing[0]
+      iterincr = indexing[1]
+    else:
+      iterstart = 0
+      iterincr = 1
+    
+    with cpp.For(f'int {self.OUTER_INDEX} = {iterstart}; {self.OUTER_INDEX} < {sizes[self.OUTER_INDEX]}; {self.OUTER_INDEX} += {iterincr}'):
       if d.beta != 1.0:
         with cpp.For('int {0} = 0; {0} < {1}; ++{0}'.format(self.INNER_INDEX, sizes[self.INNER_INDEX])):
           CAddr = result([self.INNER_INDEX, self.INNER_INDEX])
@@ -107,10 +117,18 @@ class Generic(object):
     Aaccess = self._accessFun(d.leftTerm, (m.start, k.start), False, d.transA)
     Baccess = self._accessFun(d.rightTerm, (k.start, n.start), False, d.transB)
     Caccess = self._accessFun(d.result, (m.start, n.start), False, False)
+
+    if self._target == 'igpu':
+      indexing = self._arch.indexing()
+      mstart = indexing[0]
+      minc = indexing[1]
+    else:
+      mstart = 0
+      minc = 1
     
     with cpp.For('int n = 0; n < {0}; ++n'.format(n.size())):
       if d.beta != 1.0:
-        with cpp.For('int m = 0; m < {0}; ++m'.format(m.size())):
+        with cpp.For(f'int m = {mstart}; m < {m.size()}; m += {minc}'):
           cpp('{} = {}{};'.format(
               Caccess('m', 'n'),
               d.beta,
@@ -118,7 +136,7 @@ class Generic(object):
             )
           )
       with cpp.For('int k = 0; k < {0}; ++k'.format(k.size())):
-        with cpp.For('int m = 0; m < {0}; ++m'.format(m.size())):
+        with cpp.For(f'int m = {mstart}; m < {m.size()}; m += {minc}'):
           cpp( '{C} += {alpha} * {A} * {B};'.format(
               C = Caccess('m', 'n'),
               alpha = d.alpha,

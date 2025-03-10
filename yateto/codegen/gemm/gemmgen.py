@@ -69,7 +69,7 @@ class GemmGen(object):
     return '{name}_{datatype}_{arch}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
       name=name,
       datatype=self._arch.typename,
-      arch=self._arch.name,
+      arch=self._arch.name.replace('-', '_'),
       alphaSubs=self._alpha(gemm['alpha']),
       betaSubs=self._beta(gemm['beta']),
       **gemm
@@ -337,6 +337,10 @@ Stderr: {result.stderr}""")
         pspamm_arch = 'hsw'
       elif cpu_arch in ['bergamo', 'turin']:
         pspamm_arch = 'skx'
+      elif cpu_arch.startswith('avx2'):
+        pspamm_arch = 'hsw' + cpu_arch[5:]
+      elif cpu_arch.startswith('avx10'):
+        pspamm_arch = 'knl' + cpu_arch[6:]
       argList = [
         self._cmd,
         self._gemmDescr['M'],

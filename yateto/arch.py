@@ -150,7 +150,12 @@ def getArchitectureIdentifiedBy(ident):
     'rvv256': Architecture(name, precision, 32, True),
     'rvv512': Architecture(name, precision, 64, True),
     'rvv1024': Architecture(name, precision, 128, True),
-    'rvv2048': Architecture(name, precision, 256, True)
+    'rvv2048': Architecture(name, precision, 256, True),
+    'avx2-128': Architecture(name, precision, 16, True),
+    'avx2-256': Architecture(name, precision, 32, True),
+    'avx10-128': Architecture(name, precision, 16, True),
+    'avx10-256': Architecture(name, precision, 32, True),
+    'avx10-512': Architecture(name, precision, 64, True),
   }
   return arch[name]
 

@@ -14,11 +14,10 @@ from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
-from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc
+from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc, GemmForge
 from typing import List
 from io import StringIO
 import importlib.util
-chainforge_spec = importlib.util.find_spec('chainforge')
 
 
 class Kernel(object):
@@ -286,13 +285,18 @@ class Generator(object):
                gemm_cfg: GeneratorCollection = None,
                cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set(),
-               routine_cache=None):
+               routine_cache=None,
+               routine_exporters={}
+               ):
 
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
+    hasGemmforge = any([isinstance(tool, GemmForge) for tool in gemm_cfg.gemmTools])
     hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
-    enableFusedGemm = bool(chainforge_spec) or hasTinytc
+
+    chainforge_spec = importlib.util.find_spec('chainforge')
+    enableFusedGemm = (hasGemmforge and bool(chainforge_spec)) or hasTinytc
 
     print('Deducing indices...')
     for kernel in self._kernels:
@@ -350,7 +354,7 @@ class Generator(object):
       cache = RoutineCache()
     else:
       cache = routine_cache.cache
-    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters)
 
     kernelSource = StringIO()
     kernelSourceContent = ''

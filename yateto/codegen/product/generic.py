@@ -1,9 +1,10 @@
 from ..common import *
 
 class Generic(object):
-  def __init__(self, arch, descr):
+  def __init__(self, arch, descr, target):
     self._arch = arch
     self._descr = descr
+    self._target = target
 
   def _mult(self, alpha):
     return '{} * '.format(alpha) if alpha != 1.0 else ''
@@ -36,7 +37,8 @@ class Generic(object):
         )
         return self._flop(d.add, d.alpha)
 
-    return forLoops(cpp, d.result.indices, d.loopRanges, ProductBody())
+    indexer = self._arch.indexing() if self._target == 'igpu' else None
+    return forLoops(cpp, d.result.indices, d.loopRanges, ProductBody(), indexer=indexer)
 
   def _generateSparseDense(self, cpp):
     raise NotImplementedError

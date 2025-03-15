@@ -88,4 +88,4 @@ def generator(arch, descr, gemm_cfg, target):
                                     target)
     if gemmTool:
       return GemmGen(arch, descr, gemmTool)
-  return Generic(arch, descr)
+  return Generic(arch, descr, target)

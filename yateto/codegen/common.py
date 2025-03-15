@@ -50,7 +50,7 @@ class IndexedTensorDescription(TensorDescription):
         is_const = var.tensor.is_compute_constant()
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary)
 
-def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):
+def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None, indexer=None):
   flops = 0
   if indexNo == None:
     indexNo = len(indexNames)-1
@@ -59,10 +59,16 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo
   else:
     index = indexNames[indexNo]
     rng = ranges[index]
+    iterstart = rng.start
+    increment = 1
     if pragmaSimd and indexNo == 0:
-      cpp('#pragma omp simd')
-    with cpp.For('int {3}{0} = {1}; {3}{0} < {2}; ++{3}{0}'.format(index, rng.start, rng.stop, prefix)):
-      flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, indexNo-1)
+      if indexer is None:
+        cpp('#pragma omp simd')
+      else:
+        iterstart = f'{rng.start} + {indexer[0]}'
+        increment = f'{indexer[1]}'
+    with cpp.For('int {3}{0} = {1}; {3}{0} < {2}; {3}{0} += {4}'.format(index, iterstart, rng.stop, prefix, increment)):
+      flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, indexNo-1, indexer)
     flops = flops * rng.size()
   return flops
   

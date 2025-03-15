@@ -42,4 +42,4 @@ def generator(arch, descr, gemm_cfg, target):
           return CopyScaleAddGenerator(arch, descr)
       else:
           raise NotImplementedError(f'no implementation found for {target} target')
-  return Generic(arch, descr)
+  return Generic(arch, descr, target)

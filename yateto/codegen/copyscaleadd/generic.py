@@ -1,9 +1,10 @@
 from ..common import *
 
 class Generic(object):
-  def __init__(self, arch, descr):
+  def __init__(self, arch, descr, target):
     self._arch = arch
     self._descr = descr
+    self._target = target
   
   def _formatTerm(self, alpha, term):
     prefix = ''
@@ -42,4 +43,5 @@ class Generic(object):
 
         return flop
 
-    return forLoops(cpp, d.result.indices, d.loopRanges, CopyScaleAddBody())
+    indexer = self._arch.indexing() if self._target == 'igpu' else None
+    return forLoops(cpp, d.result.indices, d.loopRanges, CopyScaleAddBody(), indexer=indexer)

@@ -74,18 +74,20 @@ class KernelGenerator(object):
     #       an provided by the user
     required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
-    localPtrs = set()
+    if factory.allocateTemporary():
+      localPtrs = set()
+      for pp in cfg:
+        localPtrs.update(pp.bufferMap.keys())
+      if localPtrs:
+        cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
     for pp in cfg:
-      localPtrs.update(pp.bufferMap.keys())
-    if localPtrs:
-      cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
-    for pp in cfg:
-      for buf, size in pp.initBuffer.items():
-        required_tmp_mem += size * self._arch.bytesPerReal
-        bufname = self._bufferName(buf)
-        factory.temporary(bufname, size)
-      for local, buf in pp.bufferMap.items():
-        cpp('{} = {};'.format(local, self._bufferName(buf)))
+      if factory.allocateTemporary():
+        for buf, size in pp.initBuffer.items():
+          required_tmp_mem += size * self._arch.bytesPerReal
+          bufname = self._bufferName(buf)
+          factory.temporary(bufname, size)
+        for local, buf in pp.bufferMap.items():
+          cpp('{} = {};'.format(local, self._bufferName(buf)))
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)
@@ -96,7 +98,7 @@ class KernelGenerator(object):
           hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache, gemm_cfg)
     return hwFlops, required_tmp_mem
 
-class OptimisedKernelGenerator(KernelGenerator):
+class OptimizedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'
   EXECUTE_NAME = 'execute'
   FIND_EXECUTE_NAME = 'findExecute'
@@ -108,9 +110,18 @@ class OptimisedKernelGenerator(KernelGenerator):
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
 
   
-  def __init__(self, arch, routineCache):
+  def __init__(self, arch, routineCache, routine_exporters):
     super().__init__(arch)
     self._routineCache = routineCache
+    self._routine_exporters = routine_exporters
+
+    self._routine_factories = {
+      'cpu': OptimizedKernelFactory,
+      'gpu': OptimizedKernelFactory
+    }
+
+    for entry in routine_exporters:
+      self._routine_factories[entry] = ExportFactory.makeFactory(routine_exporters[entry])
   
   class KernelOutline(object):
     def __init__(self,
@@ -177,8 +188,9 @@ class OptimisedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = OptimisedKernelFactory(fcpp, self._arch, target)
+      factory = self._routine_factories[target](fcpp, self._arch, target)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
+      factory.post_generate(self._routineCache)
       factory.freeTmp()
       factory.reset_stream()
       factory.reset_flags()
@@ -536,7 +548,7 @@ class UnitTestGenerator(KernelGenerator):
         cpp.emptyline()
 
 
-      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimisedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
       for var in scalars:
         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
       for var in variables:
@@ -547,7 +559,7 @@ class UnitTestGenerator(KernelGenerator):
         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
         cpp( f'{self.KERNEL_VAR}.streamPtr = &{self.QUEUE};' )
 
-      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimisedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
+      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
       if device_test:

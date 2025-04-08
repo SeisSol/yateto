@@ -24,6 +24,8 @@ class IdentifiedType(AbstractType):
     
     self._name = name
     self.namespace = namespace
+
+    self.datatype = None # TODO
   
   def __str__(self):
     return self._name

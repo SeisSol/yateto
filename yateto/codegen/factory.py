@@ -279,10 +279,11 @@ class ExportGenerator:
   def add_linear_operation(self, dest, ops, target, permute, add):
     pass
 
-def exportFactoryCreator(generator):
-  return lambda cpp, arch, target: ExportFactory(generator(arch), cpp, arch, target)
-
 class ExportFactory(KernelFactory):
+  @classmethod
+  def makeFactory(cls, generator):
+    return lambda cpp, arch, target: cls(generator(arch), cpp, arch, target)
+
   def __init__(self, generator, cpp, arch, target):
     super().__init__(cpp, arch, target)
     self.generator = generator
@@ -295,15 +296,21 @@ class ExportFactory(KernelFactory):
   
   def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
-    return self.handleLinear(IndexedTensorDescription.fromNode(result, node), [IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()), IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())], add, scalar, node.transA(), node.transB())
+    makeNode = IndexedTensorDescription.fromNode
+    argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
+    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, node.transA(), node.transB())
   
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
-    return self.handleLinear(IndexedTensorDescription.fromNode(result, node), [IndexedTensorDescription.fromNode(arguments[0], node.term())], add, scalar, False, False)
+    makeNode = IndexedTensorDescription.fromNode
+    argnodes = [makeNode(arguments[0], node.term())]
+    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
   
   def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
-    return self.handleLinear(IndexedTensorDescription.fromNode(result, node), [IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()), IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())], add, scalar, False, False)
+    makeNode = IndexedTensorDescription.fromNode
+    argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
+    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
 
   def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]

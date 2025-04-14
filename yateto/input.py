@@ -47,7 +47,7 @@ def __processMatrix(name, shape, entries, clones, transpose, alignStride, namesp
   for name in names:
     # compute a shape of a tensor (for now, assume transpose == invert dimensions)
     shape = shape[::-1] if transpose(name) else shape
-    if shape[1] == 1 and len(shape) == 2: # TODO: remove once all files are converted
+    if len(shape) == 2 and shape[1] == 1: # TODO: remove once all files are converted
       shape = (shape[0],)
 
     # transpose matrix if it is needed

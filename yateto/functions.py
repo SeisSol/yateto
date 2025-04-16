@@ -36,6 +36,6 @@ def where(condition, yes, no): return node.Elementwise(ops.Ternary(), yes, no, c
 
 # extra reduction functions; e.g. for input to `where`
 def reductionSum(term, indices): return node.Reduction(ops.Add(), term, indices)
-def reductionMul(term, indices): return node.Reduction(ops.Mul(), term, indices)ass
+def reductionMul(term, indices): return node.Reduction(ops.Mul(), term, indices)
 def reductionAnd(term, indices): return node.Reduction(ops.And(), term, indices)
 def reductionOr(term, indices): return node.Reduction(ops.Or(), term, indices)

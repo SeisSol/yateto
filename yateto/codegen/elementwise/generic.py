@@ -20,7 +20,7 @@ class Generic(object):
 
     if not d.add:
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
-      initializeWithZero(cpp, self._arch, d.result, writeBB)
+      initializeWithZero(cpp, d.result, writeBB)
     
     flops, assigner = self._affine(d.add, d.alpha)
 

@@ -3,7 +3,7 @@ from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
 from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
-from . import copyscaleadd, indexsum, log, product, fused_gemms
+from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -148,6 +148,19 @@ class OptimisedKernelFactory(KernelFactory):
     generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache)
   
+  def create_Elementwise(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    description = elementwise.Description(
+      alpha = scalar,
+      add = add,
+      result = IndexedTensorDescription.fromNode(result, node),
+      terms = [IndexedTensorDescription.fromNode(argument, term) for argument, term in zip(arguments, node)],
+      optype = node.optype,
+      termTemplate = node.termTemplate,
+      nodeTermIndices = node.nodeTermIndices
+    )
+    generator = elementwise.generator(self._arch, description, self._target)
+    return generator.generate(self._cpp, routineCache)
+
   def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
       alpha = scalar,
@@ -200,6 +213,26 @@ class UnitTestFactory(KernelFactory):
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)
+  
+  def create_Elementwise(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    g = self._indices(result)
+    resultTerm = self._formatTerm(result, node.indices)
+
+    argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
+    termTerm = node.optype.callstr(*node.fillTerms(argTerms))
+
+    return self._simpleBody(resultTerm, termTerm, add, scalar, g)
+
+  def create_IfThenElse(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    g = self._indices(result)
+    resultTerm = self._formatTerm(result, node.indices)
+    yesTerm = self._formatTerm(arguments[0], node.yesTerm().indices)
+    noTerm = self._formatTerm(arguments[1], node.noTerm().indices)
+    conditionTerm = self._formatTerm(arguments[2], node.condition().indices)
+
+    termTerm = f'(({conditionTerm}) ? ({yesTerm}) : ({noTerm}))'
+
+    return self._simpleBody(resultTerm, termTerm, add, scalar, g)
 
   def _simpleBody(self, resultTerm, termTerm, add, scalar, indices):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}

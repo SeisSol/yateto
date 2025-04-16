@@ -306,6 +306,11 @@ class ComputeConstantExpression(Visitor):
     term = node.tensor.values_as_ndarray(self._dtype)
     assert term is not None, '{} may only be used when all involved tensors are constant.'.format(self.__class__.__name__)
     return term
+  
+  def visit_Elementwise(self, node):
+    terms = self.generic_visit(node)
+    fullTerms = node.fillTerms(terms)
+    return node.optype.call(*fullTerms)
 
 class ComputeIndexSet(CachedVisitor):
   def generic_visit(self, node):

@@ -356,6 +356,7 @@ class Generator(object):
     kernelSourceContent = ''
     with Cpp(kernelSource) as cpp:
       cpp.includeSys('cassert')
+      cpp.includeSys('cmath')
       cpp.includeSys('cstring')
       cpp.includeSys('cstdlib')
       cpp.includeSys('limits')

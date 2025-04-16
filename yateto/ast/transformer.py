@@ -87,6 +87,12 @@ class DeduceIndices(Transformer):
     self.visit(node.term(), bound)
     node.indices = deepcopy(node.term().indices)
     return node
+  
+  def visit_Elementwise(self, node, bound):
+    for child in node:
+      self.visit(child, bound)
+    node.indices = deepcopy(node[0].indices)
+    return node
 
   def visit_Assign(self, node, bound):
     lhs = node[0]
@@ -192,6 +198,11 @@ class EquivalentSparsityPattern(Transformer):
     return node
   
   def visit_Assign(self, node):
+    self.generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+  
+  def visit_Elementwise(self, node):
     self.generic_visit(node)
     node.setEqspp( node.computeSparsityPattern() )
     return node

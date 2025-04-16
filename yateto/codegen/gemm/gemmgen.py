@@ -56,16 +56,19 @@ class GemmGen(object):
       (False, True): 'asparse',
       (False, False): 'absparse'
     }[(sppA is None, sppB is None)]
+
     if sppA is not None:
-      sha = hashlib.md5()
+      # cf. https://stackoverflow.com/a/65766676
+      sha = hashlib.new('md5', usedforsecurity=False)
       sha.update(str(sppA).encode())
       name += '_' + sha.hexdigest()
     if sppB is not None:
-      sha = hashlib.md5()
+      sha = hashlib.new('md5', usedforsecurity=False)
       sha.update(str(sppB).encode())
       name += '_' + sha.hexdigest()
-    return '{name}_{datatypeA}_{datatypeB}_{datatypeC}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
+    return '{name}_{datatypeA}_{datatypeB}_{datatypeC}_{arch}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
       name=name,
+      arch=self._arch.name.replace('-', '_'),
       alphaSubs=self._alpha(gemm['alpha']),
       betaSubs=self._beta(gemm['beta']),
       **gemm
@@ -319,7 +322,7 @@ Stdout: {result.stdout}
 Stderr: {result.stderr}""")
   
   def __call__(self, routineName, fileName):
-    cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
+    cpu_arch = self._arch.host_name
 
     assert self._gemmDescr['datatypeC'] == self._gemmDescr['datatypeA']
     assert self._gemmDescr['datatypeC'] == self._gemmDescr['datatypeB']
@@ -344,6 +347,10 @@ Stderr: {result.stderr}""")
         pspamm_arch = 'hsw'
       elif cpu_arch in ['bergamo', 'turin']:
         pspamm_arch = 'skx'
+      elif cpu_arch.startswith('avx2'):
+        pspamm_arch = 'hsw' + cpu_arch[5:]
+      elif cpu_arch.startswith('avx10'):
+        pspamm_arch = 'knl' + cpu_arch[6:]
       argList = [
         self._cmd,
         self._gemmDescr['M'],
@@ -520,7 +527,8 @@ class LibxsmmGemmGen(ExecuteGemmGen):
     #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
     libxsmm_flag_str = " | ".join(flags)
 
-    prefetch_flag =  "LIBXSMM_GEMM_PREFETCH_NONE" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
+    # broken: "LIBXSMM_GEMM_PREFETCH_NONE" if not self._arch.enablePrefetch else "LIBXSMM_GEMM_PREFETCH_BL2_VIA_C"
+    prefetch_flag = "LIBXSMM_GEMM_PREFETCH_NONE"
 
     kernel_var_name = f'{routine_name}_var'
     return """

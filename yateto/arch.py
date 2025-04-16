@@ -85,6 +85,8 @@ class Architecture(object):
     self._tmpStackLimit = 524288
     self.is_accelerator = backend != 'cpp' and self.host_name != None
 
+    self.host_name = self.host_name or self.name
+
   def setTmpStackLimit(self, tmpStackLimit):
     self._tmpStackLimit = tmpStackLimit
 
@@ -105,6 +107,9 @@ class Architecture(object):
 
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
+  
+  def __eq__(self, other):
+    return self.name == other.name
 
   @property
   def typename(self):
@@ -151,7 +156,12 @@ def getArchitectureIdentifiedBy(ident):
     'rvv256': Architecture(name, precision, 32, True),
     'rvv512': Architecture(name, precision, 64, True),
     'rvv1024': Architecture(name, precision, 128, True),
-    'rvv2048': Architecture(name, precision, 256, True)
+    'rvv2048': Architecture(name, precision, 256, True),
+    'avx2-128': Architecture(name, precision, 16, True),
+    'avx2-256': Architecture(name, precision, 32, True),
+    'avx10-128': Architecture(name, precision, 16, True),
+    'avx10-256': Architecture(name, precision, 32, True),
+    'avx10-512': Architecture(name, precision, 64, True),
   }
   return arch[name]
 

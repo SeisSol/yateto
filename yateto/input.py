@@ -5,6 +5,8 @@ from . import Collection, Tensor
 from .memory import AlignedCSCMemoryLayout, CSCMemoryLayout, DenseMemoryLayout
 from . import aspp
 from .util import create_collection
+import os
+import lzma
 
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')
@@ -45,7 +47,7 @@ def __processMatrix(name, shape, entries, clones, transpose, alignStride, namesp
   for name in names:
     # compute a shape of a tensor (for now, assume transpose == invert dimensions)
     shape = shape[::-1] if transpose(name) else shape
-    if shape[1] == 1 and len(shape) == 2: # TODO: remove once all files are converted
+    if len(shape) == 2 and shape[1] == 1: # TODO: remove once all files are converted
       shape = (shape[0],)
 
     # transpose matrix if it is needed
@@ -70,9 +72,17 @@ def __processMatrix(name, shape, entries, clones, transpose, alignStride, namesp
 def __complain(child):
   raise ValueError('Unknown tag ' + child.tag)
 
+def openMaybeCompressed(basefilename):
+  if os.path.exists(basefilename):
+    return open(basefilename)
+  elif os.path.exists(basefilename + '.xz'):
+    return lzma.open(basefilename + '.xz')
+  else:
+    raise FileNotFoundError(basefilename)
+
 def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
-  tree = etree.parse(xmlFile)
-  root = tree.getroot()
+  with openMaybeCompressed(xmlFile) as file:
+    root = etree.fromstring(file.read())
   
   matrices = dict()
   
@@ -101,7 +111,7 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, ali
 def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
   matrices = dict()
 
-  with open(jsonFile) as j:
+  with openMaybeCompressed(jsonFile) as j:
     content = json.load(j)
     for m in content:
       entries = m['entries']
@@ -118,9 +128,10 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
 
   return create_collection(matrices)
 
-def memoryLayoutFromFile(xmlFile, db, clones):
-  tree = etree.parse(xmlFile)
-  root = tree.getroot()
+def memoryLayoutFromFile(xmlFile, db, clones, strict=False):
+  with openMaybeCompressed(xmlFile) as file:
+    root = etree.fromstring(file.read())
+  
   strtobool = ['yes', 'true', '1']
   groups = dict()
 
@@ -131,7 +142,7 @@ def memoryLayoutFromFile(xmlFile, db, clones):
     for matrix in group:
       if matrix.tag == 'matrix':
         matrixName = matrix.get('name')
-        if not db.containsName(matrixName):
+        if not db.containsName(matrixName) and strict:
           raise ValueError('Unrecognized matrix name ' + matrixName)
         if len(groups[groupName]) > 0:
           lastMatrixInGroup = groups[groupName][-1]
@@ -178,5 +189,5 @@ def memoryLayoutFromFile(xmlFile, db, clones):
           tensor.setMemoryLayout(CSCMemoryLayout)
         else:
           tensor.setMemoryLayout(DenseMemoryLayout, alignStride=tensor.memoryLayout().alignedStride())
-    else:
+    elif strict:
       raise ValueError('Unrecognized matrix name ' + name)

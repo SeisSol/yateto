@@ -77,15 +77,15 @@ class KernelGenerator(object):
     localPtrs = set()
     for pp in cfg:
       localPtrs.update(pp.bufferMap.keys())
-    if localPtrs:
-      cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
+    for localPtr in localPtrs:
+      cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
     for pp in cfg:
       for buf, size in pp.initBuffer.items():
-        required_tmp_mem += size * self._arch.bytesPerReal
+        required_tmp_mem += size
         bufname = self._bufferName(buf)
-        factory.temporary(bufname, size)
+        factory.temporary(bufname, size, None)
       for local, buf in pp.bufferMap.items():
-        cpp('{} = {};'.format(local, self._bufferName(buf)))
+        cpp(f'{local} = reinterpret_cast<{localPtr.datatype.ctype()}*>({self._bufferName(buf)});')
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)
@@ -490,7 +490,7 @@ class UnitTestGenerator(KernelGenerator):
         
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
-        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
+        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
         
         shape = var.memoryLayout().shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
@@ -564,7 +564,7 @@ class UnitTestGenerator(KernelGenerator):
 
       for var in variables:
         if var.writable:
-          factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout()))
+          factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout(), datatype=var.datatype))
 
       factory.freeTmp()
 

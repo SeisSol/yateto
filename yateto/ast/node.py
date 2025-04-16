@@ -113,6 +113,9 @@ class Node(ABC):
     
   def __le__(self, other):
     return Assign(self, other)
+  
+  def cast(self, datatype):
+    return DatatypeCast(self, datatype)
 
 class IndexedTensor(Node):
   def __init__(self, tensor, indexNames):

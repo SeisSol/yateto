@@ -57,8 +57,11 @@ class Kernel(object):
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
 
-  def prepareUntilUnitTest(self):
+  def prepareUntilUnitTest(self, arch):
     self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
+    dtd = SetDatatype1(arch)
+    for ast in self.ast:
+      dtd.visit(ast)
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
     for ast in self.ast:
       ast2cf.visit(ast)
@@ -84,6 +87,7 @@ class Kernel(object):
       permutationVariants = FindIndexPermutations().visit(ast)
       ast = SelectIndexPermutations(permutationVariants).visit(ast)
       ast = ImplementContractions().visit(ast)
+      ast = SetDatatype2().visit(ast)
       if self._prefetch is not None:
         prefetchCapabilities = FindPrefetchCapabilities().visit(ast)
         assignPf = AssignPrefetch(prefetchCapabilities, prefetch)
@@ -172,9 +176,9 @@ class KernelFamily(object):
   def kernels(self):
     return self._kernels.values()
 
-  def prepareUntilUnitTest(self):
+  def prepareUntilUnitTest(self, arch):
     for kernel in self._kernels.values():
-      kernel.prepareUntilUnitTest()
+      kernel.prepareUntilUnitTest(arch)
   
   def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
@@ -273,9 +277,9 @@ class Generator(object):
 
     print('Deducing indices...')
     for kernel in self._kernels:
-      kernel.prepareUntilUnitTest()
+      kernel.prepareUntilUnitTest(self._arch)
     for family in self._kernelFamilies.values():
-      family.prepareUntilUnitTest()
+      family.prepareUntilUnitTest(self._arch)
 
     fUTdoctest = self.FileNames(outputDir, self.DOCTEST_FILE_NAME)
     fUTcxxtest = self.FileNames(outputDir, self.CXXTEST_FILE_NAME)

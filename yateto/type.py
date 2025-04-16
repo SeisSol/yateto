@@ -16,6 +16,19 @@ class Datatype(Enum):
   F16 = 7
   BF16 = 8
 
+  def __str__(self):
+    return {
+      Datatype.BOOL: 'bool',
+      Datatype.I8: 'i8',
+      Datatype.I16: 'i16',
+      Datatype.I32: 'i32',
+      Datatype.I64: 'i64',
+      Datatype.F32: 'f32',
+      Datatype.F64: 'f64',
+      Datatype.F16: 'f16',
+      Datatype.BF16: 'bf16',
+    }[self]
+
   def ctype(self):
     return {
       Datatype.BOOL: 'bool',
@@ -90,11 +103,11 @@ class IdentifiedType(AbstractType):
     self._name = name
     self.namespace = namespace
 
-    # datatype == None is treated as datatype == self._arch.datatype
+    # datatype == None is treated as datatype == arch.datatype
     self.datatype = datatype
 
   def getDatatype(self, arch):
-    return self._arch.datatype if self.datatype is None else self.datatype
+    return arch.datatype if self.datatype is None else self.datatype
 
   def __str__(self):
     return self._name

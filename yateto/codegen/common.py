@@ -38,17 +38,32 @@ class IndexedTensorDescription(TensorDescription):
 
   @classmethod
   def fromNode(cls, var, node):
+    datatype = node.datatype
+
     is_const = False
     values = None
-    datatype = None
     addressing = None
     if hasattr(node, 'tensor'):
       is_const = node.tensor.is_compute_constant()
       if is_const:
         values = node.tensor.values()
-      datatype = node.datatype
       addressing = node.tensor.addressing
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+  
+  @classmethod
+  def fromVar(cls, var, indices):
+    datatype = var.datatype
+
+    is_const = False
+    values = None
+    addressing = None
+    if hasattr(var, 'tensor'):
+      if var.tensor is not None:
+        is_const = var.tensor.is_compute_constant()
+        if is_const:
+          values = var.tensor.values()
+        addressing = var.tensor.addressing
+    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):
   flops = 0
@@ -85,17 +100,17 @@ def boundingBoxFromLoopRanges(indices, loopRanges):
 def reduceSpp(spp, sourceIndices, targetIndices):
   return spp.indexSum(sourceIndices, targetIndices)
 
-def initializeWithZero(cpp, arch, result: TensorDescription, writeBB = None):
+def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
   if writeBB:
     addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))
     if len(addresses) > 0:
       regions = splitByDistance(addresses)
       for region in regions:
         m, M = min(region), max(region)
-        initialAddress = '{} + {}'.format(result.name, m)
-        cpp.memset(initialAddress, M-m+1, arch.typename)
+        initialAddress = f'{result.name} + {m}'
+        cpp.memset(initialAddress, M-m+1, result.datatype.ctype())
   else:
-    cpp.memset(result.name, result.memoryLayout.requiredReals(), arch.typename)
+    cpp.memset(result.name, result.memoryLayout.requiredReals(), result.datatype.ctype())
 
 
 class BatchedOperationsAux:

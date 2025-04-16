@@ -64,9 +64,8 @@ class GemmGen(object):
       sha = hashlib.md5()
       sha.update(str(sppB).encode())
       name += '_' + sha.hexdigest()
-    return '{name}_{datatype}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
+    return '{name}_{datatypeA}_{datatypeB}_{datatypeC}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
       name=name,
-      datatype=self._arch.typename,
       alphaSubs=self._alpha(gemm['alpha']),
       betaSubs=self._beta(gemm['beta']),
       **gemm
@@ -240,7 +239,9 @@ class GemmGen(object):
         'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'nopf',
         'transA': d.transA,
         'transB': d.transB,
-
+        'datatypeA': d.leftTerm.datatype,
+        'datatypeB': d.rightTerm.datatype,
+        'datatypeC': d.result.datatype,
       }
 
       routineName = self.generateRoutineName(gemm, sppA, sppB)
@@ -320,6 +321,15 @@ Stderr: {result.stderr}""")
   def __call__(self, routineName, fileName):
     cpu_arch = self._arch.host_name if self._arch.host_name else self._arch.name
 
+    assert self._gemmDescr['datatypeC'] == self._gemmDescr['datatypeA']
+    assert self._gemmDescr['datatypeC'] == self._gemmDescr['datatypeB']
+    assert self._gemmDescr['datatypeC'] in [Datatype.F32, Datatype.F64]
+
+    precision = {
+      Datatype.F32: 'F',
+      Datatype.F64: 'D'
+    }[self._gemmDescr['datatypeC']]
+
     if self._mode == 'pspamm':
       pspamm_arch = cpu_arch
       if cpu_arch == 'a64fx':
@@ -351,7 +361,7 @@ Stderr: {result.stderr}""")
         '--output_filename',
         fileName,
         '--precision',
-        self._arch.precision
+        precision
       ]
       if self._gemmDescr['prefetch'] != 'nopf':
         argList.extend(['--prefetching', self._gemmDescr['prefetch']])
@@ -386,7 +396,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['alignedC'],
         libxsmm_arch, # libxsmm has no support for rome, hsw works well in practice
         self._gemmDescr['prefetch'],
-        self._arch.precision + 'P'
+        precision + 'P'
       ]
     class SparsityWrapper:
       def __init__(self, shape, spp):

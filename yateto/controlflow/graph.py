@@ -4,13 +4,14 @@ from typing import Dict, List
 
 
 class Variable(object):
-  def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None, is_temporary=False):
+  def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None, is_temporary=False, datatype=None):
     self.name = name
     self.writable = writable
     self.tensor = tensor
     self._memoryLayout = memoryLayout
     self._eqspp = eqspp
     self.is_temporary = is_temporary
+    self.datatype = datatype
 
   def variables(self):
     return {self}

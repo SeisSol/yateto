@@ -25,6 +25,7 @@ class AST2ControlFlow(Visitor):
       if not self._simpleMemoryLayout:
         permute.setEqspp( permute.computeSparsityPattern() )
         permute.computeMemoryLayout()
+      permute.datatype = term.datatype
       result = self._nextTemporary(permute)
       action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
       self._addAction(action)
@@ -76,7 +77,7 @@ class AST2ControlFlow(Visitor):
     return variables[0]
   
   def visit_IndexedTensor(self, node):
-    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor)
+    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype)
   
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
@@ -84,7 +85,7 @@ class AST2ControlFlow(Visitor):
   def _nextTemporary(self, node):
     name = '{}{}'.format(self.TEMPORARY_RESULT, self._tmp)
     self._tmp += 1
-    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True)
+    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True, datatype=node.datatype)
 
   def updateWritable(self, name):
     self._writable = self._writable | {name}

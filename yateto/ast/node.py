@@ -9,6 +9,7 @@ class Node(ABC):
     self.indices = None
     self._children = []
     self._eqspp = None
+    self.datatype = None
   
   def size(self):
     return self.indices.size()
@@ -118,6 +119,9 @@ class Node(ABC):
   
   def __rtruediv__(self, other):
     return Elementwise(ops.Div(), other, self)
+
+  def cast(self, datatype):
+    return DatatypeCast(self, datatype)
 
 class IndexedTensor(Node):
   def __init__(self, tensor, indexNames):
@@ -359,6 +363,18 @@ class IndexSum(UnaryOp):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
     return spp.indexSum(self.term().indices, self.indices)
+
+class DatatypeCast(UnaryOp):
+  def __init__(self, term, datatype):
+    super().__init__(term)
+    self.indices = term.indices
+    self.newDatatype = datatype
+
+  def nonZeroFlops(self):
+    return self.term().eqspp().count_nonzero()
+  
+  def computeSparsityPattern(self, *spps):
+    return self.term().indices
 
 class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):

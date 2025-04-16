@@ -249,3 +249,41 @@ class ComputeMemoryLayout(Transformer):
   
   def visit_IndexedTensor(self, node):
     return node
+
+class SetDatatype1(Transformer):
+  def __init__(self, arch):
+    self.arch = arch
+
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    assert(len(node) > 0)
+    assert(all(child.datatype == node[0].datatype for child in node))
+    node.datatype = node[0].datatype
+    return node
+
+  def visit_IndexedTensor(self, node):
+    super().generic_visit(node)
+    node.datatype = node.tensor.getDatatype(self.arch)
+    return node
+
+  def visit_DatatypeCast(self, node):
+    super().generic_visit(node)
+    node.datatype = node.newDatatype
+    return node
+
+class SetDatatype2(Transformer):
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    assert(len(node) > 0)
+    assert(all(child.datatype == node[0].datatype for child in node))
+    node.datatype = node[0].datatype
+    return node
+
+  def visit_IndexedTensor(self, node):
+    super().generic_visit(node)
+    return node
+
+  def visit_DatatypeCast(self, node):
+    super().generic_visit(node)
+    node.datatype = node.newDatatype
+    return node

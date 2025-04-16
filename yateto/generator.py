@@ -14,11 +14,10 @@ from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
-from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc
+from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc, GemmForge
 from typing import List
 from io import StringIO
 import importlib.util
-chainforge_spec = importlib.util.find_spec('chainforge')
 
 
 class Kernel(object):
@@ -57,8 +56,11 @@ class Kernel(object):
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
 
-  def prepareUntilUnitTest(self):
+  def prepareUntilUnitTest(self, arch):
     self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
+    dtd = SetDatatype1(arch)
+    for ast in self.ast:
+      dtd.visit(ast)
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
     for ast in self.ast:
       ast2cf.visit(ast)
@@ -84,6 +86,7 @@ class Kernel(object):
       permutationVariants = FindIndexPermutations().visit(ast)
       ast = SelectIndexPermutations(permutationVariants).visit(ast)
       ast = ImplementContractions().visit(ast)
+      ast = SetDatatype2().visit(ast)
       if self._prefetch is not None:
         prefetchCapabilities = FindPrefetchCapabilities().visit(ast)
         assignPf = AssignPrefetch(prefetchCapabilities, prefetch)
@@ -172,9 +175,9 @@ class KernelFamily(object):
   def kernels(self):
     return self._kernels.values()
 
-  def prepareUntilUnitTest(self):
+  def prepareUntilUnitTest(self, arch):
     for kernel in self._kernels.values():
-      kernel.prepareUntilUnitTest()
+      kernel.prepareUntilUnitTest(arch)
   
   def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
@@ -286,19 +289,24 @@ class Generator(object):
                gemm_cfg: GeneratorCollection = None,
                cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set(),
-               routine_cache=None):
+               routine_cache=None,
+               routine_exporters={}
+               ):
 
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
+    hasGemmforge = any([isinstance(tool, GemmForge) for tool in gemm_cfg.gemmTools])
     hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
-    enableFusedGemm = bool(chainforge_spec) or hasTinytc
+
+    chainforge_spec = importlib.util.find_spec('chainforge')
+    enableFusedGemm = (hasGemmforge and bool(chainforge_spec)) or hasTinytc
 
     print('Deducing indices...')
     for kernel in self._kernels:
-      kernel.prepareUntilUnitTest()
+      kernel.prepareUntilUnitTest(self._arch)
     for family in self._kernelFamilies.values():
-      family.prepareUntilUnitTest()
+      family.prepareUntilUnitTest(self._arch)
 
     fUTdoctest = self.FileNames(outputDir, self.DOCTEST_FILE_NAME)
     fUTcxxtest = self.FileNames(outputDir, self.CXXTEST_FILE_NAME)
@@ -350,7 +358,7 @@ class Generator(object):
       cache = RoutineCache()
     else:
       cache = routine_cache.cache
-    optKernelGenerator = OptimisedKernelGenerator(self._arch, cache)
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters)
 
     kernelSource = StringIO()
     kernelSourceContent = ''

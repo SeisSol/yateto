@@ -5,9 +5,8 @@ from ..ast.log import splitByDistance
 from .tiny_tensor_language import Dump, Function, IntegerType, MemrefType, GroupType, IntImmValue, DYNAMIC, SubviewInst, LoadInst
 import hashlib
 
-
 class TensorDescription(object):
-  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False):
+  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
     """
 
     Args:
@@ -24,31 +23,47 @@ class TensorDescription(object):
     self.eqspp = eqspp
     self.is_compute_constant = is_compute_constant
     self.is_temporary = is_temporary
-    BoundingBox(eqspp)
+    self.values = values
+    self.datatype = datatype
+    self.addressing = addressing
   
   @classmethod
   def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())
 
 class IndexedTensorDescription(TensorDescription):
-  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False):
-    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary)
+  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
+    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing)
     self.indices = indices
 
   @classmethod
   def fromNode(cls, var, node):
+    datatype = node.datatype
+
     is_const = False
+    values = None
+    addressing = None
     if hasattr(node, 'tensor'):
       is_const = node.tensor.is_compute_constant()
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary)
-
+      if is_const:
+        values = node.tensor.values()
+      addressing = node.tensor.addressing
+    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+  
   @classmethod
   def fromVar(cls, var, indices):
+    datatype = var.datatype
+
     is_const = False
+    values = None
+    addressing = None
     if hasattr(var, 'tensor'):
       if var.tensor is not None:
         is_const = var.tensor.is_compute_constant()
-    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary)
+        if is_const:
+          values = var.tensor.values()
+        addressing = var.tensor.addressing
+    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):
   flops = 0
@@ -85,17 +100,17 @@ def boundingBoxFromLoopRanges(indices, loopRanges):
 def reduceSpp(spp, sourceIndices, targetIndices):
   return spp.indexSum(sourceIndices, targetIndices)
 
-def initializeWithZero(cpp, arch, result: TensorDescription, writeBB = None):
+def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
   if writeBB:
     addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))
     if len(addresses) > 0:
       regions = splitByDistance(addresses)
       for region in regions:
         m, M = min(region), max(region)
-        initialAddress = '{} + {}'.format(result.name, m)
-        cpp.memset(initialAddress, M-m+1, arch.typename)
+        initialAddress = f'{result.name} + {m}'
+        cpp.memset(initialAddress, M-m+1, result.datatype.ctype())
   else:
-    cpp.memset(result.name, result.memoryLayout.requiredReals(), arch.typename)
+    cpp.memset(result.name, result.memoryLayout.requiredReals(), result.datatype.ctype())
 
 
 class BatchedOperationsAux:
@@ -108,22 +123,27 @@ class BatchedOperationsAux:
   def __init__(self, underlying_data_type):
     self.underlying_data_type = underlying_data_type
 
-  def _get_ptr_type(self, addressing):
-    return '**' if addressing == 'pointer_based' else '*'
+  def _get_ptr_type(self, addressing: AddressingMode):
+    return addressing.pointer_type()
 
   def deduce_addresing(self, term):
+    if term.addressing is not None:
+      return term.addressing
+    
+    # default deduction
     if term.is_compute_constant:
-      return 'none'
+      return AddressingMode.DIRECT
     if term.is_temporary:
-      return 'strided'
+      return AddressingMode.STRIDED
     else:
-      return 'pointer_based'
+      return AddressingMode.INDIRECT
 
   def deduce_ptr_arg(self, term, as_const=False):
     if as_const:
       addressing = self.deduce_addresing(term)
       ptr = self._get_ptr_type(addressing)
-      const_ptr_type = f'const {self.underlying_data_type} {ptr}'
+      datatype = self.underlying_data_type if term.datatype is None else term.datatype.ctype()
+      const_ptr_type = f'const {datatype} {ptr}'
       return f'const_cast<{const_ptr_type}>({term.name})'
     else:
       return f'{term.name}'

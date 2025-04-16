@@ -38,6 +38,7 @@
 #
 
 from .memory import DenseMemoryLayout
+from .type import Datatype
 
 class Architecture(object):
   def __init__(self,
@@ -66,13 +67,11 @@ class Architecture(object):
 
     self.precision = precision.upper()
     if self.precision == 'D':
-      self.bytesPerReal = 8
-      self.typename = 'double'
       self.epsilon = 2.22e-16
+      self.datatype = Datatype.F64
     elif self.precision == 'S':
-      self.bytesPerReal = 4
-      self.typename = 'float'
       self.epsilon = 1.19e-7
+      self.datatype = Datatype.F32
     else:
       raise ValueError(f'Unknown precision type {self.precision}')
     self.alignment = alignment
@@ -104,7 +103,7 @@ class Architecture(object):
     return offset % self.alignedReals == 0
 
   def formatConstant(self, constant):
-    return str(constant) + ('f' if self.precision == 'S' else '')
+    return self.datatype.literal(constant)
 
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
@@ -112,6 +111,13 @@ class Architecture(object):
   def __eq__(self, other):
     return self.name == other.name
 
+  @property
+  def typename(self):
+    return self.datatype.ctype()
+  
+  @property
+  def bytesPerReal(self):
+    return self.datatype.size()
 
 def _get_name_and_precision(ident):
   return ident[1:], ident[0].upper()
@@ -150,7 +156,12 @@ def getArchitectureIdentifiedBy(ident):
     'rvv256': Architecture(name, precision, 32, True),
     'rvv512': Architecture(name, precision, 64, True),
     'rvv1024': Architecture(name, precision, 128, True),
-    'rvv2048': Architecture(name, precision, 256, True)
+    'rvv2048': Architecture(name, precision, 256, True),
+    'avx2-128': Architecture(name, precision, 16, True),
+    'avx2-256': Architecture(name, precision, 32, True),
+    'avx10-128': Architecture(name, precision, 16, True),
+    'avx10-256': Architecture(name, precision, 32, True),
+    'avx10-512': Architecture(name, precision, 64, True),
   }
   return arch[name]
 

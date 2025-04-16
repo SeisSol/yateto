@@ -128,7 +128,7 @@ class DetermineLocalInitialization(object):
       # assign buffer
       if ua and not ua.isCompound() and ua.result.isLocal():
         if ua.result in usedBuffers:
-            buf = usedBuffers[ua.result]
+          buf = usedBuffers[ua.result]
         elif len(freeBuffers) > 0:
           buf = freeBuffers.pop()
         else:
@@ -137,7 +137,8 @@ class DetermineLocalInitialization(object):
         cfg[i].bufferMap[ua.result] = buf
         usedBuffers[ua.result] = buf
 
-        size = ua.result.memoryLayout().requiredReals()
+        # NOTE: size in bytes
+        size = ua.result.memoryLayout().requiredReals() * ua.result.datatype.size()
         if buf in bufferSize:
           bufferSize[buf] = max(bufferSize[buf], size)
         else:

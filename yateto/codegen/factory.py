@@ -4,6 +4,7 @@ from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
 from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise
+from ..type import Datatype
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -25,22 +26,20 @@ class KernelFactory(object):
   def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     raise NotImplementedError
 
-  def temporary(self, bufname, size, iniZero=False, memory=list()):
+  def temporary(self, bufname, size, datatype, iniZero=False, memory=list()):
     assert(iniZero == False or len(memory) == 0)
+
+    if datatype is None:
+      datatype = Datatype.I8
 
     if self._target == 'cpu':
       if self._arch.onHeap(size):
         if len(self._freeList) == 0:
-          self._cpp('int {};'.format(self.ERROR_NAME))
-        self._cpp('{}* {};'.format(self._arch.typename, bufname))
-        self._cpp('{} = posix_memalign(reinterpret_cast<void**>(&{}), {}, {}*sizeof({}));'.format(
-                    self.ERROR_NAME,
-                    bufname,
-                    self._arch.alignment,
-                    size,
-                    self._arch.typename))
+          self._cpp(f'int {self.ERROR_NAME};')
+        self._cpp(f'{datatype.ctype()}* {bufname};')
+        self._cpp(f'{self.ERROR_NAME} = posix_memalign(reinterpret_cast<void**>(&{bufname}), {self._arch.alignment}, {size}*sizeof({datatype.ctype()}));')
         if iniZero:
-          self._cpp.memset(bufname, size, self._arch.typename)
+          self._cpp.memset(bufname, size, datatype.ctype())
         if memory:
           for i, data in enumerate(memory):
             self._cpp(f'{bufname}[{i}] = {data};')
@@ -51,12 +50,17 @@ class KernelFactory(object):
           ini = ' = {}'
         elif memory:
           ini = ' = {{{}}}'.format(', '.join(memory))
-        self._cpp(f'alignas({self._arch.alignment}) {self._arch.typename} {bufname}[{size}] {ini};')
+        self._cpp(f'alignas({self._arch.alignment}) {datatype.ctype()} {bufname}[{size}] {ini};')
     else:
-      declaration = f'{self._arch.typename}* {bufname}'
+      declaration = f'{datatype.ctype()}* {bufname}'
       total_size = f'{BatchedOperationsAux.NUM_ELEMENTS_NAME} * {size}'
       self._cpp(f'{declaration} = linearAllocator.allocate({total_size});')
 
+  def allocateTemporary(self):
+    return True
+  
+  def post_generate(self, routine_cache):
+    pass
 
   def freeTmp(self):
     if self._target == 'cpu':
@@ -89,7 +93,7 @@ class KernelFactory(object):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
-class OptimisedKernelFactory(KernelFactory):
+class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target):
     super().__init__(cpp, arch, target)
 
@@ -180,7 +184,7 @@ class UnitTestFactory(KernelFactory):
 
   def _formatTerm(self, var, indices):
     address = var.memoryLayout().addressString(indices)
-    return '{}[{}]'.format(self._name(var), address)
+    return f'{self._name(var)}[{address}]'
   
   def create_Einsum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = node.indices
@@ -200,7 +204,7 @@ class UnitTestFactory(KernelFactory):
     
     class EinsumBody(object):
       def __call__(s):
-        self._cpp( '{} += {};'.format(resultTerm, ' * '.join(terms)) )
+        self._cpp(f"{resultTerm} += {' * '.join(terms)};")
         return len(terms)
 
     return forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False)
@@ -238,11 +242,11 @@ class UnitTestFactory(KernelFactory):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
 
     if scalar and scalar != 1.0:
-      termTerm = '{} * {}'.format(scalar, termTerm)
+      termTerm = f'{scalar} * {termTerm}'
 
     class AssignBody(object):
       def __call__(s):
-        self._cpp( '{} {} {};'.format(resultTerm, '+=' if add else '=', termTerm) )
+        self._cpp(f"{resultTerm} {'+=' if add else '='} {termTerm};")
         return 1 if add else 0
 
     return forLoops(self._cpp, indices, ranges, AssignBody(), pragmaSimd=False)
@@ -262,8 +266,8 @@ class UnitTestFactory(KernelFactory):
 
     class CompareBody(object):
       def __call__(s):
-        self._cpp( 'double ref = {};'.format(refTerm) )
-        self._cpp( 'double diff = ref - {};'.format(targetTerm) )
+        self._cpp( f'double ref = {refTerm};' )
+        self._cpp( f'double diff = ref - {targetTerm};' )
         self._cpp( 'error += diff * diff;' )
         self._cpp( 'refNorm += ref * ref;' )
         return 0
@@ -280,19 +284,103 @@ class UnitTestFactory(KernelFactory):
     ml = node.memoryLayout()
     size = ml.requiredReals()
 
+    datatype = node.getDatatype(self._arch)
+
     spp = node.spp()
     isDense = spp.count_nonzero() == size
     if isDense:
-      self.temporary(resultName, size)
-      with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
-        self._cpp('{}[i] = static_cast<{}>((i + {}) % {} + 1);'.format(resultName, self._arch.typename, self._rand, maxValue))
+      self.temporary(resultName, size, node.getDatatype(self._arch))
+      with self._cpp.For(f'int i = 0; i < {size}; ++i'):
+        self._cpp(f'{resultName}[i] = static_cast<{datatype.ctype()}>((i + {self._rand}) % {maxValue} + 1);')
     else:
-      memory = ['0.0']*size
+      memory = [datatype.literal(0)]*size
       nz = spp.nonzero()
       for entry in zip(*nz):
         addr = ml.address(entry)
         memory[addr] = str(float((addr + self._rand) % maxValue)+1.0)
-      self.temporary(resultName, size, memory=memory)
+      self.temporary(resultName, size, datatype, memory=memory)
     self._rand += 1
 
+class ExportGenerator:
+  INTERFACE_VERSION = 1
 
+  def __init__(self, arch):
+    self.arch = arch
+  
+  def generate(self, cpp, cache):
+    pass
+  
+  def add_linear_operation(self, dest, ops, target, permute, add):
+    pass
+
+class ExportFactory(KernelFactory):
+  @classmethod
+  def makeFactory(cls, generator):
+    return lambda cpp, arch, target: cls(generator(arch), cpp, arch, target)
+
+  def __init__(self, generator, cpp, arch, target):
+    super().__init__(cpp, arch, target)
+    self.generator = generator
+  
+  def post_generate(self, routine_cache):
+    self.generator.generate(self._cpp, routine_cache)
+
+  def allocateTemporary(self):
+    return False
+  
+  def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert len(arguments) == 2
+    makeNode = IndexedTensorDescription.fromNode
+    argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
+    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, node.transA(), node.transB())
+  
+  def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert len(arguments) == 1
+    makeNode = IndexedTensorDescription.fromNode
+    argnodes = [makeNode(arguments[0], node.term())]
+    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
+  
+  def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert len(arguments) == 2
+    makeNode = IndexedTensorDescription.fromNode
+    argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
+    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
+
+  def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    term = arguments[0]
+    return self.handleLinear(IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())], add, scalar, False, False)
+  
+  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
+    return self.handleLinear(IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())], add, scalar, False, False)
+
+  def getIndices(self, dest, ops):
+    if dest is None:
+      target_indices = []
+    else:
+      target_indices = dest.indices
+
+    indexindex = {index:i for i, index in enumerate(target_indices)}
+    contract_counter = -1
+
+    for op in ops:
+      for index in op.indices:
+        if index not in indexindex:
+          indexindex[index] = contract_counter
+          contract_counter -= 1
+
+    target = [[indexindex[index] for index in op.indices] for op in ops]
+    permute = [[i for i,_ in enumerate(op.indices)] for op in ops]
+
+    return target, permute
+
+  def handleLinear(self, dest, ops, add, scalar, transposeA, transposeB):
+    # convert indices to loop numbers
+
+    target, permute = self.getIndices(dest, ops)
+    
+    if not (scalar == 1 or scalar == 1.0):
+      ops += [scalar]
+      target += [[]]
+      permute += [[]]
+    
+    return self.generator.add_linear_operation(dest, ops, target, permute, add)

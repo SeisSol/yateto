@@ -1,7 +1,8 @@
 from ..ast.node import Node, FusedGEMMs, LoopOverGEMM
+from ..ast.indices import Indices
 from collections import OrderedDict
 from typing import Dict, List
-
+from ..type import Scalar
 
 class Variable(object):
   def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None, is_temporary=False, datatype=None):
@@ -97,11 +98,12 @@ class Expression(object):
 
 
 class ProgramAction(object):
-  def __init__(self, result, term, add, scalar=None):
+  def __init__(self, result, term, add, scalar=None, condition=True):
     self.result = result
     self.term = term
     self.add = add
     self.scalar = scalar
+    self.condition = condition
 
   def isRHSExpression(self):
     return isinstance(self.term, Expression)
@@ -135,7 +137,7 @@ class ProgramAction(object):
   def substituted(self, when, by, result = True, term = True):
     rsubs = self.result.substituted(when, by) if result else self.result
     tsubs = self.term.substituted(when, by, rsubs.memoryLayout()) if term else self.term
-    return ProgramAction(rsubs, tsubs, self.add, self.scalar)
+    return ProgramAction(rsubs, tsubs, self.add, self.scalar, self.condition)
 
   def setVariablesWritable(self, name):
     self.result.setWritable(name)
@@ -149,6 +151,7 @@ class FusedActions(object):
     self._variables: List[Variable] = []
     self._adds: List[bool] = []
     self._scalars = []
+    self._conditions = []
 
   def add(self, action: ProgramAction) -> None:
     if not isinstance(action.term.node, LoopOverGEMM):
@@ -160,13 +163,15 @@ class FusedActions(object):
     self._variables.extend(action.term.variableList())
     self._adds.append(action.add)
     self._scalars.append(action.scalar)
+    self._conditions.append(action.condition)
 
   def gen_program_action(self) -> ProgramAction:
     last_action: ProgramAction = self._actions[-1]
     return ProgramAction(result=last_action.result,
                          term=self._gen_expr(),
                          add=self._adds,
-                         scalar=self._scalars)
+                         scalar=self._scalars,
+                         condition=self._conditions)
 
   def _gen_expr(self) -> Expression:
     node = FusedGEMMs()
@@ -189,6 +194,150 @@ class ProgramPoint(object):
     self.initBuffer = None
     self.bufferMap = None
 
+# a rather primitive CNF implementation.
+# do not overuse (i.e. avoid conditional assigns where possible)
+
+class CNFClause:
+  def __init__(self, variables):
+    if isinstance(variables, list):
+      self.variables = {var: True for var in variables}
+    else:
+      self.variables = variables
+    self.fulfilled = False
+  
+  def negateVariables(self):
+    return {var: ~self.variables[var] for var in self.variables}
+
+  def unite(self, clause):
+    output = CNFClause([])
+    for v in self.variables:
+      if v in clause and clause.variables[v] != self.variables[v]:
+        output.fulfilled = True
+    if not output.fulfilled:
+      output.variables = {**self.variables, **clause.variables}
+    return output
+  
+  def __repr__(self):
+    formatvar = lambda name: f'{name}' if self.variables[name] else f'~{name}'
+    return f'[{", ".join(formatvar(var) for var in self.variables)}]'
+  
+  def ccode(self):
+    # for now, only allow scalarly-indexed variables
+    printvar = lambda var: f'{var}' if isinstance(var, Scalar) else f'{var}[{var.memoryLayout().addressString(Indices())}]'
+    formatvar = lambda name: f'{printvar(name)}' if self.variables[name] else f'!{printvar(name)}'
+    return f'({" || ".join(formatvar(var) for var in self.variables)})'
+
+class CNFCondition:
+  def __init__(self, data):
+    if isinstance(data, bool):
+      if data == True:
+        self.clauses = []
+      elif data == False:
+        self.clauses = [CNFClause([])]
+    else:
+      self.clauses = [CNFClause([data])]
+  
+  def _prune(self):
+    newclauses = []
+    for clause in self.clauses:
+      if clause.fulfilled:
+        newclauses = []
+        break
+      else:
+        if len(clause.variables) == 0:
+          newclauses = [clause]
+          break
+        else:
+          newclauses += [clause]
+    self.clauses = newclauses
+
+  def tautology(self):
+    return len(self.clauses) == 0
+  
+  def unfulfillable(self):
+    return any(not clause.fulfilled and len(clause.variables) == 0 for clause in self.clauses)
+
+  def __not__(self):
+    if self.tautology():
+      return CNFCondition(False)
+    
+    # this is the actually painful step (as it's also pretty inefficient right now)
+    result = CNFCondition(True)
+    for clause in self.clauses:
+      clauseInv = CNFCondition(True)
+      negVar = clause.negateVariables()
+      clauseInv.clauses = [CNFClause({var: negVar[var]}) for var in negVar]
+
+      result = result | clauseInv
+    return result
+
+  def __rand__(self, other):
+    if not isinstance(other, CNFCondition):
+      other = CNFCondition(other)
+    
+    clauses = self.clauses + other.clauses
+
+    condition = CNFCondition(True)
+    condition.clauses = clauses
+    condition._prune()
+
+    return condition
+
+  def __ror__(self, other):
+    if not isinstance(other, CNFCondition):
+      other = CNFCondition(other)
+    
+    clauses = [clause.unite(oclause) for clause in self.clauses for oclause in other.clauses]
+    condition = CNFCondition(True)
+    condition.clauses = clauses
+    condition._prune()
+
+    return condition
+  
+  def __repr__(self):
+    return f'{self.clauses}'
+  
+  def ccode(self):
+    return f'({" && ".join(clause.ccode() for clause in self.clauses)})'
+
+class LiveSet:
+  def __init__(self, data: dict):
+    self.data = data
+  
+  def __sub__(self, other):
+    if isinstance(other, dict):
+      other = LiveSet(other)
+    
+    result = {k:self.data[k] for k in self.data}
+
+    for var in other.data:
+      if var in result:
+        result[var] &= ~other.data[var]
+        if not result[var]:
+          result.remove(var)
+
+    return LiveSet(result)
+  
+  def __or__(self, other):
+    if isinstance(other, dict):
+      other = LiveSet(other)
+    
+    result = {k:self.data[k] for k in self.data}
+
+    for var in other.data:
+      if var in result:
+        result[var] |= other.data[var]
+
+    return LiveSet(result)
+  
+  def __contains__(self, element):
+    if isinstance(element, tuple):
+      return element[0] in self.data and (~self.data[element[0]] & element[1]).unfulfillable()
+    else:
+      return element in self.data
+  
+  def variables(self):
+    return set(k for k in self.data)
 
 class FusedProgramPoint(ProgramPoint):
   def __init__(self, action: FusedActions):

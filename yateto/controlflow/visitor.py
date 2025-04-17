@@ -2,7 +2,7 @@ from ..ast.visitor import Visitor
 from yateto import Scalar
 from .graph import *
 from ..memory import DenseMemoryLayout
-from ..ast.node import Permute
+from ..ast.node import Permute, Node
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
@@ -12,6 +12,7 @@ class AST2ControlFlow(Visitor):
     self._cfg = []
     self._writable = set()
     self._simpleMemoryLayout = simpleMemoryLayout
+    self._condition = [True]
   
   def cfg(self):
     return self._cfg + [ProgramPoint(None)]
@@ -27,7 +28,7 @@ class AST2ControlFlow(Visitor):
         permute.computeMemoryLayout()
       permute.datatype = term.datatype
       result = self._nextTemporary(permute)
-      action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
+      action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False, condition=self._condition[-1])
       self._addAction(action)
       return result
     return variable
@@ -36,7 +37,7 @@ class AST2ControlFlow(Visitor):
     variables = [self.visit(child) for child in node]
     
     result = self._nextTemporary(node)
-    action = ProgramAction(result, Expression(node, self._ml(node), variables), False)
+    action = ProgramAction(result, Expression(node, self._ml(node), variables), False, condition=self._condition[-1])
     self._addAction(action)
     
     return result
@@ -51,7 +52,7 @@ class AST2ControlFlow(Visitor):
     add = False
     for i,var in enumerate(variables):
       rhs = self._addPermuteIfRequired(node.indices, node[i], var)
-      action = ProgramAction(tmp, rhs, add)
+      action = ProgramAction(tmp, rhs, add, condition=self._condition[-1])
       self._addAction(action)
       add = True
     
@@ -61,23 +62,47 @@ class AST2ControlFlow(Visitor):
     variable = self.visit(node.term())
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, variable, False, node.scalar())
+    action = ProgramAction(result, variable, False, node.scalar(), condition=self._condition[-1])
     self._addAction(action)
     
     return result
   
   def visit_Assign(self, node):
-    self.updateWritable(node[0].name())
-    variables = [self.visit(child) for child in node]
+    condition = self._condition[-1]
+    if isinstance(node.condition(), Node):
+      myCondition = self.visit(node[2])
+    else:
+      myCondition = node.condition()
 
-    rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), variables[1])
-    action = ProgramAction(variables[0], rhs, False)
+    self.updateWritable(node[0].name())
+
+    newCondition = condition & CNFCondition(myCondition)
+    self._condition.append(newCondition)
+    lVar = self.visit(node[0])
+    rVar = self.visit(node[1])
+    self._condition = self._condition[:-1]
+
+    rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), rVar)
+    action = ProgramAction(lVar, rhs, False, condition=newCondition)
     self._addAction(action)
     
-    return variables[0]
+    return lVar
   
   def visit_IndexedTensor(self, node):
     return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype)
+  
+  def visit_IfThenElse(self, node):
+    if len(self._condition) > 0:
+      condition = self._condition.top()
+    else:
+      condition = True
+    self.visit(node.yesTerm())
+    self.visit(node.noTerm())
+    myCondition = node.condition()
+    self._condition.push(condition & myCondition)
+    self._condition.pop()
+    self._addAction(ProgramAction())
+    return self.visit(node.term())
   
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))

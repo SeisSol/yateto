@@ -23,7 +23,7 @@ class KernelFactory(object):
   def generic_create(self, node, *args):
     raise NotImplementedError
 
-  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
+  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     raise NotImplementedError
 
   def temporary(self, bufname, size, datatype, iniZero=False, memory=list()):
@@ -92,12 +92,22 @@ class KernelFactory(object):
   def _indices(self, var):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
+  
+  def _conditional(self, condition, generate):
+    if isinstance(condition, bool):
+      if condition:
+        return generate()
+      else:
+        return 0
+    else:
+      with self._cpp.If(f'{condition.ccode()}'):
+        return generate()
 
 class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target):
     super().__init__(cpp, arch, target)
 
-  def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = log.Description(
       alpha = scalar,
@@ -111,14 +121,14 @@ class OptimizedKernelFactory(KernelFactory):
       prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description, self._target)
-    return generator.generate(self._cpp, routineCache, gemm_cfg)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
 
-  def create_FusedGEMMs(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
-    description = fused_gemms.Description(node, result, arguments, add, scalar)
+  def create_FusedGEMMs(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    description = fused_gemms.Description(node, result, arguments, condition, add, scalar)
     generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target)
-    return generator.generate(self._cpp, routineCache, gemm_cfg)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
   
-  def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
     description = indexsum.Description(
       alpha = scalar,
@@ -127,9 +137,9 @@ class OptimizedKernelFactory(KernelFactory):
       term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     )
     generator = indexsum.generator(self._arch, description, self._target)
-    return generator.generate(self._cpp, routineCache)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
   
-  def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = product.Description(
       alpha = scalar,
@@ -139,9 +149,9 @@ class OptimizedKernelFactory(KernelFactory):
       rightTerm = IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())
     )
     generator = product.generator(self._arch, description, self._target)
-    return generator.generate(self._cpp, routineCache)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
 
-  def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
     description = copyscaleadd.Description(
       alpha = scalar,
@@ -150,9 +160,9 @@ class OptimizedKernelFactory(KernelFactory):
       term = IndexedTensorDescription.fromVar(term, node.term().indices)
     )
     generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
-    return generator.generate(self._cpp, routineCache)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
   
-  def create_Elementwise(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = elementwise.Description(
       alpha = scalar,
       add = add,
@@ -163,9 +173,20 @@ class OptimizedKernelFactory(KernelFactory):
       nodeTermIndices = node.nodeTermIndices
     )
     generator = elementwise.generator(self._arch, description, self._target)
-    return generator.generate(self._cpp, routineCache)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+  
+  def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    description = reduction.Description(
+      alpha = scalar,
+      add = add,
+      result = IndexedTensorDescription.fromNode(result, node),
+      term = IndexedTensorDescription.fromNode(arguments[0], node.term()),
+      optype = node.optype,
+    )
+    generator = reduction.generator(self._arch, description, self._target)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
 
-  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
+  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
       alpha = scalar,
       beta = 1.0 if add else 0.0,
@@ -173,7 +194,7 @@ class OptimizedKernelFactory(KernelFactory):
       term = IndexedTensorDescription.fromVar(term, self._indices(term))
     )
     generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
-    return generator.generate(self._cpp, routineCache)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
 
 class UnitTestFactory(KernelFactory):
   def __init__(self, cpp, arch, nameFun, testFramework):
@@ -186,7 +207,7 @@ class UnitTestFactory(KernelFactory):
     address = var.memoryLayout().addressString(indices)
     return f'{self._name(var)}[{address}]'
   
-  def create_Einsum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Einsum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
@@ -200,34 +221,52 @@ class UnitTestFactory(KernelFactory):
       terms.insert(0, str(scalar))
     
     if not add:
-      self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), self._arch.typename)
+      self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
     
     class EinsumBody(object):
       def __call__(s):
         self._cpp(f"{resultTerm} += {' * '.join(terms)};")
         return len(terms)
 
-    return forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False)
+    return self._conditional(condition, lambda: forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False))
   
-  def create_ScalarMultiplication(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return self.simple(result, arguments[0], add, scalar, routineCache)
+  def create_ScalarMultiplication(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    return self._conditional(condition, lambda: self.simple(result, arguments[0], add, scalar, routineCache))
 
-  def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.indices <= node.term().indices and node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
-    return self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
   
-  def create_Elementwise(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    g = self._indices(result)
+    resultTerm = self._formatTerm(result, node.indices)
+
+    argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
+    termTerm = f'({argTerms[0]}) * ({argTerms[1]})'
+
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
+
+  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
 
     argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
     termTerm = node.optype.callstr(*node.fillTerms(argTerms))
 
-    return self._simpleBody(resultTerm, termTerm, add, scalar, g)
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
+  
+  def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    g = self._indices(result)
+    resultTerm = self._formatTerm(result, node.indices)
+    argTerm = self._formatTerm(arguments[0], node.term())
 
-  def create_IfThenElse(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    termTerm = node.optype.callstr(*node.fillTerms(argTerms))
+
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
+
+  def create_IfThenElse(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
     yesTerm = self._formatTerm(arguments[0], node.yesTerm().indices)
@@ -236,9 +275,9 @@ class UnitTestFactory(KernelFactory):
 
     termTerm = f'(({conditionTerm}) ? ({yesTerm}) : ({noTerm}))'
 
-    return self._simpleBody(resultTerm, termTerm, add, scalar, g)
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
 
-  def _simpleBody(self, resultTerm, termTerm, add, scalar, indices):
+  def _simpleBody(self, resultTerm, termTerm, add, scalar, indices, reduceIdx = None):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
 
     if scalar and scalar != 1.0:
@@ -251,13 +290,13 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, indices, ranges, AssignBody(), pragmaSimd=False)
 
-  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
+  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     g = self._indices(result)
 
     resultTerm = self._formatTerm(result, g)
     termTerm = self._formatTerm(term, g)
 
-    return self._simpleBody(resultTerm, termTerm, add, scalar, g)
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
 
   def compare(self, ref, target, epsMult = 100.0):
     g = self._indices(ref)
@@ -328,29 +367,29 @@ class ExportFactory(KernelFactory):
   def allocateTemporary(self):
     return False
   
-  def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     makeNode = IndexedTensorDescription.fromNode
     argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
     return self.handleLinear(makeNode(result, node), argnodes, add, scalar, node.transA(), node.transB())
   
-  def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
     makeNode = IndexedTensorDescription.fromNode
     argnodes = [makeNode(arguments[0], node.term())]
     return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
   
-  def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     makeNode = IndexedTensorDescription.fromNode
     argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
     return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
 
-  def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
     return self.handleLinear(IndexedTensorDescription(str(result), node.indices, result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), node.term().indices, term.memoryLayout(), term.eqspp())], add, scalar, False, False)
   
-  def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
+  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     return self.handleLinear(IndexedTensorDescription(str(result), self._indices(result), result.memoryLayout(), result.eqspp()), [IndexedTensorDescription(str(term), self._indices(term), term.memoryLayout(), term.eqspp())], add, scalar, False, False)
 
   def getIndices(self, dest, ops):

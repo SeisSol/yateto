@@ -265,10 +265,15 @@ class SetDatatype1(Transformer):
     super().generic_visit(node)
     node.datatype = node.tensor.getDatatype(self.arch)
     return node
-
-  def visit_DatatypeCast(self, node):
+  
+  def visit_Elementwise(self, node):
     super().generic_visit(node)
-    node.datatype = node.newDatatype
+    node.datatype = node.optype.datatypeResult([c.datatype for c in node])
+    return node
+  
+  def visit_Assign(self, node):
+    super().generic_visit(node)
+    node.datatype = node[0].datatype
     return node
 
 class SetDatatype2(Transformer):
@@ -282,8 +287,13 @@ class SetDatatype2(Transformer):
   def visit_IndexedTensor(self, node):
     super().generic_visit(node)
     return node
-
-  def visit_DatatypeCast(self, node):
+  
+  def visit_Elementwise(self, node):
     super().generic_visit(node)
-    node.datatype = node.newDatatype
+    node.datatype = node.optype.datatypeResult([c.datatype for c in node])
+    return node
+  
+  def visit_Assign(self, node):
+    super().generic_visit(node)
+    node.datatype = node[0].datatype
     return node

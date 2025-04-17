@@ -14,7 +14,7 @@ class Generic(object):
     addressStr = term.memoryLayout.addressString(term.indices, indices) if len(indices) > 0 else ''
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
-    cpp('{} {}* {} = {}{};'.format(self._arch.typename, 'const' if const else '', targetName, baseName, addressStr))
+    cpp('{} {}* {} = {}{};'.format(term.datatype.ctype(), 'const' if const else '', targetName, baseName, addressStr))
 
   def _alignedStart(self, term, loopIndices):
     if len(loopIndices) == 0:

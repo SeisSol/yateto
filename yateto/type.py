@@ -1,9 +1,10 @@
 import re
-from .ast.node import Node, IndexedTensor
 from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
 from . import aspp
 from enum import Enum
+
+import numpy as np
 
 class Datatype(Enum):
   BOOL = 0
@@ -40,6 +41,19 @@ class Datatype(Enum):
       Datatype.F64: 'double',
       Datatype.F16: 'int16_t',
       Datatype.BF16: 'int16_t',
+    }[self]
+  
+  def nptype(self):
+    return {
+      Datatype.BOOL: np.bool,
+      Datatype.I8: np.int8,
+      Datatype.I16: np.int16,
+      Datatype.I32: np.int32,
+      Datatype.I64: np.int64,
+      Datatype.F32: np.float32,
+      Datatype.F64: np.float64,
+      Datatype.F16: np.float16,
+      Datatype.BF16: np.float32, # NYI
     }[self]
   
   def size(self):
@@ -231,6 +245,7 @@ class Tensor(IdentifiedType):
     self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
 
   def __getitem__(self, indexNames):
+    from .ast.node import IndexedTensor
     return IndexedTensor(self, indexNames)
   
   def shape(self):

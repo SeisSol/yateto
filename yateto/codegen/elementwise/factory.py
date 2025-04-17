@@ -31,7 +31,7 @@ class Description(object):
         assert testLoopRangesEqual(newRange, self.loopRanges)
         assert testLoopRangesAContainedInB(newRange, rR)
 
-        self.loopRanges(newRange)
+        self.loopRanges.update(newRange)
 
 def generator(arch, descr, target):
   if target == 'cpu':

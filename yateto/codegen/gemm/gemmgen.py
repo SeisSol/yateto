@@ -9,6 +9,7 @@ from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
 from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
 from ..tiny_tensor_language import *
+from ...type import Datatype
 import importlib.util
 
 
@@ -448,7 +449,11 @@ Stderr: {result.stderr}""")
         self._callGenerator(argList)
 
     if self._mode == 'pspamm':
-      return 'void {name}(const {type}* A, const {type}* B, {type}* C, {type} alpha, {type} beta, const {type}* prefetch);'.format(name=routineName, type=self._arch.typename)
+      return 'void {name}(const {atype}* A, const {btype}* B, {ctype}* C, {ctype} alpha, {ctype} beta, const {ctype}* prefetch);'.format(name=routineName,
+        atype=self._gemmDescr['datatypeA'].ctype(),
+        btype=self._gemmDescr['datatypeB'].ctype(),
+        ctype=self._gemmDescr['datatypeC'].ctype(),
+        )
 
     # LIBXSMM header
     if self._gemmDescr['prefetch'] == 'nopf':

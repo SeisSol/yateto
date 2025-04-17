@@ -72,7 +72,7 @@ class CopyScaleAddGenerator(object):
       n = d.loopRanges[d.result.indices[1]]
       alpha = d.alpha
 
-      aux = BatchedOperationsAux(self._arch.typename)
+      aux = BatchedOperationsAux(d.result.datatype.ctype())
       matrix_a = gf.YatetoInterface.produce_dense_matrix((m, n),
                                                          d.term.memoryLayout.bbox(),
                                                          addressing=aux.deduce_addresing(d.term),
@@ -84,7 +84,7 @@ class CopyScaleAddGenerator(object):
                                                          transpose=False)
 
       try:
-        vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=self._arch.typename)
+        vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=d.result.datatype.ctype())
         forge_generator = gf.CsaGenerator(vm)
         forge_generator.set(matrix_a, matrix_b, alpha, d.beta)
         routine_name = forge_generator.get_base_name()

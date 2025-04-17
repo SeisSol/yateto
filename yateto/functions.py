@@ -1,5 +1,6 @@
 from . import ops
 from .ast import node
+from .type import Datatype
 
 def sin(x): return node.Elementwise(ops.Sin(), x)
 def cos(x): return node.Elementwise(ops.Cos(), x)
@@ -34,8 +35,17 @@ def assignIf(condition, lhs, rhs): return node.Assign(lhs, rhs, condition)
 # def where(condition, yes, no): return node.IfThenElse(condition, yes, no)
 def where(condition, yes, no): return node.Elementwise(ops.Ternary(), yes, no, condition)
 
+def equal(x, y): return node.Elementwise(ops.CmpEq(), x, y)
+def not_equal(x, y): return node.Elementwise(ops.CmpNe(), x, y)
+def less(x, y): return node.Elementwise(ops.CmpLt(), x, y)
+def less_equal(x, y): return node.Elementwise(ops.CmpLe(), x, y)
+def greater(x, y): return node.Elementwise(ops.CmpGt(), x, y)
+def greater_equal(x, y): return node.Elementwise(ops.CmpGe(), x, y)
+
 # extra reduction functions; e.g. for input to `where`
 def reductionSum(term, indices): return node.Reduction(ops.Add(), term, indices)
 def reductionMul(term, indices): return node.Reduction(ops.Mul(), term, indices)
 def reductionAnd(term, indices): return node.Reduction(ops.And(), term, indices)
 def reductionOr(term, indices): return node.Reduction(ops.Or(), term, indices)
+
+def cast(x, dtype): return node.Elementwise(ops.Typecast(dtype), x)

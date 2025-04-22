@@ -2,7 +2,7 @@ import sys
 from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
-from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication
+from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication, SliceView, SelectView
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -87,13 +87,27 @@ class DeduceIndices(Transformer):
     self.visit(node.term(), bound)
     node.indices = deepcopy(node.term().indices)
     return node
+  
+  def visit_SliceView(self, node, bound):
+    self.visit(node.term(), bound)
+    node.indices = Indices(node.term().indices, [shape if index != node.index else (node.end - node.start) for index, shape in zip(node.term().indices, node.term().shape())])
+    return node
+  
+  def visit_SelectView(self, node, bound):
+    self.visit(node.term(), bound)
+    node.indices = Indices([index for index in node.term().indices if index != node.index], [shape for index, shape in zip(node.term().indices, node.term().shape()) if index != node.index])
+    return node
 
   def visit_Assign(self, node, bound):
     lhs = node[0]
     rhs = node[1]
     
-    if not isinstance(lhs, IndexedTensor):
+    tlhs = lhs.viewed()
+    if not isinstance(tlhs, IndexedTensor):
       raise ValueError('Assign: Left-hand side must be of type IndexedTensor')
+    
+    # recurse through all views to get the restricted indices
+    self.visit(lhs, bound=set(tlhs.indices))
 
     self.visit(rhs, bound=set(lhs.indices))
 
@@ -218,6 +232,16 @@ class EquivalentSparsityPattern(Transformer):
 
     # TODO: Backtracking of equivalent sparsity pattern to children?
 
+    return node
+  
+  def visit_SliceView(self, node):
+    self.generic_visit(node)
+    node.setEqspp(node.computeSparsityPattern())
+    return node
+  
+  def visit_SelectView(self, node):
+    self.generic_visit(node)
+    node.setEqspp(node.computeSparsityPattern())
     return node
 
 class SetSparsityPattern(Transformer):

@@ -512,7 +512,7 @@ class UnitTestGenerator(KernelGenerator):
             utName=self._name(var),
             viewName=self._viewName(var),
             shape=', '.join([str(s) for s in shape]),
-            start=', '.join(['0']*len(shape))
+            start=', '.join(['0'] * len(shape))
           )
         )
         prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''

@@ -100,8 +100,13 @@ class KernelFactory(object):
       else:
         return 0
     else:
-      with self._cpp.If(f'{condition.ccode()}'):
+      if condition.tautology():
         return generate()
+      elif condition.unfulfillable():
+        return 0
+      else:
+        with self._cpp.If(f'{condition.ccode()}'):
+          return generate()
 
 class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target):
@@ -351,6 +356,9 @@ class ExportGenerator:
   
   def add_linear_operation(self, dest, ops, target, permute, add):
     pass
+  
+  def add_operation(self, description):
+    pass
 
 class ExportFactory(KernelFactory):
   @classmethod
@@ -367,6 +375,41 @@ class ExportFactory(KernelFactory):
   def allocateTemporary(self):
     return False
   
+  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    result = IndexedTensorDescription.fromNode(result, node)
+    preArgs = [IndexedTensorDescription.fromNode(argument, term) for argument, term in zip(arguments, node)]
+    args = node.fillTerms(preArgs)
+
+    description = {
+      'type': 'elementwise',
+      'result': result,
+      'args': args,
+      'linear': {
+        'alpha': scalar,
+        'add': add,
+      },
+      'optype': node.optype
+    }
+    return self.generator.add_operation(description)
+
+  def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert len(arguments) == 1
+    makeNode = IndexedTensorDescription.fromNode
+    result = makeNode(result, node)
+    argnodes = [makeNode(arguments[0], node.term())]
+
+    description = {
+      'type': 'reduction',
+      'result': result,
+      'args': argnodes,
+      'linear': {
+        'alpha': scalar,
+        'add': add,
+      },
+      'optype': node.optype
+    }
+    return self.generator.add_operation(description)
+
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     makeNode = IndexedTensorDescription.fromNode
@@ -374,16 +417,10 @@ class ExportFactory(KernelFactory):
     return self.handleLinear(makeNode(result, node), argnodes, add, scalar, node.transA(), node.transB())
   
   def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    assert len(arguments) == 1
-    makeNode = IndexedTensorDescription.fromNode
-    argnodes = [makeNode(arguments[0], node.term())]
-    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
+    return create_Reduction(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
   
   def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    assert len(arguments) == 2
-    makeNode = IndexedTensorDescription.fromNode
-    argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
-    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
+    return create_Elementwise(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]

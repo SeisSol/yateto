@@ -13,9 +13,6 @@ class FusedGemmsTinytc:
     def __init__(self, arch, descr):
         self._arch = arch
         self._descr = descr
-        self._ty = ScalarType(
-            FloatingType.f64) if self._arch.bytesPerReal == 8 else ScalarType(
-                FloatingType.f32)
 
     def generate(self, cpp, routineCache, cfg):
         args = dict()
@@ -39,7 +36,7 @@ class FusedGemmsTinytc:
                 is_constant[var] = node.tensor.is_compute_constant(
                 ) if isinstance(node, IndexedTensor) else False
                 arg = LocalValue(
-                    makeBatchType(self._ty, node.memoryLayout(),
+                    makeBatchType(toTinyTCType(var.datatype), node.memoryLayout(),
                                   is_constant[var], var.is_temporary), name)
                 args[var] = arg
                 vals[var] = makeLoad(bb, arg, gid, is_constant[var], var.is_temporary)
@@ -59,7 +56,7 @@ class FusedGemmsTinytc:
             if res.is_temporary:
                 res_val = bb.add(
                     AllocaInst(
-                        makeMemrefType(self._ty, res.memoryLayout(), False)))
+                        makeMemrefType(toTinyTCType(res.datatype), res.memoryLayout(), False)))
                 vals[res] = res_val
             else:
                 modified.add(res)
@@ -100,8 +97,8 @@ class FusedGemmsTinytc:
                             *offsetSizeLists(node.memoryLayout(), m, n)))
 
             trans = lambda t: Transpose.t if t else Transpose.n
-            alpha = FloatImmValue(self._ty, scalar)
-            beta = FloatImmValue(self._ty, 1.0 if add else 0.0)
+            alpha = FloatImmValue(toTinyTCType(res.datatype), scalar)
+            beta = FloatImmValue(toTinyTCType(res.datatype), 1.0 if add else 0.0)
             bb.add(
                 GemmInst(trans(node.transA()), trans(node.transB()), alpha,
                          op1_sub, op2_sub, beta, res_sub))
@@ -117,7 +114,7 @@ class FusedGemmsTinytc:
             wrapper_args.append(
                 TinytcKernelArgument(name, str(key), is_constant[key],
                                      key.is_temporary, key in modified))
-        wrapper = TinytcWrapper(kernel, wrapper_args, self._arch.typename)
+        wrapper = TinytcWrapper(kernel, wrapper_args)
         cpp(wrapper.call())
         prototype = wrapper.prototype()
         routineCache.addRoutine(prototype,

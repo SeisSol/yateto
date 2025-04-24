@@ -43,9 +43,15 @@ def greater(x, y): return node.Elementwise(ops.CmpGt(), x, y)
 def greater_equal(x, y): return node.Elementwise(ops.CmpGe(), x, y)
 
 # extra reduction functions; e.g. for input to `where`
-def reductionSum(term, indices): return node.Reduction(ops.Add(), term, indices)
-def reductionMul(term, indices): return node.Reduction(ops.Mul(), term, indices)
-def reductionAnd(term, indices): return node.Reduction(ops.And(), term, indices)
-def reductionOr(term, indices): return node.Reduction(ops.Or(), term, indices)
+def reduction(op, term, indices):
+    if len(indices) == 0:
+        return term
+    else:
+        reduction(op, node.Reduction(op, term, indices[0]), indices[1:])
+
+def sum(term, indices): return reduction(ops.Add(), term, indices)
+def product(term, indices): return reduction(ops.Mul(), term, indices)
+def all(term, indices): return reduction(ops.And(), term, indices)
+def any(term, indices): return reduction(ops.Or(), term, indices)
 
 def cast(x, dtype): return node.Elementwise(ops.Typecast(dtype), x)

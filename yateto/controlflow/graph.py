@@ -96,7 +96,6 @@ class Expression(object):
     for v in self._variables:
       v.setWritable(name)
 
-
 class ProgramAction(object):
   def __init__(self, result, term, add, scalar=None, condition=True):
     self.result = result
@@ -142,6 +141,12 @@ class ProgramAction(object):
   def setVariablesWritable(self, name):
     self.result.setWritable(name)
     self.term.setWritable(name)
+  
+  def getCondition(self):
+    if isinstance(self.condition, CNFCondition):
+      return self.condition
+    else:
+      return CNFCondition(self.condition)
 
 
 # TODO: probably should be a subclass of ProgramAction
@@ -194,6 +199,7 @@ class ProgramPoint(object):
     self.initBuffer = None
     self.bufferMap = None
 
+
 # a rather primitive CNF implementation.
 # do not overuse (i.e. avoid conditional assigns where possible)
 
@@ -222,10 +228,15 @@ class CNFClause:
     return f'[{", ".join(formatvar(var) for var in self.variables)}]'
   
   def ccode(self):
+    if not self.fulfilled and len(self.variables) == 0:
+      return 'false'
     # for now, only allow scalarly-indexed variables
     printvar = lambda var: f'{var}' if isinstance(var, Scalar) else f'{var}[{var.memoryLayout().addressString(Indices())}]'
     formatvar = lambda name: f'{printvar(name)}' if self.variables[name] else f'!{printvar(name)}'
     return f'({" || ".join(formatvar(var) for var in self.variables)})'
+  
+  def variableIterator(self):
+    return (var for var in self.variables if isinstance(var, Variable))
 
 class CNFCondition:
   def __init__(self, data):
@@ -298,7 +309,14 @@ class CNFCondition:
     return f'{self.clauses}'
   
   def ccode(self):
+    if self.tautology():
+      return 'true'
+    elif self.unfulfillable():
+      return 'false'
     return f'({" && ".join(clause.ccode() for clause in self.clauses)})'
+  
+  def variables(self):
+    return {var for clause in self.clauses for var in clause.variableIterator()}
 
 class LiveSet:
   def __init__(self, data: dict):

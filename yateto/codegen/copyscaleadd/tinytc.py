@@ -11,17 +11,15 @@ class CopyScaleAddTinytc:
     def __init__(self, arch, descr):
         self._arch = arch
         self._descr = descr
-        self._scalar_type = 'f64' if self._arch.bytesPerReal == 8 else 'f32'
-        self._ty = ScalarType(
-            FloatingType.f64) if self._arch.bytesPerReal == 8 else ScalarType(
-                FloatingType.f32)
 
     def generate(self, cpp, routineCache):
         d = self._descr
 
+        ty = toTinyTCType(d.result.datatype)
+
         # Order can be 1 or 2
         def MakeLoopOverAxpby(d, order, transpose, A, B):
-            beta = FloatImmValue(self._ty, d.beta)
+            beta = FloatImmValue(ty, d.beta)
             A_offset_list = [None] * len(d.term.indices)
             A_size_list = [None] * len(d.term.indices)
             B_offset_list = [None] * len(d.result.indices)
@@ -61,13 +59,13 @@ class CopyScaleAddTinytc:
                     [ForInst(B_offset_list[j], start, stop, csa_region)])
             return csa_region
 
-        alpha = LocalValue(self._ty, 'alpha')
+        alpha = LocalValue(ty, 'alpha')
         Abatch = LocalValue(
-            makeBatchType(self._ty, d.term.memoryLayout,
+            makeBatchType(ty, d.term.memoryLayout,
                           d.term.is_compute_constant, d.term.is_temporary),
             'A')
         Bbatch = LocalValue(
-            makeBatchType(self._ty, d.result.memoryLayout,
+            makeBatchType(ty, d.result.memoryLayout,
                           d.result.is_compute_constant, d.result.is_temporary),
             'B')
         kernel = Function('copyscaleadd', [alpha, Abatch, Bbatch], None)
@@ -102,7 +100,7 @@ class CopyScaleAddTinytc:
                                  d.result.is_compute_constant,
                                  d.result.is_temporary, True)
         ]
-        wrapper = TinytcWrapper(kernel, args, self._arch.typename)
+        wrapper = TinytcWrapper(kernel, args)
 
         prototype = wrapper.prototype()
         routineCache.addRoutine(prototype,

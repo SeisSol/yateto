@@ -171,7 +171,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     datatype = dict()
     for scalar in scalarsP:
       self.KernelOutline._addTensor(scalar, scalars)
-      datatype[scalar.baseNameWithNamespace()] = scalar.datatype
+      datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
     for var in variables:
       self.KernelOutline._addTensor(var.tensor, tensors)
       bn = var.tensor.baseNameWithNamespace()
@@ -218,7 +218,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     for key, value in koEntries.items():
       if key not in entries:
         entries[key] = value
-      else:
+      elif entries[key] != value:
         entries[key] = entries[key] | value
     
 
@@ -288,7 +288,8 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         if target == 'gpu':
           # LinearAllocatorT controls external extra mem. allocated on gpu for tmp. variables
-          header(f'yateto::LinearAllocatorT<{self._arch.typename}> linearAllocator;')
+          # back-casted to char for now
+          header(f'yateto::LinearAllocatorT<char> linearAllocator;')
 
         header.emptyline()
 
@@ -303,7 +304,7 @@ class OptimizedKernelGenerator(KernelGenerator):
             container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
             header(f'{class_name}::{container_type} {base_name};')
           else:
-            header(f'{typ}{ptr_type} {base_name}{{nullptr}};')
+            header(f'{typ}{ptr_type} {base_name}{"{"}nullptr{"}"};')
         
         def scalarArgs(base_name_with_namespace, datatype, groups):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
@@ -352,7 +353,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         if len(prefetch) > 0:
           with header.Struct(self.PREFETCHSTRUCT_NAME):
             for baseName, groups in prefetch.items():
-              kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
+              kernelArgs(baseName, groups, writable=False, is_constant=False, datatype=self._arch.datatype, target='any')
           header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
           header.emptyline()
 
@@ -465,7 +466,7 @@ class UnitTestGenerator(KernelGenerator):
     elif writable[var.tensor.baseNameWithNamespace()]:
       return self._devPtrTensorName(var)
     else:
-      return f'const_cast<{self._arch.typename} const**>({self._devPtrTensorName(var)})'
+      return f'const_cast<{var.datatype.ctype()} const**>({self._devPtrTensorName(var)})'
 
   @classmethod
   def _nameS(cls, var):
@@ -509,16 +510,17 @@ class UnitTestGenerator(KernelGenerator):
       factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
 
       for i,scalar in enumerate(scalars):
-        cpp('{} {} = {};'.format(self._arch.typename, self._tensorNameS(scalar), float(i+2)))
+        cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
         
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
         
         shape = var.memoryLayout().shape()
-        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
+        cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             dim=len(shape),
+            datatype=var.datatype.ctype(),
             arch = self._arch,
             utName=self._name(var),
             viewName=self._viewName(var),
@@ -550,14 +552,13 @@ class UnitTestGenerator(KernelGenerator):
 
         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
         cpp ( f'auto {self.QUEUE} = sycl::queue{{sycl::property::queue::in_order()}};' )
-        cpp ( f'auto {self.TMP_MEM} = ({self._arch.typename}*) sycl::malloc_device({self.TMP_SIZE}, {self.QUEUE});' )
+        cpp ( f'auto {self.TMP_MEM} = reinterpret_cast<char*>(sycl::malloc_device({self.TMP_SIZE}, {self.QUEUE}));' )
         for var in variables:
-          cpp( f'auto {self._devTensorName(var)} = ({self._arch.typename}*) sycl::malloc_device(sizeof({self._tensorName(var)}), {self.QUEUE});' )
-          cpp( f'auto {self._devPtrTensorName(var)} = ({self._arch.typename}**) sycl::malloc_device(sizeof({self._arch.typename}*), {self.QUEUE});' )
+          cpp( f'auto {self._devTensorName(var)} = reinterpret_cast<{var.datatype.ctype()}*>(sycl::malloc_device(sizeof({self._tensorName(var)}), {self.QUEUE}));' )
+          cpp( f'auto {self._devPtrTensorName(var)} = reinterpret_cast<{var.datatype.ctype()}**>(sycl::malloc_device(sizeof({var.datatype.ctype()}*), {self.QUEUE}));' )
           cpp( f'{self.QUEUE}.memcpy({self._devTensorName(var)}, {self._tensorName(var)}, sizeof({self._tensorName(var)})).wait();' )
-          cpp( f'{self.QUEUE}.memcpy({self._devPtrTensorName(var)}, &{self._devTensorName(var)}, sizeof({self._arch.typename}*)).wait();' )
+          cpp( f'{self.QUEUE}.memcpy({self._devPtrTensorName(var)}, &{self._devTensorName(var)}, sizeof({var.datatype.ctype()}*)).wait();' )
         cpp.emptyline()
-
 
       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
       for var in scalars:
@@ -608,12 +609,14 @@ class InitializerGenerator(object):
   class TensorView(object):
     ARGUMENT_NAME = 'values'
 
+    def __init__(self, datatype):
+      self._datatype = datatype
+
     def typename(self, dim, arch):
-      return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename)
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim},{self._datatype.ctype()},{arch.uintTypename}>'
     
-    @classmethod
-    def arguments(cls, arch):
-      return '{}* {}'.format(arch.typename, cls.ARGUMENT_NAME)
+    def arguments(self):
+      return f'{self._datatype.ctype()}* {self.ARGUMENT_NAME}'
     
     def generate(cpp, group, memLayout):
       raise NotImplementedError
@@ -622,10 +625,10 @@ class InitializerGenerator(object):
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
     
     def formatArray(self, numberType, name, values, declarationOnly):
-      lhs = '{} {}[]'.format(numberType, name)
+      lhs = f'{numberType} {name}[]'
       if declarationOnly:
-        return '{} {};'.format(CONSTEXPR, lhs)
-      return '{} {} = {};'.format(MODIFIERS, lhs, self.listToInitializerList(values))
+        return f'{CONSTEXPR} {lhs};'
+      return f'{MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
   
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
@@ -650,7 +653,7 @@ class InitializerGenerator(object):
     COLPTR_NAME = 'ColPtr'
     
     def typename(self, dim, arch):
-      return '::{}::{}<{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename)
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{self._datatype.ctype()},{arch.uintTypename}>'
 
     def generate(self, cpp, memLayout, arch, index):
       cpp( 'return {}({}, {}, {}, {});'.format(
@@ -667,9 +670,9 @@ class InitializerGenerator(object):
 
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
-    self._numberType = '{} const'.format(self._arch.uintTypename)
-    self._realType = '{} const'.format(self._arch.typename)
-    self._realPtrType = self._realType + '*'
+    self._numberType = f'{self._arch.uintTypename} const'.format(self._arch.uintTypename)
+    self._realType = lambda datatype: f'{datatype.ctype()} const'
+    self._realPtrType = lambda datatype: self._realType(datatype) + '*'
     self._scalarCollect = collections.OrderedDict()
     self._collect = collections.OrderedDict()
     for tensor in tensors:
@@ -704,12 +707,13 @@ class InitializerGenerator(object):
     maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}
     self._groupSizeScalar = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndexScalar.items()}
   
-  def _tensorViewGenerator(self, memoryLayout):
+  def _tensorViewGenerator(self, tensor):
+    memoryLayout = tensor.memoryLayout()
     memLayoutMap = {
       'DenseMemoryLayout': self.DenseTensorView,
       'CSCMemoryLayout': self.CSCMatrixView
     }
-    return memLayoutMap[type(memoryLayout).__name__]()
+    return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch))
   
   def iterate_collect(self):
     cur_namespace = ''
@@ -831,49 +835,54 @@ class InitializerGenerator(object):
     if declarationOnly:
       for group,tensor in tensors.items():
         ml = tensor.memoryLayout()
-        tv = self._tensorViewGenerator(ml)
+        tv = self._tensorViewGenerator(tensor)
         tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
       valueNames = dict()
       for group,tensor in tensors.items():
         values = tensor.values()
         memLayout = tensor.memoryLayout()
+        datatype = tensor.getDatatype(self._arch)
         if values is not None:
-          memory = ['0.']*memLayout.requiredReals()
+          memory = [datatype.literal(0)]*memLayout.requiredReals()
           for idx,x in values.items():
-            memory[memLayout.address(idx)] = x
-          valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, index(group))
-          valueNames[group] = ['&{}[0]'.format(valuesName)]
-          cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))
+            memory[memLayout.address(idx)] = datatype.literal(x)
+          valuesName = f'{name}{self.VALUES_BASENAME}{index(group)}'
+          valueNames[group] = [f'&{valuesName}[0]']
+          cpp('{} {}[] = {{{}}};'.format(self._realType(datatype), valuesName, ', '.join(memory)))
       if len(valueNames) > 1:
-        self._array(cpp, self._realPtrType, name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
+        _,prototensor = next(iter(tensors.items()))
+        datatype = prototensor.getDatatype(self._arch)
+        self._array(cpp, self._realPtrType(datatype), name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
     else:
       with cpp.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          tv = self._tensorViewGenerator(tensor)
           tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, False)
 
         nValueArrays = 0
         for group,tensor in tensors.items():
           values = tensor.values()
+          datatype = tensor.getDatatype(self._arch)
           if values is not None:
-            name = '{}{}'.format(self.VALUES_BASENAME, index(group))
+            name = f'{self.VALUES_BASENAME}{index(group)}'
             aligned = ''
             if tensor.memoryLayout().alignedStride():
-              aligned = ' __attribute__((aligned({})))'.format(self._arch.alignment)
-            cpp('{} {} {}[]{};'.format(STATIC, self._realType, name, aligned))
+              aligned = f' __attribute__((aligned({self._arch.alignment})))'
+            cpp(f'{STATIC} {self._realType(datatype)} {name}[]{aligned};')
             nValueArrays += 1
         if nValueArrays > 1:
-          cpp('{} {} {}[];'.format(STATIC, self._realPtrType, self.VALUES_BASENAME))
+          cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')
 
         cpp.emptyline()
-        viewArgs = self.TensorView.arguments(self._arch)
         if len(groupSize) == 0:
-          ml = next(iter(tensors.values())).memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          prototensor = next(iter(tensors.values()))
+          ml = prototensor.memoryLayout()
+          tv = self._tensorViewGenerator(prototensor)
+          viewArgs = tv.arguments()
           with cpp.Struct(self.VIEW_STRUCT_NAME):
-            cpp('typedef {} {};'.format(tv.typename(len(ml.shape()), self._arch), self.VIEW_TYPE_NAME))
-            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
+            cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch)};')
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType=f'{STATIC_INLINE} {self.VIEW_TYPE_NAME}'):
               tv.generate(cpp, ml, self._arch, None)
         else:
           typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
@@ -882,7 +891,8 @@ class InitializerGenerator(object):
       if len(groupSize) > 0:
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          tv = self._tensorViewGenerator(tensor)
+          viewArgs = tv.arguments()
           typename = tv.typename(len(ml.shape()), self._arch)
           special = ','.join(str(g) for g in group)
           cpp('template<>')

@@ -120,13 +120,12 @@ class BatchedOperationsAux:
   FLAGS_NAME = 'flags'
   FORBIDDEN_STREAM_PTR = 'reinterpret_cast<void*>(std::numeric_limits<uintptr_t>::max())'
 
-  def __init__(self, underlying_data_type):
-    self.underlying_data_type = underlying_data_type
-
-  def _get_ptr_type(self, addressing: AddressingMode):
+  @classmethod
+  def _get_ptr_type(cls, addressing: AddressingMode):
     return addressing.pointer_type()
 
-  def deduce_addresing(self, term):
+  @classmethod
+  def deduce_addresing(cls, term):
     if term.addressing is not None:
       return term.addressing
     
@@ -138,17 +137,20 @@ class BatchedOperationsAux:
     else:
       return AddressingMode.INDIRECT
 
-  def deduce_ptr_arg(self, term, as_const=False):
+  @classmethod
+  def deduce_ptr_arg(cls, term, as_const=False):
     if as_const:
-      addressing = self.deduce_addresing(term)
-      ptr = self._get_ptr_type(addressing)
-      datatype = self.underlying_data_type if term.datatype is None else term.datatype.ctype()
+      addressing = cls.deduce_addresing(term)
+      ptr = cls._get_ptr_type(addressing)
+      assert term.datatype is not None
+      datatype = term.datatype.ctype()
       const_ptr_type = f'const {datatype} {ptr}'
       return f'const_cast<{const_ptr_type}>({term.name})'
     else:
       return f'{term.name}'
 
-  def deduce_offset_arg(self, term):
+  @classmethod
+  def deduce_offset_arg(cls, term):
     if term.is_compute_constant or term.is_temporary:
       return '0'
     else:
@@ -156,11 +158,12 @@ class BatchedOperationsAux:
 
 class TinytcKernelArgument:
 
-  def __init__(self, name: str, call_expr: str, constant: bool, temporary: bool, modified: bool, offset: int = 0):
+  def __init__(self, name: str, datatype: str, call_expr: str, constant: bool, temporary: bool, modified: bool, offset: int = 0):
     """Kernel argument for TinytcWrapper.
 
     Arguments:
     name -- Argument name
+    datatype -- Argument datatype in C/C++
     call_expr -- Expression used in calling wrapper
     constant -- Whether a tensor is invariant to group id
     temporary -- Whether a tensor is stored in a temporary buffer
@@ -181,7 +184,7 @@ class TinytcScalarKernelArgument:
 
 class TinytcWrapper:
 
-  def __init__(self, kernel: Function, arguments: list[TinytcKernelArgument | TinytcScalarKernelArgument], real_type: str, name: str = ''):
+  def __init__(self, kernel: Function, arguments: list[TinytcKernelArgument | TinytcScalarKernelArgument], name: str = ''):
     self.kernel_name = kernel.name
     self.source = Dump().visit(kernel)
     if name:
@@ -196,13 +199,13 @@ class TinytcWrapper:
     self.call_args = []
     for arg in arguments:
         if isinstance(arg, TinytcScalarKernelArgument):
-            self.wrapper_args.append(f'{real_type} {arg.name}')
+            self.wrapper_args.append(f'{arg.datatype} {arg.name}')
             self.wrapper_call_args.append(arg.name)
             self.call_args.append(arg.call_expr)
         else:
           ptr2ptr = '*' if not (arg.constant or arg.temporary) else ''
           const = ' const' if not (arg.modified or arg.temporary) else ''
-          wrapper_type = f'{real_type}{const}*{ptr2ptr}'
+          wrapper_type = f'{arg.datatype}{const}*{ptr2ptr}'
           self.wrapper_args.append(f'{wrapper_type} {arg.name}')
           self.wrapper_call_args.append(arg.name)
           self.call_args.append(f'const_cast<{wrapper_type}>({arg.call_expr})')
@@ -280,3 +283,25 @@ def makeLoad(bb, operand, gid, isComputeConstant: bool, isTemporary: bool):
     return bb.add(SubviewInst(operand, offsetList, sizeList))
   else:
     return bb.add(LoadInst(operand, [gid]))
+
+def toTinyTCType(datatype: Datatype):
+  return {
+    Datatype.BOOL: ScalarType(IntegerType.i1), # presumably, maybe i8
+    Datatype.I8: ScalarType(IntegerType.i8),
+    Datatype.I16: ScalarType(IntegerType.i16),
+    Datatype.I32: ScalarType(IntegerType.i32),
+    Datatype.I64: ScalarType(IntegerType.i64),
+    Datatype.F32: ScalarType(IntegerType.f32),
+    Datatype.F64: ScalarType(IntegerType.f64)
+  }[datatype]
+
+def toTinyTCImmediate(datatype: Datatype, value):
+  immtype = {
+    Datatype.BOOL: lambda value: IntImmValue(IntegerType.i1, value),
+    Datatype.I8: lambda value: IntImmValue(IntegerType.i8, value),
+    Datatype.I16: lambda value: IntImmValue(IntegerType.i16, value),
+    Datatype.I32: lambda value: IntImmValue(IntegerType.i32, value),
+    Datatype.I64: lambda value: IntImmValue(IntegerType.i64, value),
+    Datatype.F32: lambda value: FloatImmValue(IntegerType.f32, value),
+    Datatype.F64: lambda value: FloatImmValue(IntegerType.f64, value),
+  }[datatype](value)

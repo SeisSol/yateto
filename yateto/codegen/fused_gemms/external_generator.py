@@ -12,7 +12,7 @@ class FusedGemms:
     self._arch = arch
     self._descr = descr
     self._datatype = self._descr[0].node.datatype
-    self._batch_aux = BatchedOperationsAux(self._datatype.ctype())
+    self._batch_aux = BatchedOperationsAux()
     self._cache = {}
     self._tmp_matrices = {}
 

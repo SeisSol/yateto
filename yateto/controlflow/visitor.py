@@ -124,7 +124,7 @@ class SortedGlobalsList(object):
     V = set()
     for pp in cfg:
       if pp.action:
-        V = V | pp.action.result.variables() | pp.action.variables()
+        V = V | pp.action.result.variables() | pp.action.variables() | pp.action.getCondition().variables()
     return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
 
 class SortedPrefetchList(object):

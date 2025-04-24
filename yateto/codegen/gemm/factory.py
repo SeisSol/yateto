@@ -85,6 +85,9 @@ def generator(arch, descr, gemm_cfg, target):
                                     descr.beta,
                                     descr.alignedA,
                                     descr.alignedC,
+                                    descr.leftTerm.datatype,
+                                    descr.rightTerm.datatype,
+                                    descr.result.datatype,
                                     target)
     if gemmTool:
       return GemmGen(arch, descr, gemmTool)

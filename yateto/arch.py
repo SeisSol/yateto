@@ -75,8 +75,8 @@ class Architecture(object):
     else:
       raise ValueError(f'Unknown precision type {self.precision}')
     self.alignment = alignment
-    assert self.alignment % self.bytesPerReal == 0
-    self.alignedReals = self.alignment // self.bytesPerReal
+    assert self.alignment % self.datatype.size() == 0
+    self.alignedReals = self.alignment // self.datatype.size()
     self.enablePrefetch = enablePrefetch
 
     self.uintTypename = 'unsigned'
@@ -105,19 +105,11 @@ class Architecture(object):
   def formatConstant(self, constant):
     return self.datatype.literal(constant)
 
-  def onHeap(self, numReals):
-    return (numReals * self.bytesPerReal) > self._tmpStackLimit
+  def onHeap(self, byteCount):
+    return byteCount > self._tmpStackLimit
   
   def __eq__(self, other):
     return self.name == other.name
-
-  @property
-  def typename(self):
-    return self.datatype.ctype()
-  
-  @property
-  def bytesPerReal(self):
-    return self.datatype.size()
 
 def _get_name_and_precision(ident):
   return ident[1:], ident[0].upper()

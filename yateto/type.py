@@ -72,15 +72,16 @@ class Datatype(Enum):
   
   def literal(self, value):
     # TODO: BF16, F16
+    # (note: the extra lambda mapping is needed to prevent type errors)
     return {
-      Datatype.BOOL: 'true' if value else 'false',
-      Datatype.I8: f'{int(value)}',
-      Datatype.I16: f'{int(value)}',
-      Datatype.I32: f'{int(value)}',
-      Datatype.I64: f'{int(value)}LL',
-      Datatype.F32: f'{float(value):.16}f',
-      Datatype.F64: f'{float(value):.16}'
-    }[self]
+      Datatype.BOOL: lambda value: 'true' if value else 'false',
+      Datatype.I8: lambda value: f'{int(value)}',
+      Datatype.I16: lambda value: f'{int(value)}',
+      Datatype.I32: lambda value: f'{int(value)}',
+      Datatype.I64: lambda value: f'{int(value)}LL',
+      Datatype.F32: lambda value: f'{float(value):.16}f',
+      Datatype.F64: lambda value: f'{float(value):.16}'
+    }[self](value)
 
 class AddressingMode(Enum):
   DIRECT = 0
@@ -96,7 +97,27 @@ class AddressingMode(Enum):
       AddressingMode.SCALAR: '',
     }[self]
 
-class AbstractType(object):
+class Symbol(object):
+  def __init__(self, datatype):
+    # datatype == None is treated as datatype == arch.datatype
+    self.datatype = datatype
+  
+  def getDatatype(self, arch):
+    return arch.datatype if self.datatype is None else self.datatype
+
+class ScalarMixin:
+  pass
+
+class ImmediateScalar(Symbol, ScalarMixin):
+  def __init__(self, data, datatype):
+    super().__init__(datatype)
+    self.data = data
+
+class AbstractType(Symbol):
+  def __init__(self, name, datatype):
+    super().__init__(datatype)
+    self._name = name
+  
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
@@ -107,21 +128,15 @@ class AbstractType(object):
 class IdentifiedType(AbstractType):
   BASE_NAME = r'[a-zA-Z]\w*'
   GROUP_INDEX = r'(0|[1-9]\d*)'
-  GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
-  VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
+  GROUP_INDICES = rf'\(({GROUP_INDEX}(,{GROUP_INDEX})*)\)'
+  VALID_NAME = rf'^{BASE_NAME}({GROUP_INDICES})?$'
 
   def __init__(self, name, namespace=None, datatype=None):
+    super().__init__(name, datatype)
     if not self.isValidName(name):
-      raise ValueError('Invalid name (must match regexp {}): {}'.format(self.VALID_NAME, name))
-    
-    self._name = name
+      raise ValueError(f'Invalid name (must match regexp {self.VALID_NAME}): {name}')
+
     self.namespace = namespace
-
-    # datatype == None is treated as datatype == arch.datatype
-    self.datatype = datatype
-
-  def getDatatype(self, arch):
-    return arch.datatype if self.datatype is None else self.datatype
 
   def __str__(self):
     return self._name
@@ -165,7 +180,7 @@ class IdentifiedType(AbstractType):
   def __hash__(self):
     return hash(self._name)
 
-class Scalar(IdentifiedType):  
+class Scalar(IdentifiedType, ScalarMixin):  
   def __init__(self, name, namespace=None, datatype=None):
     super().__init__(name, namespace=namespace, datatype=datatype)
   
@@ -190,7 +205,7 @@ class Tensor(IdentifiedType):
       raise ValueError('shape must not contain entries smaller than 1')
     
     if not self.isValidName(name):
-      raise ValueError('Tensor name invalid (must match regexp {}): {}'.format(self.VALID_NAME, name))
+      raise ValueError(f'Tensor name invalid (must match regexp {self.VALID_NAME}): {name}')
 
     self._name = name
     self._shape = shape

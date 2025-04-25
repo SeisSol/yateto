@@ -96,9 +96,10 @@ class DenseMemoryLayout(MemoryLayout):
   def alignedStride(self):
     if self.ALIGNMENT_ARCH is None:
       return False
-    offsetOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].start)
+    offsetOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].start - self._offset[0])
     ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
-    return offsetOk and ldOk
+    localOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].stop - self._bbox[0].start)
+    return offsetOk and ldOk and localOk
 
   def mayVectorizeDim(self, dim):
     if self.ALIGNMENT_ARCH is None:
@@ -202,8 +203,10 @@ class DenseMemoryLayout(MemoryLayout):
   
   def _subOffset(self, positions):
     sub = 0
+    st = 1
     for p in positions:
-      sub += self._offset[p] * self._stride[p]
+      sub += self._offset[p] * st
+      st *= self._shape[p]
     return sub
     
   def _firstStride(self, positions):
@@ -224,7 +227,7 @@ class DenseMemoryLayout(MemoryLayout):
     shape = self._shape + (1,)
     bbox = BoundingBox(list(self._bbox) + [Range(0,1)])
     stride = self._stride + (self._bbox[-1].size() * self._stride[-1],)
-    offset = self._offset + [0]
+    offset = list(self._offset) + [0]
     return DenseMemoryLayout(shape, bbox, stride, offset=offset)
 
   def unfold(self, indices, I, J):
@@ -240,7 +243,7 @@ class DenseMemoryLayout(MemoryLayout):
     stride = (self._firstStride(positionsI), self._firstStride(positionsJ))
     offset = (self._subOffset(positionsI), self._subOffset(positionsJ))
 
-    return DenseMemoryLayout(shape, bbox, stride, offset)
+    return DenseMemoryLayout(shape, bbox, stride, offset=offset)
   
   def defuse(self, fusedRange, indices, I):
     positions = indices.positions(I)

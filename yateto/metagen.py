@@ -1,0 +1,82 @@
+from .codegen.code import Cpp
+import os
+
+class MetaGenerator:
+    def __init__(self, templateType):
+        self.templateType = templateType
+        self.generators = []
+    
+    def add_generator(self, template, generator, *args, **kwargs):
+        assert len(self.templateType) == len(template)
+        self.generators += [{
+            'template': template,
+            'generator': generator,
+            'args': args,
+            'kwargs': kwargs
+        }]
+    
+    def generate(self, outputDir='', namespace='yateto'):
+        tensors = {}
+        kernels = {}
+
+        namespacepfx = 'yatetometagen'
+        for i, gendata in enumerate(self.generators):
+            subnamespace = f'{namespace}::{namespacepfx}{i}'
+            outdir = os.path.join(outputDir, f'metagen{i}')
+            os.makedirs(outdir, exist_ok=True)
+
+            generator = gendata['generator']
+            template = gendata['template']
+            args = gendata['args']
+            kwargs = gendata['kwargs']
+            result = generator.generate(*args, **kwargs, namespace=subnamespace, outputDir=outdir)
+            for tensor in result['tensors']:
+                if tensor not in tensors:
+                    tensors[tensor] = []
+                tensors[tensor] += [(subnamespace, template)]
+            for tensor in result['kernels']:
+                if tensor not in kernels:
+                    kernels[tensor] = []
+                kernels[tensor] += [(subnamespace, template)]
+        
+        # TODO: open meta header
+        with Cpp(os.path.join(outputDir, 'tensor.h')) as header:
+            with header.HeaderGuard('METAGEN_TENSOR_H_'):
+                for i, gendata in enumerate(self.generators):
+                    header.include(f'metagen{i}/tensor.h')
+                with header.Namespace(namespace):
+                    for tensor in tensors:
+                        self.template(header, tensor, tensors[tensor], 'tensor')
+        
+        with Cpp(os.path.join(outputDir, 'init.h')) as header:
+            with header.HeaderGuard('METAGEN_INIT_H_'):
+                for i, gendata in enumerate(self.generators):
+                    header.include(f'metagen{i}/init.h')
+                with header.Namespace(namespace):
+                    for tensor in tensors:
+                        self.template(header, tensor, tensors[tensor], 'init')
+        
+        with Cpp(os.path.join(outputDir, 'kernel.h')) as header:
+            with header.HeaderGuard('METAGEN_KERNEL_H_'):
+                for i, gendata in enumerate(self.generators):
+                    header.include(f'metagen{i}/kernel.h')
+                with header.Namespace(namespace):
+                    for kernel in kernels:
+                        self.template(header, kernel, kernels[kernel], 'kernel')
+
+    def template(self, header, prename, foundin, subnsp):
+        splitname = prename.split('::')
+
+        name = '::'.join(splitname[:-1] + [subnsp, splitname[-1]])
+
+        escname = name.replace(':', '_')
+        internalName = f'Internal_{escname}'
+
+        templatetypes = ', '.join(f'{typ} Arg{i}' for i, typ in enumerate(self.templateType))
+        templateargs = ', '.join(f'Arg{i}' for i, _ in enumerate(self.templateType))
+        
+        header(f'template<{templatetypes}> struct internal::{internalName};')
+        for gnsp, spec in foundin:
+            spectext = ', '.join(str(specpart) for specpart in spec)
+            header(f'template<> struct internal::{internalName}<{spectext}> {"{"} using Type = ::{gnsp}::{name}; {"}"};')
+        header(f'template<{templatetypes}> using {name} = typename internal::{internalName}<{templateargs}>::Type;')

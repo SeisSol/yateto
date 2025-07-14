@@ -145,6 +145,8 @@ def getHostArchProperties(name):
     'sve1024': (128, True),
     'sve2048': (256, True),
     'power9': (16, False),
+    'power10': (16, False),
+    'power11': (16, False),
     'rvv128': (16, True),
     'rvv256': (32, True),
     'rvv512': (64, True),
@@ -155,6 +157,8 @@ def getHostArchProperties(name):
     'avx10-128': (16, True),
     'avx10-256': (32, True),
     'avx10-512': (64, True),
+    'lsx': (16, True),
+    'lasx': (32, True),
   }
   if name in arch:
     return arch[name]

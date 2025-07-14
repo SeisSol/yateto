@@ -1,22 +1,7 @@
 import importlib.util
-import pkg_resources
-gb_spec = importlib.util.find_spec('chainforge')
-try:
-  if gb_spec:
-    gb = gb_spec.loader.load_module()
-    version = pkg_resources.get_distribution('chainforge').version
-    if not version == '0.0.3':
-      raise RuntimeError(f'chainforge version 0.0.3 is requried. Found: {version}. Please, update using `pip3`')
-
-    from .external_generator import FusedGemms
-except RuntimeError as err:
-  raise err
-except:
-  raise ('Found chainforge spec but cannot load. Please, check installation of chainforge')
 
 from .tinytc import FusedGemmsTinytc
 from ...gemm_configuration import tinytc
-
 
 class Description(object):
   def __init__(self, node, result, arguments, add, scalar):
@@ -43,12 +28,20 @@ class Description(object):
     except IndexError:
       raise StopIteration
 
+class GBSpec:
+  gb_spec = None
+  @classmethod
+  def load(cls):
+    if cls.gb_spec is None:
+      cls.gb_spec = importlib.util.find_spec('chainforge')
+    return cls.gb_spec
 
 def generator(arch, descr, gemm_cfg, target):
   if target == 'gpu':
       hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
       if hasTinytc:
           return FusedGemmsTinytc(arch, descr)
-      elif gb_spec:
+      elif GBSpec.load():
+          from .external_generator import FusedGemms
           return FusedGemms(arch, descr)
   raise NotImplementedError(f'no implementation found for {target} target')

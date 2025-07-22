@@ -37,7 +37,7 @@ namespace yateto {
       }
     }
     
-    constexpr uint_t dim() const {
+    static constexpr uint_t dim() {
       return Dim;
     }
 
@@ -56,7 +56,7 @@ namespace yateto {
 
     explicit TensorView(uint_t const shape[]) {}
     
-    constexpr uint_t dim() const {
+    static constexpr uint_t dim() {
       return 0;
     }
 

@@ -613,7 +613,7 @@ class InitializerGenerator(object):
     def formatArray(self, numberType, name, values, declarationOnly):
       lhs = '{} {}[]'.format(numberType, name)
       if declarationOnly:
-        return '{} {};'.format(CONSTEXPR, lhs)
+        return ''
       return '{} {} = {};'.format(MODIFIERS, lhs, self.listToInitializerList(values))
   
   class DenseTensorView(TensorView):
@@ -861,7 +861,7 @@ class InitializerGenerator(object):
           ml = next(iter(tensors.values())).memoryLayout()
           tv = self._tensorViewGenerator(ml)
           with cpp.Struct(self.VIEW_STRUCT_NAME):
-            cpp('typedef {} {};'.format(tv.typename(len(ml.shape()), self._arch), self.VIEW_TYPE_NAME))
+            cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch)};')
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, None)
         else:
@@ -876,7 +876,7 @@ class InitializerGenerator(object):
           special = ','.join(str(g) for g in group)
           cpp('template<>')
           with cpp.Struct('{}::{}<{}>'.format(baseNameWithoutNamespace, self.VIEW_STRUCT_NAME, special)):
-            cpp('typedef {} {};'.format(typename, self.VIEW_TYPE_NAME))
+            cpp(f'using {self.VIEW_TYPE_NAME} = {typename};')
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, index(group))
   
@@ -892,7 +892,7 @@ class InitializerGenerator(object):
     arrayIndices = '[{}]'.format(maxLen) if isArray else ''
     if maxLen == 0:
       return
-    
+
     if declarationOnly:
       cpp('{}{} {}{}{};'.format(cexpr, typ, name, groupIndices, arrayIndices))
     else:

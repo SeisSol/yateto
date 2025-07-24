@@ -489,7 +489,36 @@ class UnitTestGenerator(KernelGenerator):
     return '({})'.format(gstr) if gstr else ''
   
   def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
-    device_test = self._arch.backend == 'oneapi' and target == 'gpu'
+    if target == 'gpu':
+      if self._arch.backend in ['oneapi', 'acpp', 'hipsycl']:
+        queue_new = lambda name: cpp(f'auto {name} = new sycl::queue{{sycl::property::queue::in_order()}};')
+        queue_delete = lambda name: cpp(f'delete {name};')
+        queue_wait = lambda name: cpp(f'{name}.wait_and_throw();')
+
+        data_malloc = lambda name, size, datatype, stream: cpp(f'auto {name} = reinterpret_cast<{datatype}>(sycl::malloc_device({size}, {stream}));')
+        data_free = lambda name, stream: cpp(f'sycl::free({name}, {stream});')
+        data_memcpy = lambda dest, src, size, stream: cpp(f'{stream}.memcpy({dest}, {src}, {size});')
+
+        device_test = True
+      elif self._arch.backend in ['cuda', 'hip']:
+        backendprefix = self._arch.backend
+
+        queue_new = lambda name: cpp(f'{backendprefix}Stream_t {name};\n{backendprefix}StreamCreateWithFlags(&{name}, {backendprefix}StreamNonBlocking);')
+        queue_delete = lambda name: cpp(f'{backendprefix}StreamDestroy({name});')
+        queue_wait = lambda name: cpp(f'{backendprefix}StreamSynchronize({name});')
+
+        data_malloc = lambda name, size, datatype, stream: cpp(f'{datatype} {name} = nullptr;\n{backendprefix}Malloc(&{name}, {size});')
+        data_free = lambda name, stream: cpp(f'{backendprefix}Free({name});')
+        data_memcpy = lambda dest, src, size, stream: cpp(f'{backendprefix}MemcpyAsync({dest}, {src}, {size}, {backendprefix}MemcpyDefault, {stream});')
+
+        device_test = True
+      else:
+        # NYI
+        raise NotImplementedError(f'Device testing is not implemented for {self._arch.backend}')
+        device_test = False
+    else:
+      device_test = False
+
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
@@ -499,7 +528,7 @@ class UnitTestGenerator(KernelGenerator):
 
       for i,scalar in enumerate(scalars):
         cpp('{} {} = {};'.format(self._arch.typename, self._tensorNameS(scalar), float(i+2)))
-        
+
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
@@ -538,15 +567,17 @@ class UnitTestGenerator(KernelGenerator):
           writable[bn] = writable.get(bn, False) or var.writable
 
         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
-        cpp ( f'auto {self.QUEUE} = sycl::queue{{sycl::property::queue::in_order()}};' )
-        cpp ( f'auto {self.TMP_MEM} = ({self._arch.typename}*) sycl::malloc_device({self.TMP_SIZE}, {self.QUEUE});' )
-        for var in variables:
-          cpp( f'auto {self._devTensorName(var)} = ({self._arch.typename}*) sycl::malloc_device(sizeof({self._tensorName(var)}), {self.QUEUE});' )
-          cpp( f'auto {self._devPtrTensorName(var)} = ({self._arch.typename}**) sycl::malloc_device(sizeof({self._arch.typename}*), {self.QUEUE});' )
-          cpp( f'{self.QUEUE}.memcpy({self._devTensorName(var)}, {self._tensorName(var)}, sizeof({self._tensorName(var)})).wait();' )
-          cpp( f'{self.QUEUE}.memcpy({self._devPtrTensorName(var)}, &{self._devTensorName(var)}, sizeof({self._arch.typename}*)).wait();' )
-        cpp.emptyline()
 
+        queue_new(self.QUEUE)
+        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{self._arch.typename}*', self.QUEUE)
+        for var in variables:
+          data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{self._arch.typename}*', self.QUEUE)
+          data_malloc(self._devPtrTensorName(var), f'sizeof({self._arch.typename}*)', f'{self._arch.typename}**', self.QUEUE)
+        for var in variables:
+          data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.QUEUE)
+          data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({self._arch.typename}*)', self.QUEUE)
+        queue_wait(self.QUEUE)
+        cpp.emptyline()
 
       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
       for var in scalars:
@@ -557,19 +588,23 @@ class UnitTestGenerator(KernelGenerator):
       if device_test:
         cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
-        cpp( f'{self.KERNEL_VAR}.streamPtr = &{self.QUEUE};' )
+        cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.QUEUE});' )
 
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
       if device_test:
-        cpp( f'{self.QUEUE}.wait();' )
-        cpp( f'sycl::free({self.TMP_MEM}, {self.QUEUE});' )
+        queue_wait(self.QUEUE)
         for var in variables:
           if var.writable:
-            cpp( f'{self.QUEUE}.memcpy({self._tensorName(var)}, {self._devTensorName(var)}, sizeof({self._tensorName(var)})).wait();' )
-          cpp( f'sycl::free({self._devPtrTensorName(var)}, {self.QUEUE});' )
-          cpp( f'sycl::free({self._devTensorName(var)}, {self.QUEUE});' )
+            data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.QUEUE)
+        queue_wait(self.QUEUE)
+        data_free(self.TMP_MEM, self.QUEUE)
+        for var in variables:
+          data_free(self._devPtrTensorName(var), self.QUEUE)
+          data_free(self._devTensorName(var), self.QUEUE)
+        queue_wait(self.QUEUE)
+        queue_delete(self.QUEUE)
         cpp.emptyline()
 
       super().generate(cpp, cfg, factory, None, gemm_cfg)

@@ -15,7 +15,7 @@ class MetaGenerator:
             'kwargs': kwargs
         }]
     
-    def generate(self, outputDir='', namespace='yateto'):
+    def generate(self, outputDir='', namespace='yateto', includes=[]):
         tensors = {}
         kernels = {}
 
@@ -42,6 +42,8 @@ class MetaGenerator:
         # TODO: open meta header
         with Cpp(os.path.join(outputDir, 'tensor.h')) as header:
             with header.HeaderGuard('METAGEN_TENSOR_H_'):
+                for path in includes:
+                    header.include(path)
                 for i, gendata in enumerate(self.generators):
                     header.include(f'metagen{i}/tensor.h')
                 with header.Namespace(namespace):
@@ -50,6 +52,8 @@ class MetaGenerator:
         
         with Cpp(os.path.join(outputDir, 'init.h')) as header:
             with header.HeaderGuard('METAGEN_INIT_H_'):
+                for path in includes:
+                    header.include(path)
                 for i, gendata in enumerate(self.generators):
                     header.include(f'metagen{i}/init.h')
                 with header.Namespace(namespace):
@@ -58,6 +62,8 @@ class MetaGenerator:
         
         with Cpp(os.path.join(outputDir, 'kernel.h')) as header:
             with header.HeaderGuard('METAGEN_KERNEL_H_'):
+                for path in includes:
+                    header.include(path)
                 for i, gendata in enumerate(self.generators):
                     header.include(f'metagen{i}/kernel.h')
                 with header.Namespace(namespace):
@@ -75,6 +81,10 @@ class MetaGenerator:
         with Cpp(os.path.join(outputDir, 'kernel.cpp')) as header:
             for i, gendata in enumerate(self.generators):
                 header.include(f'metagen{i}/kernel.cpp')
+        
+        with Cpp(os.path.join(outputDir, 'test-kernels.cpp')) as header:
+            for i, gendata in enumerate(self.generators):
+                header.include(f'metagen{i}/test-kernels.cpp')
         
     def namespacing(self, header, spaces, inner):
         if len(spaces) == 0:

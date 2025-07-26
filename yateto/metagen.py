@@ -63,20 +63,43 @@ class MetaGenerator:
                 with header.Namespace(namespace):
                     for kernel in kernels:
                         self.template(header, kernel, kernels[kernel], 'kernel')
+        
+        with Cpp(os.path.join(outputDir, 'tensor.cpp')) as header:
+            for i, gendata in enumerate(self.generators):
+                header.include(f'metagen{i}/tensor.cpp')
+        
+        with Cpp(os.path.join(outputDir, 'init.cpp')) as header:
+            for i, gendata in enumerate(self.generators):
+                header.include(f'metagen{i}/init.cpp')
+        
+        with Cpp(os.path.join(outputDir, 'kernel.cpp')) as header:
+            for i, gendata in enumerate(self.generators):
+                header.include(f'metagen{i}/kernel.cpp')
+        
+    def namespacing(self, header, spaces, inner):
+        if len(spaces) == 0:
+            inner()
+        else:
+            with header.Namespace(spaces[0]):
+                self.namespacing(header, spaces[1:], inner)
 
     def template(self, header, prename, foundin, subnsp):
         splitname = prename.split('::')
 
-        name = '::'.join(splitname[:-1] + [subnsp, splitname[-1]])
+        def inner():
+            name = splitname[-1]
+            fullname = '::'.join(splitname[:-1] + [subnsp, splitname[-1]])
+            escname = name.replace(':', '_')
+            internalName = f'Internal_{escname}'
 
-        escname = name.replace(':', '_')
-        internalName = f'Internal_{escname}'
-
-        templatetypes = ', '.join(f'{typ} Arg{i}' for i, typ in enumerate(self.templateType))
-        templateargs = ', '.join(f'Arg{i}' for i, _ in enumerate(self.templateType))
+            templatetypes = ', '.join(f'{typ} Arg{i}' for i, typ in enumerate(self.templateType))
+            templateargs = ', '.join(f'Arg{i}' for i, _ in enumerate(self.templateType))
+            
+            with header.Namespace('internal'):
+                header(f'template<{templatetypes}> struct {internalName};')
+                for gnsp, spec in foundin:
+                    spectext = ', '.join(str(specpart) for specpart in spec)
+                    header(f'template<> struct {internalName}<{spectext}> {"{"} using Type = ::{gnsp}::{fullname}; {"}"};')
+            header(f'template<{templatetypes}> using {name} = typename internal::{internalName}<{templateargs}>::Type;')
         
-        header(f'template<{templatetypes}> struct internal::{internalName};')
-        for gnsp, spec in foundin:
-            spectext = ', '.join(str(specpart) for specpart in spec)
-            header(f'template<> struct internal::{internalName}<{spectext}> {"{"} using Type = ::{gnsp}::{name}; {"}"};')
-        header(f'template<{templatetypes}> using {name} = typename internal::{internalName}<{templateargs}>::Type;')
+        self.namespacing(header, splitname[:-1] + [subnsp], inner)

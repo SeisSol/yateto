@@ -795,6 +795,12 @@ class InitializerGenerator(object):
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._init(header, base_name, base_name_without_namespace, '', tensors, False)
+    for namespace, scalar_dict in self.iterate_collect_scalar():
+      with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
+        for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
+          with header.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):
+            # empty forward declaration
+            pass
 
   def generateInitCpp(self, cpp):
     for namespace, tensor_dict in self.iterate_collect():

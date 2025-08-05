@@ -15,9 +15,14 @@ class MetaGenerator:
             'kwargs': kwargs
         }]
     
-    def generate(self, outputDir='', namespace='yateto', includes=[]):
+    def generate(self, outputDir='', namespace='yateto', includes=[], declarationsTensors=[], declarationsKernels=[]):
         tensors = {}
         kernels = {}
+
+        for tensor in declarationsTensors:
+            tensors[tensor] = []
+        for tensor in declarationsKernels:
+            kernels[tensor] = []
 
         namespacepfx = 'yatetometagen'
         for i, gendata in enumerate(self.generators):
@@ -30,6 +35,7 @@ class MetaGenerator:
             args = gendata['args']
             kwargs = gendata['kwargs']
             result = generator.generate(*args, **kwargs, namespace=subnamespace, outputDir=outdir)
+
             for tensor in result['tensors']:
                 if tensor not in tensors:
                     tensors[tensor] = []
@@ -106,7 +112,7 @@ class MetaGenerator:
             templateargs = ', '.join(f'Arg{i}' for i, _ in enumerate(self.templateType))
             
             with header.Namespace('internal'):
-                header(f'template<{templatetypes}> struct {internalName};')
+                header(f'template<{templatetypes}> struct {internalName} {"{"} using Type = void; {"}"};')
                 for gnsp, spec in foundin:
                     spectext = ', '.join(str(specpart) for specpart in spec)
                     header(f'template<> struct {internalName}<{spectext}> {"{"} using Type = ::{gnsp}::{fullname}; {"}"};')

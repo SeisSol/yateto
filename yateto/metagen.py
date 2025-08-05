@@ -1,4 +1,6 @@
+from .arch import fixArchitectureGlobal
 from .codegen.code import Cpp
+
 import os
 
 class MetaGenerator:
@@ -34,6 +36,8 @@ class MetaGenerator:
             template = gendata['template']
             args = gendata['args']
             kwargs = gendata['kwargs']
+
+            fixArchitectureGlobal(generator._arch)
             result = generator.generate(*args, **kwargs, namespace=subnamespace, outputDir=outdir)
 
             for tensor in result['tensors']:

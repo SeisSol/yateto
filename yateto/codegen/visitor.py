@@ -416,7 +416,7 @@ class OptimizedKernelGenerator(KernelGenerator):
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
-  QUEUE = '_queue'
+  STREAM = '_stream'
   TMP_MEM = '_tmpMem'
   TMP_SIZE = 128 * 8
   
@@ -491,9 +491,11 @@ class UnitTestGenerator(KernelGenerator):
   def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
     if target == 'gpu':
       if self._arch.backend in ['oneapi', 'acpp', 'hipsycl']:
-        queue_new = lambda name: cpp(f'auto {name} = new sycl::queue{{sycl::property::queue::in_order()}};')
-        queue_delete = lambda name: cpp(f'delete {name};')
-        queue_wait = lambda name: cpp(f'{name}.wait_and_throw();')
+        # (name queue_op "stream_op" for consistency with the existing C++ interface)
+
+        stream_new = lambda name: cpp(f'auto {name} = new sycl::queue{{sycl::property::queue::in_order()}};')
+        stream_delete = lambda name: cpp(f'delete {name};')
+        stream_wait = lambda name: cpp(f'{name}.wait_and_throw();')
 
         data_malloc = lambda name, size, datatype, stream: cpp(f'auto {name} = reinterpret_cast<{datatype}>(sycl::malloc_device({size}, {stream}));')
         data_free = lambda name, stream: cpp(f'sycl::free({name}, {stream});')
@@ -503,9 +505,9 @@ class UnitTestGenerator(KernelGenerator):
       elif self._arch.backend in ['cuda', 'hip']:
         backendprefix = self._arch.backend
 
-        queue_new = lambda name: cpp(f'{backendprefix}Stream_t {name};\n{backendprefix}StreamCreateWithFlags(&{name}, {backendprefix}StreamNonBlocking);')
-        queue_delete = lambda name: cpp(f'{backendprefix}StreamDestroy({name});')
-        queue_wait = lambda name: cpp(f'{backendprefix}StreamSynchronize({name});')
+        stream_new = lambda name: cpp(f'{backendprefix}Stream_t {name};\n{backendprefix}StreamCreateWithFlags(&{name}, {backendprefix}StreamNonBlocking);')
+        stream_delete = lambda name: cpp(f'{backendprefix}StreamDestroy({name});')
+        stream_wait = lambda name: cpp(f'{backendprefix}StreamSynchronize({name});')
 
         data_malloc = lambda name, size, datatype, stream: cpp(f'{datatype} {name} = nullptr;\n{backendprefix}Malloc(&{name}, {size});')
         data_free = lambda name, stream: cpp(f'{backendprefix}Free({name});')
@@ -568,15 +570,15 @@ class UnitTestGenerator(KernelGenerator):
 
         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
 
-        queue_new(self.QUEUE)
-        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{self._arch.typename}*', self.QUEUE)
+        stream_new(self.STREAM)
+        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{self._arch.typename}*', self.STREAM)
         for var in variables:
-          data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{self._arch.typename}*', self.QUEUE)
-          data_malloc(self._devPtrTensorName(var), f'sizeof({self._arch.typename}*)', f'{self._arch.typename}**', self.QUEUE)
+          data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{self._arch.typename}*', self.STREAM)
+          data_malloc(self._devPtrTensorName(var), f'sizeof({self._arch.typename}*)', f'{self._arch.typename}**', self.STREAM)
         for var in variables:
-          data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.QUEUE)
-          data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({self._arch.typename}*)', self.QUEUE)
-        queue_wait(self.QUEUE)
+          data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+          data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({self._arch.typename}*)', self.STREAM)
+        stream_wait(self.STREAM)
         cpp.emptyline()
 
       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
@@ -588,23 +590,23 @@ class UnitTestGenerator(KernelGenerator):
       if device_test:
         cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
-        cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.QUEUE});' )
+        cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
 
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
 
       if device_test:
-        queue_wait(self.QUEUE)
+        stream_wait(self.STREAM)
         for var in variables:
           if var.writable:
-            data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.QUEUE)
-        queue_wait(self.QUEUE)
-        data_free(self.TMP_MEM, self.QUEUE)
+            data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+        stream_wait(self.STREAM)
+        data_free(self.TMP_MEM, self.STREAM)
         for var in variables:
-          data_free(self._devPtrTensorName(var), self.QUEUE)
-          data_free(self._devTensorName(var), self.QUEUE)
-        queue_wait(self.QUEUE)
-        queue_delete(self.QUEUE)
+          data_free(self._devPtrTensorName(var), self.STREAM)
+          data_free(self._devTensorName(var), self.STREAM)
+        stream_wait(self.STREAM)
+        stream_delete(self.STREAM)
         cpp.emptyline()
 
       super().generate(cpp, cfg, factory, None, gemm_cfg)

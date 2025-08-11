@@ -80,6 +80,6 @@ class Doctest(TestFramework):
     def generate(self, cpp, namespace, kernelsInclude, initInclude, body):
         super().generate(cpp, namespace, kernelsInclude, initInclude, body)
         cpp.include('doctest.h')
-        cpp('using namespace {};'.format(namespace))
-        with cpp.Function(name='TEST_CASE', arguments='"{}"'.format(self.TEST_CASE), returnType=''):
+        with cpp.Function(name='TEST_CASE', arguments=f'"{self.TEST_CASE} for \\"{namespace}\\""', returnType=''):
+            cpp(f'using namespace {namespace};')
             body(cpp, self)

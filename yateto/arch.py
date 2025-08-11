@@ -38,6 +38,9 @@
 #
 
 from .memory import DenseMemoryLayout
+from collections import namedtuple
+from typing import Union
+import re
 
 class Architecture(object):
   def __init__(self,
@@ -120,51 +123,62 @@ class Architecture(object):
     elif self.backend in ['oneapi', 'hipsycl', 'acpp']:
       return ['sycl/sycl.hpp']
 
+
 def _get_name_and_precision(ident):
   return ident[1:], ident[0].upper()
 
+def getHostArchProperties(name):
+  arch = {
+    'noarch': (16, False),
+    'wsm': (16, False),
+    'snb': (32, False),
+    'hsw': (32, True),
+    'skx': (64, True),
+    'knc': (64, False),
+    'knl': (64, True),
+    'naples': (32, True),
+    'rome': (32, True),
+    'milan': (32, True),
+    'bergamo': (64, True),
+    'turin': (64, True),
+    'thunderx2t99': (16, True),
+    'a64fx': (64, True),
+    'neon': (16, True),
+    'apple-m1': (16, True),
+    'apple-m2': (16, True),
+    'apple-m3': (16, True),
+    'apple-m4': (16, True),
+    'sve128': (16, True),
+    'sve256': (32, True),
+    'sve512': (64, True),
+    'sve1024': (128, True),
+    'sve2048': (256, True),
+    'power9': (16, False),
+    'power10': (16, False),
+    'power11': (16, False),
+    'rvv128': (16, True),
+    'rvv256': (32, True),
+    'rvv512': (64, True),
+    'rvv1024': (128, True),
+    'rvv2048': (256, True),
+    'avx2-128': (16, True),
+    'avx2-256': (32, True),
+    'avx10-128': (16, True),
+    'avx10-256': (32, True),
+    'avx10-512': (64, True),
+    'lsx': (16, True),
+    'lasx': (32, True),
+  }
+  if name in arch:
+    return arch[name]
+  else:
+    return (None, None)
 
 def getArchitectureIdentifiedBy(ident):
   name, precision = _get_name_and_precision(ident)
 
-  arch = {
-    'noarch': Architecture(name, precision, 16, False),
-    'wsm': Architecture(name, precision, 16, False),
-    'snb': Architecture(name, precision, 32, False),
-    'hsw': Architecture(name, precision, 32, True),
-    'skx': Architecture(name, precision, 64, True),
-    'knc': Architecture(name, precision, 64, False),
-    'knl': Architecture(name, precision, 64, True),
-    'naples': Architecture(name, precision, 32, True),
-    'rome': Architecture(name, precision, 32, True),
-    'milan': Architecture(name, precision, 32, True),
-    'bergamo': Architecture(name, precision, 64, True),
-    'turin': Architecture(name, precision, 64, True),
-    'thunderx2t99': Architecture(name, precision, 16, True),
-    'a64fx': Architecture(name, precision, 64, True),
-    'neon': Architecture(name, precision, 16, True),
-    'apple-m1': Architecture(name, precision, 16, True),
-    'apple-m2': Architecture(name, precision, 16, True),
-    'apple-m3': Architecture(name, precision, 16, True),
-    'apple-m4': Architecture(name, precision, 16, True),
-    'sve128': Architecture(name, precision, 16, True),
-    'sve256': Architecture(name, precision, 32, True),
-    'sve512': Architecture(name, precision, 64, True),
-    'sve1024': Architecture(name, precision, 128, True),
-    'sve2048': Architecture(name, precision, 256, True),
-    'power9': Architecture(name, precision, 16, False),
-    'rvv128': Architecture(name, precision, 16, True),
-    'rvv256': Architecture(name, precision, 32, True),
-    'rvv512': Architecture(name, precision, 64, True),
-    'rvv1024': Architecture(name, precision, 128, True),
-    'rvv2048': Architecture(name, precision, 256, True),
-    'avx2-128': Architecture(name, precision, 16, True),
-    'avx2-256': Architecture(name, precision, 32, True),
-    'avx10-128': Architecture(name, precision, 16, True),
-    'avx10-256': Architecture(name, precision, 32, True),
-    'avx10-512': Architecture(name, precision, 64, True),
-  }
-  return arch[name]
+  alignment, prefetch = getHostArchProperties(name)
+  return Architecture(name, precision, alignment, prefetch)
 
 
 def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_backend):
@@ -175,14 +189,15 @@ def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_back
     raise ValueError(f'Precision of host and compute arch. must be the same. '
                      f'Given: {host_arch}, {device_arch}')
 
-  if 'sm_' in device_arch:
+  if device_arch.startswith('sm_'):
     alignment = 64
-  elif 'gfx' in device_arch: 
+  elif device_arch.startswith('gfx'): 
     alignment = 128
-  elif device_arch in ['dg1', 'bdw', 'skl', 'Gen8', 'Gen9', 'Gen11', 'Gen12LP', 'pvc']:
+  elif re.match(r"\d+_\d+_\d+", device_arch):
     alignment = 32
   else:
-    raise ValueError(f'Unknown device arch: {device_arch}')
+    print(f'Unknown device arch: {device_arch}. Setting alignment to 32.')
+    alignment = 32
 
   return Architecture(device_arch, device_precision, alignment, False, device_backend, host_name)
 
@@ -199,3 +214,41 @@ def useArchitectureIdentifiedBy(host_arch, device_arch=None, device_backend=None
 
   DenseMemoryLayout.setAlignmentArch(arch)
   return arch
+
+HostArchDefinition = namedtuple('HostArchDefinition', 'archname precision alignment prefetch')
+DeviceArchDefinition = namedtuple('DeviceArchDefinition', 'archname vendor backend precision alignment')
+
+def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArchDefinition, None]):
+  alignment, prefetch = getHostArchProperties(host_def.archname)
+
+  if host_def.alignment is not None:
+    alignment = host_def.alignment
+  if host_def.prefetch is not None:
+    prefetch = host_def.prefetch
+  
+  if alignment is None:
+    raise NotImplementedError(f'The architecture {host_def.archname} is unknown to Yateto, and no custom alignment was given')
+  
+  if prefetch is None:
+    raise NotImplementedError(f'The architecture {host_def.archname} is unknown to Yateto, and no custom prefetching info was given')
+
+  if device_def is not None:
+    assert host_def.precision == device_def.precision
+    alignment = device_def.alignment
+    if alignment is None:
+      if device_def.vendor == 'nvidia':
+        alignment = 64
+      elif device_def.vendor == 'amd':
+        alignment = 128
+      elif device_def.vendor == 'intel':
+        alignment = 32
+      else:
+        print(f'Unknown device vendor: {device_def.vendor}. Setting alignment to 32.')
+        alignment = 32
+
+    return Architecture(device_def.archname, device_def.precision, alignment, False, device_def.backend, host_def.archname)
+  else:
+    return Architecture(host_def.archname, host_def.precision, alignment, prefetch)
+
+def fixArchitectureGlobal(arch):
+  DenseMemoryLayout.setAlignmentArch(arch)

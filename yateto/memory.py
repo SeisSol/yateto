@@ -347,7 +347,7 @@ class CSCMemoryLayout(MemoryLayout):
     comp = self.fromSpp(spp, alignStride=self.aligned)
 
     bboxOk = comp._bbox in self._bbox
-    sppOk = comp.entries(comp._bbox[0], comp._bbox[1]) == self.entries(comp._bbox[0], comp._bbox[1])
+    sppOk = set(comp.entries(comp._bbox[0], comp._bbox[1])).issubset(set(self.entries(comp._bbox[0], comp._bbox[1])))
 
     # TODO: also check CSC compatibility?
     # rowIndexOk = np.array_equal(self._rowIndex[:len(comp._rowIndex)], comp._rowIndex)

@@ -495,11 +495,11 @@ class UnitTestGenerator(KernelGenerator):
 
         stream_new = lambda name: cpp(f'auto {name} = new sycl::queue{{sycl::property::queue::in_order()}};')
         stream_delete = lambda name: cpp(f'delete {name};')
-        stream_wait = lambda name: cpp(f'{name}.wait_and_throw();')
+        stream_wait = lambda name: cpp(f'{name}->wait_and_throw();')
 
-        data_malloc = lambda name, size, datatype, stream: cpp(f'auto {name} = reinterpret_cast<{datatype}>(sycl::malloc_device({size}, {stream}));')
-        data_free = lambda name, stream: cpp(f'sycl::free({name}, {stream});')
-        data_memcpy = lambda dest, src, size, stream: cpp(f'{stream}.memcpy({dest}, {src}, {size});')
+        data_malloc = lambda name, size, datatype, stream: cpp(f'auto {name} = reinterpret_cast<{datatype}>(sycl::malloc_device({size}, *{stream}));')
+        data_free = lambda name, stream: cpp(f'sycl::free({name}, *{stream});')
+        data_memcpy = lambda dest, src, size, stream: cpp(f'{stream}->memcpy({dest}, {src}, {size});')
 
         device_test = True
       elif self._arch.backend in ['cuda', 'hip']:

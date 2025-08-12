@@ -247,16 +247,16 @@ class DenseMemoryLayout(MemoryLayout):
     return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)
 
 class CSCMemoryLayout(MemoryLayout):
-  def __init__(self, spp, aligned=False):
+  def __init__(self, spp, alignStride=False):
     super().__init__(spp.shape)
 
-    self.aligned = aligned
+    self.aligned = alignStride
     
     if len(self._shape) != 2:
       raise ValueError('CSCMemoryLayout may only be used for matrices.')
 
     self._bbox = BoundingBox.fromSpp(spp)
-    if aligned:
+    if self.aligned:
       range0 = self._bbox[0]
       rnew = Range( DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(range0.start), DenseMemoryLayout.ALIGNMENT_ARCH.alignedUpper(range0.stop) )
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
@@ -264,7 +264,7 @@ class CSCMemoryLayout(MemoryLayout):
     nonzeros = spp.nonzero()
     nonzeros = sorted(zip(nonzeros[0], nonzeros[1]), key=lambda x: (x[1], x[0]))
 
-    if aligned:
+    if self.aligned:
       nonzeros_pre = set(nonzeros)
       for nonzero in nonzeros:
         lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
@@ -338,13 +338,22 @@ class CSCMemoryLayout(MemoryLayout):
 
   @classmethod
   def fromSpp(cls, spp, **kwargs):
-    return CSCMemoryLayout(spp)
+    return CSCMemoryLayout(spp, **kwargs)
 
   def __contains__(self, entry):
     return entry in self._bbox
 
   def isCompatible(self, spp):
-    return self.fromSpp(spp) == self
+    comp = self.fromSpp(spp, alignStride=self.aligned)
+
+    bboxOk = comp._bbox in self._bbox
+    sppOk = set(comp.entries(comp._bbox[0], comp._bbox[1])).issubset(set(self.entries(comp._bbox[0], comp._bbox[1])))
+
+    # TODO: also check CSC compatibility?
+    # rowIndexOk = np.array_equal(self._rowIndex[:len(comp._rowIndex)], comp._rowIndex)
+    # colPtrOk = np.array_equal(self._colPtr[comp._bbox[1].start:comp._bbox[1].stop], comp._colPtr[comp._bbox[1].start:comp._bbox[1].stop])
+
+    return bboxOk and sppOk
 
   def __eq__(self, other):
     return self._bbox == other._bbox and np.array_equal(self._rowIndex, other._rowIndex) and np.array_equal(self._colPtr, other._colPtr)
@@ -352,4 +361,4 @@ class CSCMemoryLayout(MemoryLayout):
 class AlignedCSCMemoryLayout:
   @classmethod
   def fromSpp(cls, spp, **kwargs):
-    return CSCMemoryLayout(spp, aligned=True)
+    return CSCMemoryLayout(spp, alignStride=True)

@@ -34,7 +34,14 @@ class SubstituteForward(object):
     for i in range(n):
       ua = cfg[i].action
       v = cfg[i+1]
-      if not ua.isCompound() and ua.isRHSVariable() and ua.term.writable and ua.result.isLocal() and (ua.term, ua.condition) not in v.live:
+
+      if not ua.isCompound() \
+          and ua.isRHSVariable() \
+          and ua.term.writable \
+          and ua.result.isLocal() \
+          and (ua.term, ua.condition) not in v.live \
+          and (ua.hasTrivialScalar() or ua.term.isLocal()):
+
         when = ua.result
         by = ua.term
         maySubs = all([cfg[j].action.maySubstitute(when, by) for j in range(i, n)])
@@ -42,6 +49,7 @@ class SubstituteForward(object):
           for j in range(i, n):
             cfg[j].action = cfg[j].action.substituted(when, by)
           cfg = LivenessAnalysis().visit(cfg)
+  
     return cfg
 
 class SubstituteBackward(object):

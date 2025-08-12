@@ -9,20 +9,6 @@ from .indices import LoGCost
 from .log import LoG
 from functools import reduce
 
-# Optional modules
-import importlib.util
-mplSpec = importlib.util.find_spec('matplotlib')
-pltSpec = importlib.util.find_spec('matplotlib.pylab') if mplSpec else None
-colorsSpec = importlib.util.find_spec('matplotlib.colors') if mplSpec else None
-try:
-  if pltSpec:
-    plt = pltSpec.loader.load_module()
-except:
-  print('An exception occured trying to load matplotlib. This can be ignored in most cases')
-  plt = None
-if colorsSpec:
-  colors = colorsSpec.loader.load_module()
-
 # Similar as ast.NodeVisitor
 class Visitor(object):
   def visit(self, node, **kwargs):
@@ -208,12 +194,37 @@ class FindIndexPermutations(Visitor):
     return permutationVariants
 
 class PrintEquivalentSparsityPatterns(Visitor):
+  colors = None
+  plt = None
+  pltSpec = None
+  colorsSpec = None
+  mpl_load_attempt = False
+
+  @classmethod
+  def load_mpl(cls):
+    if not cls.mpl_load_attempt:
+      # Optional modules
+      import importlib.util
+      mplSpec = importlib.util.find_spec('matplotlib')
+      pltSpec = importlib.util.find_spec('matplotlib.pylab') if mplSpec else None
+      colorsSpec = importlib.util.find_spec('matplotlib.colors') if mplSpec else None
+      try:
+        if pltSpec:
+          cls.plt = pltSpec.loader.load_module()
+      except:
+        print('An exception occured trying to load matplotlib. This can be ignored in most cases')
+        cls.plt = None
+      if colorsSpec:
+        cls.colors = colorsSpec.loader.load_module()
+      cls.mpl_load_attempt = True
+
   def __init__(self, directory):
-    if not (pltSpec and colorsSpec):
+    self.load_mpl()
+    if not (self.pltSpec and self.colorsSpec):
       raise NotImplementedError('Missing modules matplotlib')
     self._directory = directory
-    self._cmap = colors.ListedColormap(['white', 'black'])
-    self._norm = colors.BoundaryNorm([0.0, 0.5, 1.0], 2, clip=True)
+    self._cmap = self.colors.ListedColormap(['white', 'black'])
+    self._norm = self.colors.BoundaryNorm([0.0, 0.5, 1.0], 2, clip=True)
   
   def generic_visit(self, node):
     nameFun = getattr(node, 'name', None)
@@ -244,7 +255,7 @@ class PrintEquivalentSparsityPatterns(Visitor):
       nSubplots *= eqspp.shape[dim]
     nrows = math.ceil(math.sqrt(nSubplots))
     ncols = math.ceil(nSubplots / nrows)
-    fig, axs = plt.subplots(nrows, ncols)
+    fig, axs = self.plt.subplots(nrows, ncols)
     if ncols > 1:
       axs = [y for x in axs for y in x]
     if nSubplots == 1:
@@ -256,10 +267,10 @@ class PrintEquivalentSparsityPatterns(Visitor):
         axs[nSubplot].imshow(sl.astype(bool), cmap=self._cmap, norm=self._norm)
         axs[nSubplot].set_title('(:,:,{})'.format(','.join(str(i) for i in index)), y=1.2)
         nSubplot = nSubplot + 1
-    #plt.setp(axs, xticks=arange(eqspp.shape[1]), yticks=arange(eqspp.shape[0]))
+    # self.plt.setp(axs, xticks=arange(eqspp.shape[1]), yticks=arange(eqspp.shape[0]))
     fig.tight_layout()
     fig.savefig(fileName, bbox_inches='tight')
-    plt.close()
+    self.plt.close()
     self._directory = baseDirectory
 
 

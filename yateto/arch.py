@@ -114,6 +114,15 @@ class Architecture(object):
   def __eq__(self, other):
     return self.name == other.name
 
+  def headers(self):
+    if self.backend in ['cpp', 'cuda']:
+      return []
+    elif self.backend in ['hip']:
+      return ['hip/hip_runtime.h']
+    elif self.backend in ['oneapi', 'hipsycl', 'acpp']:
+      return ['sycl/sycl.hpp']
+
+
 def _get_name_and_precision(ident):
   return ident[1:], ident[0].upper()
 

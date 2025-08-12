@@ -584,7 +584,7 @@ class UnitTestGenerator(KernelGenerator):
         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
 
         stream_new(self.STREAM)
-        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{char}*', self.STREAM)
+        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'char*', self.STREAM)
         for var in variables:
           data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
           data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from .. import aspp
+from ..type import AddressingMode
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
 from .tiny_tensor_language import Dump, Function, IntegerType, MemrefType, GroupType, IntImmValue, DYNAMIC, SubviewInst, LoadInst

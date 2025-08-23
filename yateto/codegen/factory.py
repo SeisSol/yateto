@@ -4,7 +4,7 @@ from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
 from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise
-from ..type import Datatype
+from ..type import Datatype, AddressingMode, Scalar
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -341,7 +341,7 @@ class UnitTestFactory(KernelFactory):
       nz = spp.nonzero()
       for entry in zip(*nz):
         addr = ml.address(entry)
-        memory[addr] = str(float((addr + self._rand) % maxValue)+1.0)
+        memory[addr] = datatype.literal(((addr + self._rand) % maxValue)+1.0)
       self.temporary(resultName, size, datatype, memory=memory)
     self._rand += 1
 
@@ -360,6 +360,9 @@ class ExportGenerator:
   def add_operation(self, description):
     pass
 
+  def add_tensor(self, description):
+    pass
+
 class ExportFactory(KernelFactory):
   @classmethod
   def makeFactory(cls, generator):
@@ -368,6 +371,8 @@ class ExportFactory(KernelFactory):
   def __init__(self, generator, cpp, arch, target):
     super().__init__(cpp, arch, target)
     self.generator = generator
+    self.tensors = {}
+    self.scalarcounter = 0
   
   def post_generate(self, routine_cache):
     self.generator.generate(self._cpp, routine_cache)
@@ -375,46 +380,174 @@ class ExportFactory(KernelFactory):
   def allocateTemporary(self):
     return False
   
+  def _nodeTensor(self, tensor, node):
+    return self._handleTensorDesc(IndexedTensorDescription.fromNode(tensor, node))
+
+  def _varTensor(self, var, indices):
+    return self._handleTensorDesc(IndexedTensorDescription.fromVar(var, indices))
+  
+  def _handleAddressing(self, desc):
+    if desc.addressing is None:
+      addressing = BatchedOperationsAux.deduce_addresing(desc)
+    else:
+      addressing = desc.addressing
+
+    # & == deref
+    # n == current element
+    # N == element size
+    # o == extraOffset
+    # *,+ == default add and mul
+    # read left to right
+    if addressing == AddressingMode.DIRECT:
+      return '&'
+    elif addressing == AddressingMode.STRIDED:
+      return 'n*N+o&'
+    elif addressing == AddressingMode.INDIRECT:
+      return 'n&+o&'
+    elif addressing == AddressingMode.SCALAR:
+      return ''
+
+    raise NotImplementedError(addressing)
+
+  def _handleTensorDesc(self, tensorIndexed: IndexedTensorDescription):
+    if isinstance(tensorIndexed.memoryLayout, DenseMemoryLayout):
+      shape = list(tensorIndexed.memoryLayout.shape())
+      shapeXt = [max(rng.stop - rng.start, shp) for rng, shp in zip(tensorIndexed.memoryLayout.bbox(), shape)]
+      storage = {
+        'shape': shapeXt,
+        'type': 'bbox',
+        'start': [rng.start for rng in tensorIndexed.memoryLayout.bbox()],
+        'sizes': [rng.stop - rng.start for rng in tensorIndexed.memoryLayout.bbox()]
+      }
+    else:
+      assert False
+    
+    eqsppnz = tensorIndexed.eqspp.nonzero()
+    spp = [elem for elem in zip(*eqsppnz)]
+
+    values = None if tensorIndexed.values is None else list(tensorIndexed.values)
+
+    tensor = {
+      'name': tensorIndexed.name,
+      'addressing': self._handleAddressing(tensorIndexed),
+      #'eqspp': spp,
+      'datatype': str(tensorIndexed.datatype),
+      'storage': storage,
+      'values': values,
+      'flags': {
+        'temporary': tensorIndexed.is_temporary,
+        'constant': tensorIndexed.is_compute_constant
+      }
+    }
+
+    return self._handleTensor(tensor, spp, tensorIndexed.indices)
+
+  def _scalarTensor(self, scalar):
+    if isinstance(scalar, (int, float)): # TODO numpy types
+      name = f'_scalar{self.scalarcounter}'
+      self.scalarcounter += 1
+
+      tensor = {
+        'name': name,
+        'addressing': '',
+        'eqspp': (),
+        'datatype': str(self._arch.datatype),
+        'storage': {
+          'shape': (),
+          'type': 'full'
+        },
+        'values': {
+          (): scalar
+        },
+        'flags': {
+          'temporary': False,
+          'constant': True
+        }
+      }
+    elif isinstance(scalar, Scalar):
+      tensor = {
+        'name': scalar.name(),
+        'addressing': '',
+        'eqspp': (),
+        'datatype': str(scalar.getDatatype(self._arch)),
+        'storage': {
+          'shape': (),
+          'type': 'full'
+        },
+        'values': None,
+        'flags': {
+          'temporary': False,
+          'constant': True
+        }
+      }
+    else:
+      assert False
+
+    return self._handleTensor(tensor, (), ())
+
+  def _handleTensor(self, tensor, eqspp, indices):
+    if tensor['name'] not in self.tensors:
+      self.tensors[tensor['name']] = tensor
+      self.generator.add_tensor(tensor)
+    else:
+      assert tensor == self.tensors[tensor['name']]
+    
+    return {
+      'name': tensor['name'],
+      'spp': eqspp,
+      'indices': indices
+    }
+  
+  def _handleCondition(self, condition):
+    out = []
+    for clause in condition.clauses:
+      outclause = []
+      for var in clause.variables:
+        tensor = self._varTensor(clause.variables[var], ())
+        outclause += [tensor]
+      out += [outclause]
+    return out
+
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    result = IndexedTensorDescription.fromNode(result, node)
-    preArgs = [IndexedTensorDescription.fromNode(argument, term) for argument, term in zip(arguments, node)]
+    result = self._nodeTensor(result, node)
+    preArgs = [self._nodeTensor(argument, term) for argument, term in zip(arguments, node)]
     args = node.fillTerms(preArgs)
 
     description = {
       'type': 'elementwise',
       'result': result,
       'args': args,
+      'condition': self._handleCondition(condition),
       'linear': {
-        'alpha': scalar,
+        'alpha': self._scalarTensor(scalar),
         'add': add,
       },
-      'optype': node.optype
+      'optype': str(node.optype)
     }
     return self.generator.add_operation(description)
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
-    makeNode = IndexedTensorDescription.fromNode
-    result = makeNode(result, node)
-    argnodes = [makeNode(arguments[0], node.term())]
+    result = self._nodeTensor(result, node)
+    argnodes = [self._nodeTensor(arguments[0], node.term())]
 
     description = {
       'type': 'reduction',
       'result': result,
       'args': argnodes,
+      'condition': self._handleCondition(condition),
       'linear': {
-        'alpha': scalar,
+        'alpha': self._scalarTensor(scalar),
         'add': add,
       },
-      'optype': node.optype
+      'optype': str(node.optype)
     }
     return self.generator.add_operation(description)
 
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
-    makeNode = IndexedTensorDescription.fromNode
-    argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
-    return self.handleLinear(makeNode(result, node), argnodes, add, scalar, node.transA(), node.transB())
+    argnodes = [self._nodeTensor(arguments[0], node.leftTerm()), self._nodeTensor(arguments[1], node.rightTerm())]
+    return self.handleLinear(self._nodeTensor(result, node), argnodes, condition, add, scalar, node.transA(), node.transB())
   
   def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     return create_Reduction(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
@@ -424,39 +557,52 @@ class ExportFactory(KernelFactory):
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
-    return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices), [IndexedTensorDescription.fromVar(term, node.term().indices)], add, scalar, False, False)
+    return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar, False, False)
   
   def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
-    return self.handleLinear(IndexedTensorDescription.fromVar(result, self._indices(result)), [IndexedTensorDescription.fromVar(term, self._indices(term))], add, scalar, False, False)
+    return self.handleLinear(self._varTensor(result, self._indices(result)), [self._varTensor(term, self._indices(term))], condition, add, scalar, False, False)
 
   def getIndices(self, dest, ops):
     if dest is None:
       target_indices = []
     else:
-      target_indices = dest.indices
+      target_indices = dest['indices']
 
     indexindex = {index:i for i, index in enumerate(target_indices)}
     contract_counter = -1
 
     for op in ops:
-      for index in op.indices:
+      for index in op['indices']:
         if index not in indexindex:
           indexindex[index] = contract_counter
           contract_counter -= 1
 
-    target = [[indexindex[index] for index in op.indices] for op in ops]
-    permute = [[i for i,_ in enumerate(op.indices)] for op in ops]
+    target = [[indexindex[index] for index in op['indices']] for op in ops]
+    permute = [[i for i,_ in enumerate(op['indices'])] for op in ops]
 
     return target, permute
 
-  def handleLinear(self, dest, ops, add, scalar, transposeA, transposeB):
+  def handleLinear(self, dest, ops, condition, add, scalar, transposeA, transposeB):
     # convert indices to loop numbers
 
     target, permute = self.getIndices(dest, ops)
     
     if not (scalar == 1 or scalar == 1.0):
-      ops += [scalar]
+      ops += [self._scalarTensor(scalar)]
       target += [[]]
       permute += [[]]
     
-    return self.generator.add_linear_operation(dest, ops, target, permute, add)
+    description = {
+      'type': 'multilinear',
+      'result': dest,
+      'args': ops,
+      'condition': self._handleCondition(condition),
+      'permute': permute,
+      'target': target,
+      'linear': {
+        'alpha': self._scalarTensor(scalar),
+        'add': add,
+      },
+      # 'optype': node.optype
+    }
+    return self.generator.add_operation(description)

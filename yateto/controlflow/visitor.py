@@ -78,11 +78,12 @@ class AST2ControlFlow(Visitor):
 
     newCondition = condition & CNFCondition(myCondition)
     self._condition.append(newCondition)
-    lVar = self.visit(node[0])
-    rVar = self.visit(node[1])
     self._condition = self._condition[:-1]
-
+  
+    rVar = self.visit(node[1])
     rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), rVar)
+
+    lVar = self.visit(node[0])
     action = ProgramAction(lVar, rhs, False, condition=newCondition)
     self._addAction(action)
     

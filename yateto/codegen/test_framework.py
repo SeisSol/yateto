@@ -30,8 +30,8 @@ class TestFramework(ABC):
         cpp.include(kernelsInclude)
         cpp.include(initInclude)
         cpp.include('yateto.h')
-        if self.arch.backend == 'oneapi':
-            cpp.includeSys('sycl/sycl.hpp')
+        for header in self.arch.headers():
+            cpp.includeSys(header)
         with cpp.PPIfndef('NDEBUG'):
             with cpp.PPIfndef('YATETO_TESTING_NO_FLOP_COUNTER'):
                 cpp('long long libxsmm_num_total_flops = 0;')

@@ -234,8 +234,8 @@ class UnitTestFactory(KernelFactory):
 
     class CompareBody(object):
       def __call__(s):
-        self._cpp( 'double ref = {};'.format(refTerm) )
-        self._cpp( 'double diff = ref - {};'.format(targetTerm) )
+        self._cpp(f'double ref = {refTerm};' )
+        self._cpp(f'double diff = ref - {targetTerm};' )
         self._cpp( 'error += diff * diff;' )
         self._cpp( 'refNorm += ref * ref;' )
         return 0
@@ -246,7 +246,10 @@ class UnitTestFactory(KernelFactory):
       self._cpp('double error = 0.0;')
       self._cpp('double refNorm = 0.0;')
       forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
-      self._cpp(self._testFramework.assertLessThan('sqrt(error/refNorm)', epsMult*self._arch.epsilon))
+
+      # avoid dividing by refNorm
+      epsilonSquared = (epsMult * self._arch.epsilon)**2
+      self._cpp(self._testFramework.assertLessThan('error', f'{epsilonSquared}*refNorm'))
 
   def tensor(self, node, resultName, maxValue = 512):
     ml = node.memoryLayout()

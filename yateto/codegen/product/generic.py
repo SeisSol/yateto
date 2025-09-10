@@ -38,12 +38,8 @@ class Generic(object):
 
     return forLoops(cpp, d.result.indices, d.loopRanges, ProductBody())
 
-  def _generateSparseDense(self, cpp):
-    raise NotImplementedError
-
   def _generateSparseSparse(self, cpp):
     d = self._descr
-    assert d.isACsc and d.isBCsc
 
     if not d.add:
       initializeWithZero(cpp, d.result)
@@ -76,10 +72,10 @@ class Generic(object):
   def generate(self, cpp, routineCache):
     d = self._descr
 
-    if d.isACsc and d.isBCsc:
-      return self._generateSparseSparse(cpp)
+    # if any of the two matrices is sparse, unroll everything.
+    # otherwise (dense-dense), loop.
 
     if d.isACsc or d.isBCsc:
-      return self._generateSparseDense(cpp)
+      return self._generateSparseSparse(cpp)
 
     return self._generateDenseDense(cpp)

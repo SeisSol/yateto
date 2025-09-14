@@ -266,6 +266,7 @@ class DenseMemoryLayout(MemoryLayout):
   def subslice(self, index, start, end):
     newshape = tuple(end - start if i == index else self._shape[i] for i in range(len(self._shape)))
     newbbox = BoundingBox([Range(max(self._bbox[i].start, start) - start, min(self._bbox[i].stop, end) - start) if i == index else self._bbox[i] for i in range(len(self._shape))])
+    #newbbox = self._bbox
     newoffset = [start if i == index else self._offset[i] for i in range(len(self._shape))]
     return DenseMemoryLayout(newshape, boundingBox=newbbox, stride=self._stride, offset=newoffset)
 
@@ -273,7 +274,7 @@ class DenseMemoryLayout(MemoryLayout):
     return self._stride == other._stride and self._bbox == other._bbox and self._stride == other._stride and self._offset == other._offset
 
   def __str__(self):
-    return '{}(shape: {}, bounding box: {}, stride: {}, offset:)'.format(type(self).__name__, self._shape, self._bbox, self._stride, self._offset)
+    return '{}(shape: {}, bounding box: {}, stride: {}, offset: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride, self._offset)
 
 class CSCMemoryLayout(MemoryLayout):
   def __init__(self, spp, alignStride=False, bbox=None):
@@ -335,6 +336,12 @@ class CSCMemoryLayout(MemoryLayout):
   
   def colPointer(self):
     return self._colPtr
+  
+  def isAlignedAddressString(self, indices, I = None):
+    if I is None:
+      I = set(indices)
+    positions = indices.positions(I)
+    return len(positions) == 0 or (positions[0] == 0 and all(p != 0 for p in positions[1:]))
   
   def address(self, entry):
     assert entry in self._bbox

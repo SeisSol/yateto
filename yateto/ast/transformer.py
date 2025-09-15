@@ -2,7 +2,7 @@ import sys
 from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
-from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication, SliceView, SelectView
+from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication, SliceView
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -91,11 +91,6 @@ class DeduceIndices(Transformer):
   def visit_SliceView(self, node, bound):
     self.visit(node.term(), bound)
     node.indices = Indices(node.term().indices, [shape if index != node.index else (node.end - node.start) for index, shape in zip(node.term().indices, node.term().shape())])
-    return node
-  
-  def visit_SelectView(self, node, bound):
-    self.visit(node.term(), bound)
-    node.indices = Indices([index for index in node.term().indices if index != node.index], [shape for index, shape in zip(node.term().indices, node.term().shape()) if index != node.index])
     return node
 
   def visit_Assign(self, node, bound):
@@ -235,11 +230,6 @@ class EquivalentSparsityPattern(Transformer):
     return node
   
   def visit_SliceView(self, node):
-    self.generic_visit(node)
-    node.setEqspp(node.computeSparsityPattern())
-    return node
-  
-  def visit_SelectView(self, node):
     self.generic_visit(node)
     node.setEqspp(node.computeSparsityPattern())
     return node

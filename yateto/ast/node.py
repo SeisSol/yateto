@@ -119,7 +119,7 @@ class Node(ABC):
     return SliceView(self, index, start, end)
   
   def subselect(self, index, position):
-    return SliceView(self, index, position)
+    return SliceView(self, index, position, position + 1)
   
   def viewed(self):
     return self
@@ -168,61 +168,9 @@ class SliceView(Node):
       subslice = tuple(slice(self.start, self.end) if self.indices[i] == self.index else slice(None) for i in range(spp.ndim))
       subarray = spp.as_ndarray()[subslice]
       return aspp.general(subarray)
-    """
-    subslice = tuple(slice(self.start, self.end) if self.indices[i] == self.index else slice(None) for i in range(spp.ndim))
-    oldspp = spp.as_ndarray()
-    newspp = np.zeros_like(spp.as_ndarray())
-    newspp[subslice] = oldspp[subslice]
-    return aspp.general(newspp)"""
   
   def __str__(self):
     return f'{type(self).__name__}[{self.index}: {self.start}..{self.end}]'
-
-class SelectView(Node):
-  def __init__(self, subnode, index, position):
-    super().__init__()
-    self._children = [subnode]
-    self.index = index
-    self.position = position
-  
-  def name(self):
-    return self.term().name()
-  
-  def viewed(self):
-    return self.term().viewed()
-
-  def term(self):
-    return self[0]
-
-  def nonZeroFlops(self):
-    return 0
-  
-  def setIndexPermutation(self, indices, permuteEqspp=True):
-    assert str(indices) == str(self.indices)
-  
-  def memoryLayout(self):
-    return self._memoryLayout
-  
-  def getMemoryLayout(self, memoryLayout):
-    return memoryLayout.subslice(list(self.indices).index(self.index), self.start, self.end)
-
-  def computeMemoryLayout(self):
-    self._memoryLayout = self.getMemoryLayout(self.term().memoryLayout())
-  
-  def computeSparsityPattern(self, *spps):
-    assert len(spps) in (0, 1)
-    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
-    if isinstance(spp, aspp.dense):
-      nowshape = spp.shape
-      subshape = tuple(nowshape[i] for i in range(spp.ndim) if self.indices[i] != self.index)
-      return aspp.dense(subshape)
-    else:
-      subslice = tuple(self.position if self.indices[i] == self.index else slice(None) for i in range(spp.ndim))
-      subarray = spp.as_ndarray()[subslice]
-      return aspp.general(subarray)
-  
-  def __str__(self):
-    return f'{type(self).__name__}[{self.index} = {self.position}]'
 
 class IndexedTensor(Node):
   def __init__(self, tensor, indexNames):

@@ -45,11 +45,6 @@ class AST2ControlFlow(Visitor):
     ml = node.getMemoryLayout(var.memoryLayout())
     return VariableView(var, ml, node.eqspp())
 
-  def visit_SelectView(self, node):
-    var = self.visit(node.term())
-    ml = node.getMemoryLayout(var.memoryLayout())
-    return VariableView(var, ml, node.eqspp())
-
   def visit_Add(self, node):
     variables = [self.visit(child) for child in node]
     assert len(variables) > 1

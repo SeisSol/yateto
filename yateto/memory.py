@@ -57,20 +57,13 @@ class DenseMemoryLayout(MemoryLayout):
   def setAlignmentArch(cls, arch):
     cls.ALIGNMENT_ARCH = arch
   
-  def __init__(self, shape, boundingBox=None, stride=None, alignStride=False, offset=None):
+  def __init__(self, shape, boundingBox=None, stride=None, alignStride=False):
     super().__init__(shape)
 
     if boundingBox:
       self._bbox = boundingBox
     else:
       self._bbox = BoundingBox([Range(0, s) for s in self._shape])
-    
-    if offset:
-      self._offset = offset
-    else:
-      self._offset = [0] * len(self._shape)
-    
-    assert len(self._offset) == len(self._shape)
 
     self._range0 = None
     if alignStride:
@@ -98,10 +91,9 @@ class DenseMemoryLayout(MemoryLayout):
   def alignedStride(self):
     if self.ALIGNMENT_ARCH is None:
       return False
-    offsetOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].start - self._offset[0])
     ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
     localOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].stop - self._bbox[0].start)
-    return offsetOk and ldOk and localOk
+    return ldOk and localOk
 
   def mayVectorizeDim(self, dim):
     if self.ALIGNMENT_ARCH is None:
@@ -121,12 +113,11 @@ class DenseMemoryLayout(MemoryLayout):
     
     originalBB = BoundingBox([self._range0] + self._bbox[1:]) if self._range0 else self._bbox
     newBB = BoundingBox([copy.copy(originalBB[p]) for p in permutation])
-    newOffset = [self._offset[p] for p in permutation]
-    return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None, offset=newOffset)
+    return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None)
 
   def address(self, entry):
     assert entry in self._bbox
-    return sum((e + self._offset[i] - self._bbox[i].start) * self._stride[i] for i, e in enumerate(entry))
+    return sum((e - self._bbox[i].start) * self._stride[i] for i, e in enumerate(entry))
 
   def subtensorOffset(self, topLeftEntry):
     return self.address(topLeftEntry)
@@ -168,7 +159,7 @@ class DenseMemoryLayout(MemoryLayout):
     positions = indices.positions(I)
     a = list()
     for p in positions:
-      offset = self._offset[p] + offsets[p] - self._bbox[p].start
+      offset = offsets[p] - self._bbox[p].start
       if offset < 0:
         a.append('{}*({}{}-{})'.format(self._stride[p], prefix, indices[p], -offset))
       elif offset > 0:
@@ -204,14 +195,6 @@ class DenseMemoryLayout(MemoryLayout):
       stop += s * (self._bbox[p].stop-1)
       s *= self._shape[p]
     return Range(start, stop+1)
-  
-  def _subOffset(self, positions):
-    sub = 0
-    st = 1
-    for p in positions:
-      sub += self._offset[p] * st
-      st *= self._shape[p]
-    return sub
     
   def _firstStride(self, positions):
     return self._stride[ positions[0] ]
@@ -223,16 +206,14 @@ class DenseMemoryLayout(MemoryLayout):
     shape = (self._subShape(positionsI),)
     bbox = BoundingBox([self._subRange(positionsI)])
     stride = (self._firstStride(positionsI),)
-    offset = (self._subOffset(positionsI),)
 
-    return DenseMemoryLayout(shape, bbox, stride, offset=offset)
+    return DenseMemoryLayout(shape, bbox, stride)
 
   def withDummyDimension(self):
     shape = self._shape + (1,)
     bbox = BoundingBox(list(self._bbox) + [Range(0,1)])
     stride = self._stride + (self._bbox[-1].size() * self._stride[-1],)
-    offset = list(self._offset) + [0]
-    return DenseMemoryLayout(shape, bbox, stride, offset=offset)
+    return DenseMemoryLayout(shape, bbox, stride)
 
   def unfold(self, indices, I, J):
     positionsI = indices.positions(I)
@@ -245,9 +226,8 @@ class DenseMemoryLayout(MemoryLayout):
     shape = (self._subShape(positionsI), self._subShape(positionsJ))
     bbox = BoundingBox([self._subRange(positionsI), self._subRange(positionsJ)])
     stride = (self._firstStride(positionsI), self._firstStride(positionsJ))
-    offset = (self._subOffset(positionsI), self._subOffset(positionsJ))
 
-    return DenseMemoryLayout(shape, bbox, stride, offset=offset)
+    return DenseMemoryLayout(shape, bbox, stride)
   
   def defuse(self, fusedRange, indices, I):
     positions = indices.positions(I)
@@ -268,18 +248,13 @@ class DenseMemoryLayout(MemoryLayout):
     return BoundingBox.fromSpp(spp) in self.bbox()
   
   def subslice(self, index, start, end):
-    newshape = tuple(end - start if i == index else self._shape[i] for i in range(len(self._shape)))
-    newbbox = BoundingBox([Range(max(self._bbox[i].start, start) - start, min(self._bbox[i].stop, end) - start) if i == index else self._bbox[i] for i in range(len(self._shape))])
-    #newbbox = self._bbox
-    newoffset = [start if i == index else self._offset[i] for i in range(len(self._shape))]
-    #return DenseMemoryLayout(newshape, boundingBox=newbbox, stride=self._stride, offset=newoffset)
     return MemoryLayoutView(self, index, start, end)
 
   def __eq__(self, other):
-    return self._stride == other._stride and self._bbox == other._bbox and self._stride == other._stride and self._offset == other._offset
+    return self._stride == other._stride and self._bbox == other._bbox and self._stride == other._stride
 
   def __str__(self):
-    return '{}(shape: {}, bounding box: {}, stride: {}, offset: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride, self._offset)
+    return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)
   
   def isCSC(self):
     return False
@@ -295,12 +270,11 @@ class CSCMemoryLayout(MemoryLayout):
   def isCSC(self):
     return True
 
-  def __init__(self, spp, alignStride=False, offset=None):
+  def __init__(self, spp, alignStride=False):
     super().__init__(spp.shape)
 
     self.aligned = alignStride
     self._spp = spp
-    self.offset = offset
     
     if len(self._shape) != 2:
       raise ValueError('CSCMemoryLayout may only be used for matrices.')
@@ -416,16 +390,6 @@ class CSCMemoryLayout(MemoryLayout):
   
   def subslice(self, index, start, end):
     return MemoryLayoutView(self, index, start, end)
-    #newbbox = BoundingBox([Range(self._bbox[i].start - start, self._bbox[i].start - start * 2 + end) if i == index else self._bbox[i] for i in range(len(self._shape))])
-
-    #return CSCMemoryLayout(self._spp, alignStride=self.aligned, bbox=newbbox)
-    subslice = tuple(slice(start, end) if i == index else slice(None) for i in range(self._spp.ndim))
-    subarray = self._spp.as_ndarray()[subslice]
-    newspp = aspp.general(subarray)
-    newoffset = tuple(self.offset[i] if i != index else self.offset[i] + start for i in range(len(self._shape)))
-
-    return CSCMemoryLayout(newspp, alignStride=self.aligned, offset=newoffset)
-    #return MemoryLayoutView(self, index, start, end)
   
   def spp(self):
     return self._spp

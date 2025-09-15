@@ -1,4 +1,3 @@
-from ...memory import CSCMemoryLayout
 from ..common import *
 from .generic import Generic
 
@@ -10,8 +9,8 @@ class Description(object):
     self.leftTerm = leftTerm
     self.rightTerm = rightTerm
 
-    self.isACsc = isinstance(self.leftTerm.memoryLayout, CSCMemoryLayout)
-    self.isBCsc = isinstance(self.rightTerm.memoryLayout, CSCMemoryLayout)
+    self.isACsc = self.leftTerm.memoryLayout.isCSC()
+    self.isBCsc = self.rightTerm.memoryLayout.isCSC()
     
     rA = loopRanges(self.leftTerm, self.result.indices)
     rB = loopRanges(self.rightTerm, self.result.indices)

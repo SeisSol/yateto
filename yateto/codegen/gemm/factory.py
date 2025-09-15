@@ -1,5 +1,4 @@
 from ...ast.indices import BoundingBox, Range
-from ...memory import CSCMemoryLayout
 from ..common import TensorDescription
 from .generic import Generic
 from .gemmgen import GemmGen
@@ -28,8 +27,8 @@ class Description(object):
     self.beta = beta
     self.prefetchName = prefetchName
     
-    self.isACsc = isinstance(self.leftTerm.memoryLayout, CSCMemoryLayout)
-    self.isBCsc = isinstance(self.rightTerm.memoryLayout, CSCMemoryLayout)
+    self.isACsc = self.leftTerm.memoryLayout.isCSC()
+    self.isBCsc = self.rightTerm.memoryLayout.isCSC()
     
     if self.isACsc and self.isBCsc:
       raise RuntimeError('GEMM: sparse x sparse is currently not supported.')

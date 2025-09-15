@@ -1,9 +1,11 @@
-from .ast.indices import BoundingBox, Range
+from .ast.indices import BoundingBox, Range, Indices
 import copy
 import itertools
 import warnings
 import numpy as np
 from abc import ABC, abstractmethod
+
+from . import aspp
 
 class MemoryLayout(ABC):
   def __init__(self, shape):
@@ -156,15 +158,17 @@ class DenseMemoryLayout(MemoryLayout):
     size = self._bbox[-1].size() * self._stride[-1]
     return size
   
-  def addressString(self, indices, I = None, prefix='_'):
+  def addressString(self, indices, I = None, prefix='_', offsets=()):
     if len(self._bbox) == 0:
       return '0'
+    if len(offsets) == 0:
+      offsets = [0] * len(self._bbox)
     if I is None:
       I = set(indices)
     positions = indices.positions(I)
     a = list()
     for p in positions:
-      offset = self._offset[p] - self._bbox[p].start
+      offset = self._offset[p] + offsets[p] - self._bbox[p].start
       if offset < 0:
         a.append('{}*({}{}-{})'.format(self._stride[p], prefix, indices[p], -offset))
       elif offset > 0:
@@ -268,20 +272,35 @@ class DenseMemoryLayout(MemoryLayout):
     newbbox = BoundingBox([Range(max(self._bbox[i].start, start) - start, min(self._bbox[i].stop, end) - start) if i == index else self._bbox[i] for i in range(len(self._shape))])
     #newbbox = self._bbox
     newoffset = [start if i == index else self._offset[i] for i in range(len(self._shape))]
-    return DenseMemoryLayout(newshape, boundingBox=newbbox, stride=self._stride, offset=newoffset)
+    #return DenseMemoryLayout(newshape, boundingBox=newbbox, stride=self._stride, offset=newoffset)
+    return MemoryLayoutView(self, index, start, end)
 
   def __eq__(self, other):
     return self._stride == other._stride and self._bbox == other._bbox and self._stride == other._stride and self._offset == other._offset
 
   def __str__(self):
     return '{}(shape: {}, bounding box: {}, stride: {}, offset: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride, self._offset)
+  
+  def isCSC(self):
+    return False
+  
+  def spp(self):
+    raise NotImplementedError()
+    #subslice = tuple(slice(d.start, d.end) if d in self._bbox)
+    #superarray = np.zeros(tuple(self._stride), dtype=bool)
+    #superarray[subslice] = spp.as_ndarray()
+    #return aspp.general(superarray)
 
 class CSCMemoryLayout(MemoryLayout):
-  def __init__(self, spp, alignStride=False, bbox=None):
+  def isCSC(self):
+    return True
+
+  def __init__(self, spp, alignStride=False, offset=None):
     super().__init__(spp.shape)
 
     self.aligned = alignStride
     self._spp = spp
+    self.offset = offset
     
     if len(self._shape) != 2:
       raise ValueError('CSCMemoryLayout may only be used for matrices.')
@@ -396,10 +415,142 @@ class CSCMemoryLayout(MemoryLayout):
     return self._bbox == other._bbox and np.array_equal(self._rowIndex, other._rowIndex) and np.array_equal(self._colPtr, other._colPtr)
   
   def subslice(self, index, start, end):
-    newbbox = BoundingBox([Range(self._bbox[i].start - start, self._bbox[i].start - start * 2 + end) if i == index else self._bbox[i] for i in range(len(self._shape))])
-    return DenseMemoryLayout(self._spp, bbox=newbbox)
+    return MemoryLayoutView(self, index, start, end)
+    #newbbox = BoundingBox([Range(self._bbox[i].start - start, self._bbox[i].start - start * 2 + end) if i == index else self._bbox[i] for i in range(len(self._shape))])
+
+    #return CSCMemoryLayout(self._spp, alignStride=self.aligned, bbox=newbbox)
+    subslice = tuple(slice(start, end) if i == index else slice(None) for i in range(self._spp.ndim))
+    subarray = self._spp.as_ndarray()[subslice]
+    newspp = aspp.general(subarray)
+    newoffset = tuple(self.offset[i] if i != index else self.offset[i] + start for i in range(len(self._shape)))
+
+    return CSCMemoryLayout(newspp, alignStride=self.aligned, offset=newoffset)
+    #return MemoryLayoutView(self, index, start, end)
+  
+  def spp(self):
+    return self._spp
 
 class AlignedCSCMemoryLayout:
   @classmethod
   def fromSpp(cls, spp, **kwargs):
     return CSCMemoryLayout(spp, alignStride=True)
+
+class MemoryLayoutView(MemoryLayout):
+  def isCSC(self):
+    return self.base.isCSC()
+
+  def __init__(self, base, index, start, end):
+    super().__init__([base._shape[i] if i != index else end - start for i in range(len(base.shape()))])
+    self.base = base
+    self.index = index
+    self.start = start
+    self.end = end
+  
+  def relidx(self, index):
+    return tuple(index[i] if i != self.index else index[i] + self.start for i in range(len(self._shape)))
+  
+  def relbox(self, bbox):
+    return BoundingBox([Range(max(bbox[i].start + self.start, self.start), min(bbox[i].stop + self.start, self.end)) if i == self.index else bbox[i] for i in range(len(self._shape))])
+  
+  def relspp(self, spp):
+    subslice = tuple(slice(self.start, self.end) if i == self.index else slice(None) for i in range(spp.ndim))
+    superarray = np.zeros(tuple(self.base.shape()), dtype=bool)
+    superarray[subslice] = spp.as_ndarray()
+    return aspp.general(superarray)
+
+  def __contains__(self, bbox):
+    return self.base.__contains__(self.relbox(bbox))
+  
+  def __eq__(self, other):
+    # TODO: wrong. Check np.array_equal(self.spp(), other.spp()) instead. Once implemented.
+    if isinstance(other, MemoryLayoutView):
+      return self.base == other.base and self.index == other.index and self.start == other.start and self.end == other.end
+    else:
+      return self.base == other
+  
+  def address(self, entry):
+    return self.base.address(self.relidx(entry))
+  
+  def subtensorOffset(self, topLeftEntry):
+    return self.base.subtensorOffset(self.relidx(topLeftEntry))
+  
+  def alignedStride(self):
+    return self.base.alignedStride() and (self.index != 0 or DenseMemoryLayout.ALIGNMENT_ARCH.checkAlignment(self.end - self.start))
+  
+  def fromSpp(self):
+    raise NotImplementedError()
+  
+  def isCompatible(self, spp):
+    return self.base.isCompatible(self.relspp(spp))
+
+  def mayVectorizeDim(self, dim):
+    return self.base.mayVectorizeDim(dim)
+  
+  def isAlignedAddressString(self, indices, I = None):
+    return self.base.isAlignedAddressString(indices, I)
+  
+  def addressString(self, indices, I = None, prefix='_', offsets=()):
+    if len(offsets) == 0:
+      offsets = [0] * len(self._shape)
+    newOffsets = tuple(offsets[i] if self.index != i else offsets[i] + self.start for i in range(len(self._shape)))
+    return self.base.addressString(indices, I, prefix, newOffsets)
+  
+  def subslice(self, index, start, end):
+    return MemoryLayoutView(self, index, start, end)
+  
+  def unfold(self, indices, I, J):
+    positionsI = indices.positions(I)
+    positionsJ = indices.positions(J)
+
+    if self.index not in positionsI and self.index not in positionsJ:
+      return self.base.unfold(indices, I, J)
+
+    newIndex = 0 if self.index in positionsI else 1
+    positions = [positionsI, positionsJ][newIndex]
+    assert positions[-1] == self.index
+
+    shape = self.base.shape()
+    scale = 1
+    for p in positions[:-1]:
+      scale *= shape[p]
+
+    return MemoryLayoutView(self.base.unfold(indices, I, J), newIndex, self.start * scale, self.end * scale)
+  
+  def withDummyDimension(self):
+    return MemoryLayoutView(self.base.withDummyDimension(), self.index, self.start, self.end)
+
+  def defuse(self, fusedRange, indices, I):
+    raise NotImplementedError()
+  
+  def stride(self):
+    # pass through
+    return self.base.stride()
+  
+  def stridei(self, dim):
+    # pass through
+    return self.base.stridei(dim)
+
+  def notWrittenAddresses(self, writeBB):
+    # focus only on the subview
+    outside = set(self.base.notWrittenAddresses(self.bbox()))
+    return list(set(self.base.notWrittenAddresses(self.relbox(writeBB))) - outside)
+  
+  def bbox(self):
+    return self.relbox(self.base.bbox())
+  
+  def storage(self):
+    return self.base.storage()
+  
+  def permuted(self, permutation):
+    return MemoryLayoutView(self.base.permuted(permutation), permutation[self.index], self.start, self.end)
+  
+  def entries(self, rowRange, colRange):
+    if self.index == 0:
+      return self.base.entries(Range(rowRange.start + self.start, rowRange.stop + self.start), colRange)
+    elif self.index == 1:
+      return self.base.entries(rowRange, Range(colRange.start + self.start, colRange.stop + self.start))
+    else:
+      raise NotImplementedError()
+  
+  #def mayFuse(self, indices):
+  #  raise NotImplementedError()

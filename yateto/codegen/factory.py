@@ -248,7 +248,7 @@ class UnitTestFactory(KernelFactory):
       forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
       self._cpp(self._testFramework.assertLessThan('sqrt(error/refNorm)', epsMult*self._arch.epsilon))
 
-  def tensor(self, node, resultName, maxValue = 512):
+  def tensor(self, node, resultName, maxValue = 512, scale = 1 / 512):
     ml = node.memoryLayout()
     size = ml.requiredReals()
 
@@ -257,13 +257,13 @@ class UnitTestFactory(KernelFactory):
     if isDense:
       self.temporary(resultName, size)
       with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
-        self._cpp('{}[i] = static_cast<{}>((i + {}) % {} + 1);'.format(resultName, self._arch.typename, self._rand, maxValue))
+        self._cpp(f'{resultName}[i] = static_cast<{self._arch.typename}>((i + {self._rand}) % {maxValue} + 1) * static_cast<{self._arch.typename}>({scale});')
     else:
       memory = ['0.0']*size
       nz = spp.nonzero()
       for entry in zip(*nz):
         addr = ml.address(entry)
-        memory[addr] = str(float((addr + self._rand) % maxValue)+1.0)
+        memory[addr] = str((float((addr + self._rand) % maxValue)+1.0) * scale)
       self.temporary(resultName, size, memory=memory)
     self._rand += 1
 

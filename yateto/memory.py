@@ -265,6 +265,9 @@ class DenseMemoryLayout(MemoryLayout):
     #superarray = np.zeros(tuple(self._stride), dtype=bool)
     #superarray[subslice] = spp.as_ndarray()
     #return aspp.general(superarray)
+  
+  def storage(self):
+    return self
 
 class CSCMemoryLayout(MemoryLayout):
   def isCSC(self):
@@ -393,6 +396,9 @@ class CSCMemoryLayout(MemoryLayout):
   
   def spp(self):
     return self._spp
+  
+  def storage(self):
+    return self
 
 class AlignedCSCMemoryLayout:
   @classmethod
@@ -426,6 +432,7 @@ class MemoryLayoutView(MemoryLayout):
     return self.base.__contains__(self.relbox(bbox))
   
   def __eq__(self, other):
+    # return np.array_equal(self.spp(), other.spp())
     # TODO: wrong. Check np.array_equal(self.spp(), other.spp()) instead. Once implemented.
     if isinstance(other, MemoryLayoutView):
       return self.base == other.base and self.index == other.index and self.start == other.start and self.end == other.end
@@ -442,6 +449,7 @@ class MemoryLayoutView(MemoryLayout):
     return self.base.alignedStride() and (self.index != 0 or DenseMemoryLayout.ALIGNMENT_ARCH.checkAlignment(self.end - self.start))
   
   def fromSpp(self):
+    # cannot be implemented. Call should result in error.
     raise NotImplementedError()
   
   def isCompatible(self, spp):
@@ -484,7 +492,17 @@ class MemoryLayoutView(MemoryLayout):
     return MemoryLayoutView(self.base.withDummyDimension(), self.index, self.start, self.end)
 
   def defuse(self, fusedRange, indices, I):
-    raise NotImplementedError()
+    positions = indices.positions(I)
+    if self.index in positions:
+      assert positions[-1] == self.index
+      size = fusedRange.stop - fusedRange.start
+      assert size % (self.end - self.start) == 0
+      slicesize = size // (self.end - self.start)
+
+      newFusedRange = Range(slicesize * self.start, slicesize * self.end)
+      return self.base.defuse(newFusedRange, indices, I)
+    else:
+      return self.base.defuse(fusedRange, indices, I)
   
   def stride(self):
     # pass through
@@ -516,5 +534,8 @@ class MemoryLayoutView(MemoryLayout):
     else:
       raise NotImplementedError()
   
-  #def mayFuse(self, indices):
-  #  raise NotImplementedError()
+  def mayFuse(self, positions):
+    return (self.index not in positions or positions[-1] == self.index) and self.base.mayFuse(positions)
+
+  def __repr__(self):
+    return f'MemoryLayoutView(index: {self.index}; range: [{self.start},{self.end}); base: {self.base})'

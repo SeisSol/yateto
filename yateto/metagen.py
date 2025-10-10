@@ -44,57 +44,39 @@ class MetaGenerator:
                 if tensor not in tensors:
                     tensors[tensor] = []
                 tensors[tensor] += [(subnamespace, template)]
-            for tensor in result['kernels']:
-                if tensor not in kernels:
-                    kernels[tensor] = []
-                kernels[tensor] += [(subnamespace, template)]
+            for kernel in result['kernels']:
+                if kernel not in kernels:
+                    kernels[kernel] = []
+                kernels[kernel] += [(subnamespace, template)]
+
+        nspuppercase = namespace.upper()
+
+        def headerForward(name, data):
+            upper = name.upper()
+            with Cpp(os.path.join(outputDir, f'{name}.h')) as header:
+                with header.HeaderGuard(f'METAGEN_{nspuppercase}_{upper}_H_'):
+                    for path in includes:
+                        header.include(path)
+                    for i, gendata in enumerate(self.generators):
+                        header.include(f'metagen{i}/{name}.h')
+                    with header.Namespace(namespace):
+                        for entry in data:
+                            self.template(header, entry, data[entry], f'{name}')
+
         
-        # TODO: open meta header
-        with Cpp(os.path.join(outputDir, 'tensor.h')) as header:
-            with header.HeaderGuard('METAGEN_TENSOR_H_'):
-                for path in includes:
-                    header.include(path)
+        headerForward('tensor', tensors)
+        headerForward('init', tensors)
+        headerForward('kernel', kernels)
+
+        def cppForward(name):
+            with Cpp(os.path.join(outputDir, f'{name}.cpp')) as header:
                 for i, gendata in enumerate(self.generators):
-                    header.include(f'metagen{i}/tensor.h')
-                with header.Namespace(namespace):
-                    for tensor in tensors:
-                        self.template(header, tensor, tensors[tensor], 'tensor')
+                    header.include(f'metagen{i}/{name}.cpp')
         
-        with Cpp(os.path.join(outputDir, 'init.h')) as header:
-            with header.HeaderGuard('METAGEN_INIT_H_'):
-                for path in includes:
-                    header.include(path)
-                for i, gendata in enumerate(self.generators):
-                    header.include(f'metagen{i}/init.h')
-                with header.Namespace(namespace):
-                    for tensor in tensors:
-                        self.template(header, tensor, tensors[tensor], 'init')
-        
-        with Cpp(os.path.join(outputDir, 'kernel.h')) as header:
-            with header.HeaderGuard('METAGEN_KERNEL_H_'):
-                for path in includes:
-                    header.include(path)
-                for i, gendata in enumerate(self.generators):
-                    header.include(f'metagen{i}/kernel.h')
-                with header.Namespace(namespace):
-                    for kernel in kernels:
-                        self.template(header, kernel, kernels[kernel], 'kernel')
-        
-        with Cpp(os.path.join(outputDir, 'tensor.cpp')) as header:
-            for i, gendata in enumerate(self.generators):
-                header.include(f'metagen{i}/tensor.cpp')
-        
-        with Cpp(os.path.join(outputDir, 'init.cpp')) as header:
-            for i, gendata in enumerate(self.generators):
-                header.include(f'metagen{i}/init.cpp')
-        
-        with Cpp(os.path.join(outputDir, 'kernel.cpp')) as header:
-            for i, gendata in enumerate(self.generators):
-                header.include(f'metagen{i}/kernel.cpp')
-        
-        with Cpp(os.path.join(outputDir, 'test-kernels.cpp')) as header:
-            for i, gendata in enumerate(self.generators):
-                header.include(f'metagen{i}/test-kernels.cpp')
+        cppForward('tensor')
+        cppForward('init')
+        cppForward('kernel')
+        cppForward('test-kernel')
         
     def namespacing(self, header, spaces, inner):
         if len(spaces) == 0:

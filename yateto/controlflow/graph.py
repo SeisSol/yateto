@@ -25,10 +25,10 @@ class Variable(object):
     return result.memoryLayout().isCompatible(self.eqspp())
 
   def isGlobal(self):
-    return self.tensor is not None
+    return self.tensor is not None and not self.tensor.temporary
 
   def isLocal(self):
-    return not self.isGlobal()
+    return not self.isGlobal() and (self.tensor is None or not self.tensor.temporary)
 
   def memoryLayout(self):
     return self._memoryLayout

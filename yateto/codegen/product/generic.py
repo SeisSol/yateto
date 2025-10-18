@@ -53,8 +53,8 @@ class Generic(object):
     flops = 0
     nonzeros = d.result.eqspp.nonzero()
     for entry in sorted(zip(*nonzeros), key=lambda x: x[::-1]):
-      leftEntry = (entry[ left[0] ], entry[ left[1] ])
-      rightEntry = (entry[ right[0] ], entry[ right[1] ])
+      leftEntry = tuple(entry[ pos ] for pos in left)
+      rightEntry = tuple(entry[ pos ] for pos in right)
 
       cpp( '{}[{}] {} {}{}[{}] * {}[{}];'.format(
           d.result.name, d.result.memoryLayout.address(entry),

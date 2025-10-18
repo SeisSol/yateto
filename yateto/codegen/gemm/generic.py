@@ -49,6 +49,56 @@ class Generic(object):
       return self._denseAccess(term.name, offset, stride, i, j)
     return access
 
+  def _generateSparseSparse(self, cpp):
+    d = self._descr
+    m, n, k = d.mnk()
+
+    # (assume C to be dense; though we actually _could_ assume otherwise)
+    # (but that's not implemented right now anyways)
+
+    Aaccess = self._accessFun(d.leftTerm, (m.start, k.start), d.isACsc, d.transA)
+    Baccess = self._accessFun(d.rightTerm, (k.start, n.start), d.isBCsc, d.transB)
+    Caccess = self._accessFun(d.result, (m.start, n.start), False, False)
+
+    rows, cols = (k, m) if d.transA else (m, k)
+    sppA = d.leftTerm.memoryLayout.entries(rows, cols)
+
+    rows, cols = (n, k) if d.transB else (k, n)
+    sppB = d.rightTerm.memoryLayout.entries(rows, cols)
+
+    if d.beta != 1.0:
+      with cpp.For(f'int n = 0; n < {n.size()}; ++n'):
+        with cpp.For(f'int m = 0; m < {m.size()}; ++m'):
+          cpp('{} = {}{};'.format(
+              Caccess('m', 'n'),
+              d.beta,
+              ' * ' + Caccess('m', 'n') if d.beta != 0.0 else ''
+            )
+          )
+
+    # (the following loop is a bit redundant, but it works and is fast enough)
+    # note that we explicitly count all nonzero operations
+
+    nzcount = 0
+    for idxA, entry in enumerate(sppA):
+      eA = entry[::-1] if d.transA else entry
+      for idxB, entry in enumerate(sppB):
+        eB = entry[::-1] if d.transB else entry
+
+        if eA[1] == eB[0]:
+          # (i.e.: if k(A) == k(B))
+
+          nzcount += 1
+
+          cpp( '{result} += {alpha} * {a} * {b};'.format(
+                result = Caccess(eA[0], eB[1]),
+                alpha = d.alpha,
+                a = Aaccess(idxA),
+                b = Baccess(idxB)
+              )
+            )
+
+    return nzcount * self._flop(d.alpha) + n.size() * m.size() * self._flopInit(d.beta)
 
   def _generateSparseDense(self, cpp):
     d = self._descr
@@ -131,6 +181,9 @@ class Generic(object):
 
   def generate(self, cpp, routineCache):
     d = self._descr
+
+    if d.isACsc and d.isBCsc:
+      return self._generateSparseSparse(cpp)
 
     if d.isACsc or d.isBCsc:
       return self._generateSparseDense(cpp)

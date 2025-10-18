@@ -536,14 +536,15 @@ class UnitTestGenerator(KernelGenerator):
         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
         
         shape = var.memoryLayout().shape()
-        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{shape}}});'.format(
+        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
             dim=len(shape),
             arch = self._arch,
             utName=self._name(var),
             viewName=self._viewName(var),
             shape=', '.join([str(s) for s in shape]),
-            start=', '.join(['0'] * len(shape))
+            start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
+            stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
           )
         )
         prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''

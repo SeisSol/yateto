@@ -104,8 +104,7 @@ class Node(ABC):
     return self.__add__(other)
   
   def __neg__(self):
-    self._checkMultipleScalarMults()
-    return ScalarMultiplication(-1.0, self)
+    return -1.0 * self
 
   def __sub__(self, other):
     return self._binOp(-other, Add)

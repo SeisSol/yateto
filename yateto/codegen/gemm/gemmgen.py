@@ -617,7 +617,8 @@ def tinytcGemmGen(arch, gd):
   A = bb.add(load_inst(opA, Abatch, gid))
   B = bb.add(load_inst(opB, Bbatch, gid))
   C = bb.add(load_inst(opC, Cbatch, gid))
-  bb.add(GemmInst(tA, tB, alpha, A, B, FloatImmValue(scalar_ty, beta), C))
+  beta = bb.add(ConstantInst(FloatImmValue(scalar_ty, beta)))
+  bb.add(GemmInst(tA, tB, alpha, A, B, beta, C))
   kernel.body = bb.get_product()
   AssignIdentifiers().visit(kernel)
 

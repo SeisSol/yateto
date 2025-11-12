@@ -202,9 +202,9 @@ class TinytcWrapper:
           self.wrapper_args.append(f'{wrapper_type} {arg.name}')
           self.wrapper_call_args.append(arg.name)
           self.call_args.append(f'const_cast<{wrapper_type}>({arg.call_expr})')
-          if arg.temporary:
+          if not arg.constant:
             self.wrapper_call_args.append(BatchedOperationsAux.NUM_ELEMENTS_NAME)
-          elif not arg.constant:
+          if not arg.temporary and not arg.constant:
             offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{arg.name}' 
             self.wrapper_args.append(f'long {offset_name}')
             self.wrapper_call_args.append(offset_name)
@@ -219,16 +219,23 @@ class TinytcWrapper:
 """
     make_kernel += self.source
     make_kernel += """)tinytc\";
-        auto source_ctx = tinytc::source_context{};
+        auto err_log = std::string{};
         try {
-            source_ctx = tinytc::make_source_context();
-	        auto program = tinytc::parse_string(source, source_ctx);
-            auto bundle = tinytc::make_kernel_bundle(queue.get_context(), queue.get_device(), std::move(program), 0, source_ctx);"""
-    make_kernel += f'            auto kernel = tinytc::make_kernel(bundle, "{self.kernel_name}");\n'
+            auto ctx = tinytc::create_compiler_context();
+            tinytc::set_error_reporter(ctx.get(), [](char const *what, const tinytc_location_t *, void *log) {
+                *static_cast<std::string*>(log) += what;
+            }, &err_log);
+            auto program = tinytc::parse_string(source, ctx.get());
+            auto bundle = tinytc::create_kernel_bundle(queue.get_context(), queue.get_device(), program.get(), 0);"""
+    make_kernel += f'            auto kernel = tinytc::create_kernel(bundle, "{self.kernel_name}");\n'
     make_kernel += """            auto group_size = tinytc::get_group_size(kernel);
             return {std::move(kernel), std::move(group_size)};
         } catch (tinytc::status const& st) {
-            throw std::runtime_error(source_ctx.get_error_log());
+            if (!err_log.empty()) {
+                throw std::runtime_error(err_log);
+            } else {
+                throw std::runtime_error(tinytc::to_string(st));
+            }
         }
     }""";
     make_kernel += f'(*static_cast<::sycl::queue*>({BatchedOperationsAux.STREAM_PTR_NAME}));\n'
@@ -237,7 +244,7 @@ class TinytcWrapper:
     wrapper += make_kernel
     wrapper += f'    static_cast<::sycl::queue*>({BatchedOperationsAux.STREAM_PTR_NAME})->submit([&](::sycl::handler &h) {{\n';
     wrapper += f'        h.set_args({", ".join(self.wrapper_call_args)});\n'
-    wrapper += f'        h.parallel_for(::sycl::nd_range{{tinytc::get_global_size({BatchedOperationsAux.NUM_ELEMENTS_NAME}, k.group_size), k.group_size}}, k.kernel);\n'
+    wrapper += f'        h.parallel_for(::sycl::nd_range{{tinytc::get_global_size({{1,1,static_cast<std::size_t>({BatchedOperationsAux.NUM_ELEMENTS_NAME})}}, k.group_size), k.group_size}}, k.kernel);\n'
     wrapper +=  '    });\n'
     wrapper += '}\n\n'
 
@@ -249,13 +256,13 @@ class TinytcWrapper:
   def prototype(self):
     return f'void {self.name}({", ".join(self.wrapper_args)});'
 
-def makeMemrefType(scalarTy, memoryLayout, needsBatchMode: bool):
+def makeMemrefType(scalarTy, memoryLayout, needsBatchMode: bool, local: bool=False):
   shape = tuple(r.size() for r in memoryLayout.bbox())
   stride = memoryLayout.stride()
   if needsBatchMode:
     shape = shape + (DYNAMIC, )
     stride = stride + (memoryLayout.requiredReals(), )
-  return MemrefType(scalarTy, shape, stride)
+  return MemrefType(scalarTy, shape, stride, local)
 
 def makeBatchType(scalarTy, memoryLayout, isComputeConstant: bool, isTemporary: bool):
   if isComputeConstant:

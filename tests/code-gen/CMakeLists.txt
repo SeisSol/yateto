@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(EXAMPLES "matmul;minimal" CACHE STRING "a list of examples to run as tests")
-set(SAMPLES hosvd matmul minimal seissol_eqspp stock tce)
+set(SAMPLES hosvd matmul minimal seissol_eqspp stock tce expression)
 set_property(CACHE EXAMPLES PROPERTY STRINGS ${SAMPLES})
 
 set(VARIANT "Eigen" CACHE STRING "example-specific variant")

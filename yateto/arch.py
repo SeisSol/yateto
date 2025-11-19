@@ -49,7 +49,8 @@ class Architecture(object):
                alignment,
                enablePrefetch=False,
                backend='cpp',
-               host_name=None):
+               host_name=None,
+               cacheline=None):
     """
 
     Args:
@@ -90,6 +91,8 @@ class Architecture(object):
     self.is_accelerator = backend != 'cpp' and self.host_name != None
 
     self.host_name = self.host_name or self.name
+
+    self.cacheline = cacheline or self.alignment
 
   def setTmpStackLimit(self, tmpStackLimit):
     self._tmpStackLimit = tmpStackLimit
@@ -246,7 +249,12 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
         print(f'Unknown device vendor: {device_def.vendor}. Setting alignment to 32.')
         alignment = 32
 
-    return Architecture(device_def.archname, device_def.precision, alignment, False, device_def.backend, host_def.archname)
+    cacheline = alignment
+
+    if host_def.alignment is not None:
+      cacheline = max(cacheline, host_def.alignment)
+
+    return Architecture(device_def.archname, device_def.precision, alignment, False, device_def.backend, host_def.archname, cacheline)
   else:
     return Architecture(host_def.archname, host_def.precision, alignment, prefetch)
 

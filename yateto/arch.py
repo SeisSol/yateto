@@ -222,7 +222,9 @@ HostArchDefinition = namedtuple('HostArchDefinition', 'archname precision alignm
 DeviceArchDefinition = namedtuple('DeviceArchDefinition', 'archname vendor backend precision alignment')
 
 def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArchDefinition, None]):
-  alignment, prefetch = getHostArchProperties(host_def.archname)
+  alignment_given, prefetch = getHostArchProperties(host_def.archname)
+
+  alignment = alignment_given
 
   if host_def.alignment is not None:
     alignment = host_def.alignment
@@ -249,10 +251,7 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
         print(f'Unknown device vendor: {device_def.vendor}. Setting alignment to 32.')
         alignment = 32
 
-    cacheline = alignment
-
-    if host_def.alignment is not None:
-      cacheline = max(cacheline, host_def.alignment)
+    cacheline = max(alignment, alignment_given)
 
     return Architecture(device_def.archname, device_def.precision, alignment, False, device_def.backend, host_def.archname, cacheline)
   else:

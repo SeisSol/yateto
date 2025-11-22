@@ -216,14 +216,18 @@ class Op(Node):
 
   def computeMemoryLayout(self):
     alignStride = False
+    alignOffset = 2**64
     if len(self.indices) > 0:
       for child in self:
         if self.indices[0] in child.indices:
           position = child.indices.find(self.indices[0])
           if child.memoryLayout().mayVectorizeDim(position):
             alignStride = True
-            break
-    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride)
+            alignOffset = min(alignOffset, child.memoryLayout().alignmentOffset(position))
+
+    # NOTE: the offset is needed for slicing. Since we don't use selector matrices, the alignment might be off.
+
+    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride, alignOffset=alignOffset)
 
   def fixedIndexPermutation(self):
     return False

@@ -145,7 +145,7 @@ class DetermineLocalInitialization(object):
         cfg[i].bufferMap[ua.result] = buf
         usedBuffers[ua.result] = buf
 
-        size = ua.result.viewed().memoryLayout().requiredReals()
+        size = ua.result.viewed().memoryLayout().storage().requiredReals()
         if buf in bufferSize:
           bufferSize[buf] = max(bufferSize[buf], size)
         else:

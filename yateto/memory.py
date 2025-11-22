@@ -101,9 +101,14 @@ class DenseMemoryLayout(MemoryLayout):
     return self.ALIGNMENT_ARCH.checkAlignment(self._bbox[dim].size())
 
   @classmethod
-  def fromSpp(cls, spp, alignStride=False):
+  def fromSpp(cls, spp, alignStride=False, alignOffset=0):
     bbox = BoundingBox.fromSpp(spp)
-    return cls(spp.shape, bbox, alignStride=alignStride)
+    shape = tuple(spp.shape)
+    if alignStride and alignOffset > 0:
+      bbox = BoundingBox([Range(rng.start + alignOffset, rng.stop + alignOffset) if i == 0 else rng for i,rng in enumerate(bbox)])
+      shape = tuple(alignOffset + x if i == 0 else x for i, x in enumerate(shape))
+      return cls(shape, bbox, alignStride=alignStride).subslice(0, alignOffset, shape[0])
+    return cls(shape, bbox, alignStride=alignStride)
 
   def __contains__(self, entry):
     return entry in self._bbox
@@ -268,6 +273,9 @@ class DenseMemoryLayout(MemoryLayout):
   
   def storage(self):
     return self
+  
+  def alignmentOffset(self, dim):
+    return 0
 
 class CSCMemoryLayout(MemoryLayout):
   def isCSC(self):
@@ -399,6 +407,9 @@ class CSCMemoryLayout(MemoryLayout):
   
   def storage(self):
     return self
+  
+  def alignmentOffset(self, dim):
+    return 0
 
 class AlignedCSCMemoryLayout:
   @classmethod
@@ -539,3 +550,10 @@ class MemoryLayoutView(MemoryLayout):
 
   def __repr__(self):
     return f'MemoryLayoutView(index: {self.index}; range: [{self.start},{self.end}); base: {self.base})'
+  
+  def alignmentOffset(self, dim):
+    val = self.base.alignmentOffset(dim)
+    if self.index == dim:
+      newval = val + self.start
+      val = newval - DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(newval)
+    return val

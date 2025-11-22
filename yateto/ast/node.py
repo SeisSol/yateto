@@ -615,7 +615,7 @@ class Accumulate(Op):
       add_spp = permute_summand(i)
       spp = aspp.add(spp, add_spp)
     return spp
-  
+
   def nonZeroFlops(self):
     nzFlops = 0
     for child in self:

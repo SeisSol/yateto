@@ -16,6 +16,7 @@ class Datatype(Enum):
   F64 = 6
   F16 = 7
   BF16 = 8
+  F128 = 9
 
   def __str__(self):
     return {
@@ -26,6 +27,7 @@ class Datatype(Enum):
       Datatype.I64: 'i64',
       Datatype.F32: 'f32',
       Datatype.F64: 'f64',
+      Datatype.F128: 'f128',
       Datatype.F16: 'f16',
       Datatype.BF16: 'bf16',
     }[self]
@@ -54,6 +56,7 @@ class Datatype(Enum):
       Datatype.F64: np.float64,
       Datatype.F16: np.float16,
       Datatype.BF16: np.float32, # NYI
+      Datatype.F128: np.float128,
     }[self]
   
   def size(self):
@@ -68,6 +71,7 @@ class Datatype(Enum):
       Datatype.F64: 8,
       Datatype.F16: 2,
       Datatype.BF16: 2,
+      Datatype.F128: 16,
     }[self]
   
   def literal(self, value):
@@ -75,12 +79,15 @@ class Datatype(Enum):
     # (note: the extra lambda mapping is needed to prevent type errors)
     return {
       Datatype.BOOL: lambda value: 'true' if value else 'false',
-      Datatype.I8: lambda value: f'{int(value)}',
-      Datatype.I16: lambda value: f'{int(value)}',
-      Datatype.I32: lambda value: f'{int(value)}',
-      Datatype.I64: lambda value: f'{int(value)}LL',
+      Datatype.I8: lambda value: f'static_cast<int8_t>({int(value)}LL)',
+      Datatype.I16: lambda value: f'static_cast<int16_t>({int(value)}LL)',
+      Datatype.I32: lambda value: f'static_cast<int32_t>({int(value)}LL)',
+      Datatype.I64: lambda value: f'static_cast<int64_t>({int(value)}LL)',
       Datatype.F32: lambda value: f'{float(value):.16}f',
-      Datatype.F64: lambda value: f'{float(value):.16}'
+      Datatype.F64: lambda value: f'{float(value):.16}',
+      Datatype.F16: lambda value: f'static_cast<f16_ty>({float(value):.16})',
+      Datatype.BF16: lambda value: f'static_cast<bf16_ty>({float(value):.16})',
+      Datatype.F128: lambda value: f'static_cast<f128_ty>({float(value):.32}q)',
     }[self](value)
 
 class AddressingMode(Enum):

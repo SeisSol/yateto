@@ -5,5 +5,6 @@
 #include "yateto/InitTools.h"
 #include "yateto/LinearAllocator.h"
 #include "yateto/Misc.h"
+#include "yateto/Type.h"
 
 #endif

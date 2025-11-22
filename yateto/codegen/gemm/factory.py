@@ -31,9 +31,6 @@ class Description(object):
     self.isACsc = isinstance(self.leftTerm.memoryLayout, CSCMemoryLayout)
     self.isBCsc = isinstance(self.rightTerm.memoryLayout, CSCMemoryLayout)
     
-    if self.isACsc and self.isBCsc:
-      raise RuntimeError('GEMM: sparse x sparse is currently not supported.')
-    
     bbA = BoundingBox.fromSpp(self.leftTerm.eqspp)
     bbB = BoundingBox.fromSpp(self.rightTerm.eqspp)
     bbC = BoundingBox.fromSpp(self.result.eqspp)

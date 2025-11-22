@@ -5,6 +5,7 @@ from ..common import TensorDescription, IndexedTensorDescription, BatchedOperati
 from ..cache import TinytcWriter
 from ..tiny_tensor_language import *
 
+import hashlib
 
 class CopyScaleAddTinytc:
 
@@ -19,7 +20,6 @@ class CopyScaleAddTinytc:
 
         # Order can be 1 or 2
         def MakeLoopOverAxpby(d, order, transpose, A, B):
-            beta = FloatImmValue(ty, d.beta)
             A_offset_list = [None] * len(d.term.indices)
             A_size_list = [None] * len(d.term.indices)
             B_offset_list = [None] * len(d.result.indices)
@@ -47,6 +47,7 @@ class CopyScaleAddTinytc:
             csa_bb = RegionBuilder()
             a = csa_bb.add(SubviewInst(A, A_offset_list, A_size_list))
             b = csa_bb.add(SubviewInst(B, B_offset_list, B_size_list))
+            beta = csa_bb.add(ConstantInst(toTinyTCImmediate(ty, d.beta)))
             csa_bb.add(AxpbyInst(trans, alpha, a, beta, b))
             csa_region = csa_bb.get_product()
 
@@ -68,7 +69,7 @@ class CopyScaleAddTinytc:
             makeBatchType(ty, d.result.memoryLayout,
                           d.result.is_compute_constant, d.result.is_temporary),
             'B')
-        kernel = Function('copyscaleadd', [alpha, Abatch, Bbatch], None)
+        kernel = Function(None, [alpha, Abatch, Bbatch], None)
 
         bb = RegionBuilder()
         gid = bb.add(GroupIdInst())
@@ -91,6 +92,8 @@ class CopyScaleAddTinytc:
 
         kernel.body = bb.get_product()
         AssignIdentifiers().visit(kernel)
+        hash_ = hashlib.sha256(Dump().visit(kernel.body).encode()).hexdigest()
+        kernel.name = f'copyscaleadd_{hash_}'
 
         args = [
             TinytcScalarKernelArgument('alpha', str(d.alpha)),

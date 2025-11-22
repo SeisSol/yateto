@@ -324,7 +324,7 @@ class UnitTestFactory(KernelFactory):
       forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
       self._cpp(self._testFramework.assertLessThan('sqrt(error/refNorm)', epsMult*self._arch.epsilon))
 
-  def tensor(self, node, resultName, maxValue = 512):
+  def tensor(self, node, resultName, maxValue = 512, scale = 1 / 512):
     ml = node.memoryLayout()
     size = ml.requiredReals()
 

@@ -43,10 +43,11 @@ class ScalarType(DataType):
 
 class MemrefType(DataType):
 
-    def __init__(self, ty: ScalarType, shape: tuple[int], stride: tuple[int]):
+    def __init__(self, ty: ScalarType, shape: tuple[int], stride: tuple[int], local: bool=False):
         self.ty = ty
         self.shape = shape
         self.stride = stride
+        self.local = local
 
     def order(self):
         return len(self.shape)
@@ -175,6 +176,16 @@ class ArithInst(Inst):
         return self.result
 
 
+class ConstantInst(Inst):
+
+    def __init__(self, a: Value):
+        self.a = a
+        self.result = LocalValue(a.type())
+
+    def value(self):
+        return self.result
+
+
 class GemmInst(Inst):
 
     def __init__(self,
@@ -273,7 +284,7 @@ class SubviewInst(Inst):
         self.operand = operand
         self.offset_list = offset_list
         self.size_list = size_list
-        self.result = LocalValue(MemrefType(operand.type().ty, shape, stride))
+        self.result = LocalValue(MemrefType(operand.type().ty, shape, stride, operand.type().local))
 
     def value(self):
         return self.result
@@ -332,6 +343,10 @@ class Traversal(Visitor):
         self.visit(node.result)
         self.visit(node.a)
         self.visit(node.b)
+
+    def visit_ConstantInst(self, node):
+        self.visit(node.result)
+        self.visit(node.a)
 
     def visit_LocalValue(self, node):
         self.visit(node.type())
@@ -413,10 +428,11 @@ class Dump(Visitor):
         for s in node.shape:
             shape_str += f'x{format_mode(s)}'
         stride_str = ','.join(format_mode(s) for s in node.stride)
-        return f'memref<{self.visit(node.ty)}{shape_str}, strided<{stride_str}>>'
+        local = ', local' if node.local else ''
+        return f'memref<{self.visit(node.ty)}{shape_str}, strided<{stride_str}>{local}>'
 
     def visit_GroupType(self, node):
-        return f'group<{self.visit(node.ty)}, offset: {format_mode(node.offset)}>'
+        return f'group<{self.visit(node.ty)}x?, offset: {format_mode(node.offset)}>'
 
     def visit_IntImmValue(self, node):
         return f'{format_mode(node.value)}'
@@ -428,7 +444,7 @@ class Dump(Visitor):
         return f'%{node.name}'
 
     def visit_AllocaInst(self, node):
-        return f'{self.visit(node.value())} = alloca -> {self.visit(node.value().type())}'
+        return f'{self.visit(node.value())} = alloca : {self.visit(node.value().type())}'
 
     def visit_AxpbyInst(self, node):
         opcode = f'axpby.{node.trans.name}'
@@ -436,11 +452,13 @@ class Dump(Visitor):
             opcode += '.atomic'
         args = (node.alpha, node.a, node.beta, node.b)
         args_str = ', '.join(self.visit(arg) for arg in args)
-        type_str = ', '.join(self.visit(arg.type()) for arg in args)
-        return f'{opcode} {args_str} : {type_str}'
+        return f'{opcode} {args_str}'
 
     def visit_ArithInst(self, node):
-        return f'{self.visit(node.value())} = arith.{node.operation_type.name} {self.visit(node.a)}, {self.visit(node.b)} : {self.visit(node.a.type())}'
+        return f'{self.visit(node.value())} = arith.{node.operation_type.name} {self.visit(node.a)}, {self.visit(node.b)} : {self.visit(node.value().type())}'
+
+    def visit_ConstantInst(self, node):
+        return f'{self.visit(node.value())} = constant {self.visit(node.a)} : {self.visit(node.value().type())}'
 
     def visit_GemmInst(self, node):
         opcode = f'gemm.{node.transA.name}.{node.transB.name}'
@@ -448,23 +466,22 @@ class Dump(Visitor):
             opcode += '.atomic'
         args = (node.alpha, node.a, node.b, node.beta, node.c)
         args_str = ', '.join(self.visit(arg) for arg in args)
-        type_str = ', '.join(self.visit(arg.type()) for arg in args)
-        return f'{opcode} {args_str} : {type_str}'
+        return f'{opcode} {args_str}'
 
     def visit_GroupIdInst(self, node):
-        return f'{self.visit(node.value())} = group_id'
+        return f'{self.visit(node.value())} = group_id.x : index'
 
     def visit_LoadInst(self, node):
         indices = ','.join(self.visit(index) for index in node.index_list)
-        return f'{self.visit(node.value())} = load {self.visit(node.operand)}[{indices}] : {self.visit(node.operand.type())}'
+        return f'{self.visit(node.value())} = load {self.visit(node.operand)}[{indices}] : {self.visit(node.value().type())}'
 
     def visit_ForInst(self, node):
         loop_range = f'{self.visit(node.loop_var)}={self.visit(node.start)},{self.visit(node.stop)}'
-        return f'for {loop_range} : {self.visit(node.loop_var.type())} {self.visit(node.body)}'
+        return f'for {loop_range} {self.visit(node.body)}'
 
     def visit_StoreInst(self, node):
         indices = ','.join(self.visit(index) for index in node.index_list)
-        return f'store {self.visit(node.data)}, {self.visit(node.operand)}[{indices}] : {self.visit(node.operand.type())}'
+        return f'store {self.visit(node.data)}, {self.visit(node.operand)}[{indices}]'
 
     def visit_SubviewInst(self, node):
         slice_list = []
@@ -473,7 +490,7 @@ class Dump(Visitor):
                 slice_list.append(f'{self.visit(offset)}:{self.visit(size)}')
             else:
                 slice_list.append(f'{self.visit(offset)}')
-        return f'{self.visit(node.value())} = subview {self.visit(node.operand)}[{",".join(slice_list)}] : {self.visit(node.operand.type())}'
+        return f'{self.visit(node.value())} = subview {self.visit(node.operand)}[{",".join(slice_list)}] : {self.visit(node.value().type())}'
 
     def visit_Region(self, node):
         self.level += 1

@@ -56,7 +56,7 @@ class FusedGemmsTinytc:
             if res.is_temporary:
                 res_val = bb.add(
                     AllocaInst(
-                        makeMemrefType(toTinyTCType(res.datatype), res.memoryLayout(), False)))
+                        makeMemrefType(toTinyTCType(res.datatype), res.memoryLayout(), False, True)))
                 vals[res] = res_val
             else:
                 modified.add(res)
@@ -84,6 +84,7 @@ class FusedGemmsTinytc:
                 return ([IntImmValue(IntegerType.index, o) for o in offsets],
                         [IntImmValue(IntegerType.index, s) for s in sizes])
 
+            alpha = bb.add(ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype), scalar)))
             op1_sub = bb.add(
                 SubviewInst(
                     op1_val,
@@ -92,20 +93,21 @@ class FusedGemmsTinytc:
                 SubviewInst(
                     op2_val,
                     *offsetSizeLists(node.rightTerm().memoryLayout(), k, n)))
+            beta = bb.add(ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype), 1.0 if add else 0.0)))
             res_sub = bb.add(
                 SubviewInst(res_val,
                             *offsetSizeLists(node.memoryLayout(), m, n)))
 
             trans = lambda t: Transpose.t if t else Transpose.n
-            alpha = FloatImmValue(toTinyTCType(res.datatype), scalar)
-            beta = FloatImmValue(toTinyTCType(res.datatype), 1.0 if add else 0.0)
             bb.add(
                 GemmInst(trans(node.transA()), trans(node.transB()), alpha,
                          op1_sub, op2_sub, beta, res_sub))
 
             flops += 2 * m.size() * n.size() * k.size()
 
-        kernel = Function('fused_gemm', args.values(), bb.get_product())
+        ast = bb.get_product()
+        hash_ = hashlib.sha256(Dump().visit(ast).encode()).hexdigest()
+        kernel = Function(f'fused_gemm_{hash_}', args.values(), ast)
         AssignIdentifiers().visit(kernel)
 
         wrapper_args = []

@@ -50,6 +50,11 @@ class MemoryLayout(ABC):
   def isCompatible(self, spp):
     pass
 
+  def relranges(self):
+    starts = [0] * len(self._shape)
+    ends = list(self._shape)
+    return starts, ends
+
 class DenseMemoryLayout(MemoryLayout):
   ALIGNMENT_ARCH = None
 
@@ -438,17 +443,18 @@ class MemoryLayoutView(MemoryLayout):
     superarray = np.zeros(tuple(self.base.shape()), dtype=bool)
     superarray[subslice] = spp.as_ndarray()
     return aspp.general(superarray)
+  
+  def relranges(self):
+    starts, ends = self.base.relranges()
+    starts[self.index] = max(starts[self.index], self.start)
+    ends[self.index] = min(ends[self.index], self.end)
+    return starts, ends
 
   def __contains__(self, bbox):
     return self.base.__contains__(self.relbox(bbox))
   
   def __eq__(self, other):
-    # return np.array_equal(self.spp(), other.spp())
-    # TODO: wrong. Check np.array_equal(self.spp(), other.spp()) instead. Once implemented.
-    if isinstance(other, MemoryLayoutView):
-      return self.base == other.base and self.index == other.index and self.start == other.start and self.end == other.end
-    else:
-      return self.base == other
+    return self.storage() == other.storage() and self.relranges() == other.relranges()
   
   def address(self, entry):
     return self.base.address(self.relidx(entry))

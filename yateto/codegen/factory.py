@@ -36,7 +36,7 @@ class KernelFactory(object):
         self._cpp('{} = posix_memalign(reinterpret_cast<void**>(&{}), {}, {}*sizeof({}));'.format(
                     self.ERROR_NAME,
                     bufname,
-                    self._arch.alignment,
+                    self._arch.cacheline,
                     size,
                     self._arch.typename))
         if iniZero:
@@ -51,7 +51,7 @@ class KernelFactory(object):
           ini = ' = {}'
         elif memory:
           ini = ' = {{{}}}'.format(', '.join(memory))
-        self._cpp(f'alignas({self._arch.alignment}) {self._arch.typename} {bufname}[{size}] {ini};')
+        self._cpp(f'alignas({self._arch.cacheline}) {self._arch.typename} {bufname}[{size}] {ini};')
     else:
       declaration = f'{self._arch.typename}* {bufname}'
       total_size = f'{BatchedOperationsAux.NUM_ELEMENTS_NAME} * {size}'

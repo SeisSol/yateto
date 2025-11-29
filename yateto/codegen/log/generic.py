@@ -9,40 +9,46 @@ class Generic(object):
     self._descr = descr
     self._target = target
   
-  def _pointer(self, cpp, targetName, baseName, term, loopIndices, const=True):
+  def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True):
     indices = term.indices & loopIndices
-    addressStr = term.memoryLayout.addressString(term.indices, indices) if len(indices) > 0 else ''
+    addressStr = term.memoryLayout.addressString(term.indices, indices, fixed) if len(indices) > 0 else ''
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
     cpp('{} {}* {} = {}{};'.format(self._arch.typename, 'const' if const else '', targetName, baseName, addressStr))
 
-  def _alignedStart(self, term, loopIndices):
+  def _alignedStart(self, term, loopIndices, fixed):
     if len(loopIndices) == 0:
       return True
-    return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices)
+    return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices, fixed)
     
-  def _memLayout(self, term, I, J):
+  def _memLayout(self, term, I, J, fixed):
     if len(I) == 0 and len(J) == 0:
       return DenseMemoryLayout((1,1))
     elif len(I) == 0:
-      ml = term.memoryLayout.vec(term.indices, J)
+      ml = term.memoryLayout.vec(term.indices, J, fixed)
       return ml.withDummyDimension()
     elif len(J) == 0:
-      ml = term.memoryLayout.vec(term.indices, I)
+      ml = term.memoryLayout.vec(term.indices, I, fixed)
       return ml.withDummyDimension()
     elif len(term.indices) == 2:
       return term.memoryLayout
-    return term.memoryLayout.unfold(term.indices, I, J)
+    return term.memoryLayout.unfold(term.indices, I, J, fixed)
+  
+  def _unroll(self, term, I):
+    if not term.memoryLayout.isSparse():
+      return set()
 
-  def _reduce(self, term, subset, memLayout):
-    return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape())
+    return I
+
+  def _reduce(self, term, subset, memLayout, fixed):
+    return reduceSpp(term.eqspp, term.indices, subset, fixed).reshape(memLayout.shape())
   
   def _defuse(self, fusedRange, term, I):
     if len(I) == 1:
       return  {next(iter(I)): fusedRange}
     return term.memoryLayout.defuse(fusedRange, term.indices, I)
 
-  def generate(self, cpp, routineCache, gemm_cfg):
+  def _generateSingle(self, cpp, routineCache, gemm_cfg, fixed = {}):
     d = self._descr
     
     A = d.leftTerm.indices - d.loopIndices
@@ -69,15 +75,15 @@ class Generic(object):
     innerCname = '_Cin' if hasInnerLoops else outerCname
     innerPrefetchName = '_Cprefetchin' if hasInnerLoops and outerPrefetchName is not None else outerPrefetchName
 
-    alignedStartA = not hasOuterLoops or self._alignedStart(d.leftTerm, d.outerLoopIndices)
+    alignedStartA = not hasOuterLoops or self._alignedStart(d.leftTerm, d.outerLoopIndices, fixed)
     
-    AmemLayout = self._memLayout(d.leftTerm, Im, Ik)
-    BmemLayout = self._memLayout(d.rightTerm, Ik, In)
-    CmemLayout = self._memLayout(d.result, Im, In)
+    AmemLayout = self._memLayout(d.leftTerm, Im, Ik, fixed)
+    BmemLayout = self._memLayout(d.rightTerm, Ik, In, fixed)
+    CmemLayout = self._memLayout(d.result, Im, In, fixed)
 
-    Aeqspp = self._reduce(d.leftTerm, A, AmemLayout)
-    Beqspp = self._reduce(d.rightTerm, B, BmemLayout)
-    Ceqspp = self._reduce(d.result, C, CmemLayout)
+    Aeqspp = self._reduce(d.leftTerm, A, AmemLayout, fixed)
+    Beqspp = self._reduce(d.rightTerm, B, BmemLayout, fixed)
+    Ceqspp = self._reduce(d.result, C, CmemLayout, fixed)
 
     gemmDescr = gemm.Description(
       leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary),
@@ -88,8 +94,8 @@ class Generic(object):
       alpha = d.alpha,
       beta = 1.0 if d.add else 0.0,
       arch = self._arch,
-      alignedStartA = self._alignedStart(d.leftTerm, d.outerLoopIndices) and self._alignedStart(d.leftTerm, d.innerLoopIndices),
-      alignedStartC = self._alignedStart(d.result, d.outerLoopIndices) and self._alignedStart(d.result, d.innerLoopIndices),
+      alignedStartA = self._alignedStart(d.leftTerm, d.outerLoopIndices, fixed) and self._alignedStart(d.leftTerm, d.innerLoopIndices, fixed),
+      alignedStartC = self._alignedStart(d.result, d.outerLoopIndices, fixed) and self._alignedStart(d.result, d.innerLoopIndices, fixed),
       prefetchName = innerPrefetchName
     )
     
@@ -105,11 +111,11 @@ class Generic(object):
     class LoGBody(object):
       def __call__(s):
         if hasInnerLoops:
-          self._pointer(cpp, innerAname, outerAname, d.leftTerm, d.innerLoopIndices)
-          self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices)
-          self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, const=False)
+          self._pointer(cpp, innerAname, outerAname, d.leftTerm, d.innerLoopIndices, fixed)
+          self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices, fixed)
+          self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, fixed, const=False)
           if outerPrefetchName is not None:
-            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices)
+            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices, fixed)
         generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target)
         return generator.generate(cpp, routineCache)
 
@@ -117,18 +123,60 @@ class Generic(object):
       def __call__(s):
         flops = 0
         if hasOuterLoops:
-          self._pointer(cpp, outerAname, d.leftTerm.name, d.leftTerm, d.outerLoopIndices)
-          self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices)
-          self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices, const=False)
+          self._pointer(cpp, outerAname, d.leftTerm.name, d.leftTerm, d.outerLoopIndices, fixed)
+          self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices, fixed)
+          self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices, fixed, const=False)
           if d.prefetchName is not None:
-            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices)
+            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices, fixed)
+
         if d.assignLoopRanges is not None:
           gemmDescr.setBeta(0.0)
-          flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody(), pragmaSimd=False)
+          flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody(), pragmaSimd=False, fixed=fixed)
         if d.addLoopRanges is not None:
           gemmDescr.setBeta(1.0)
-          flops += forLoops(cpp, d.innerLoopIndices, d.addLoopRanges, LoGBody(), pragmaSimd=False)
+          flops += forLoops(cpp, d.innerLoopIndices, d.addLoopRanges, LoGBody(), pragmaSimd=False, fixed=fixed)
         return flops
 
-    return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody(), pragmaSimd=False)
+    return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody(), pragmaSimd=False, fixed=fixed)
 
+  def _generateUnroll(self, cpp, routineCache, gemm_cfg, fixed, unroll):
+    d = self._descr
+
+    if len(unroll) == 0:
+      return self._generateSingle(cpp, routineCache, gemm_cfg, fixed)
+    
+    unrollNow = unroll[0]
+
+    rngNow = d.loopRanges[unrollNow]
+
+    result = 0
+    for i in range(rngNow.start, rngNow.stop):
+      fixedNow = dict(fixed)
+      fixedNow[unrollNow] = i
+      result += self._generateUnroll(cpp, routineCache, gemm_cfg, fixedNow, unroll[1:])
+    
+    return result
+
+  def generate(self, cpp, routineCache, gemm_cfg):
+    d = self._descr
+    
+    A = d.leftTerm.indices - d.loopIndices
+    B = d.rightTerm.indices - d.loopIndices
+    C = d.result.indices - d.loopIndices
+    Im = set(A) & set(C)
+    In = set(B) & set(C)
+    Ik = set(A) & set(B)
+
+    toBeUnrolled = d.loopRanges.keys()
+
+    unrollNeeded = set()
+    if d.leftTerm.memoryLayout.isSparse():
+      unrollNeeded |= set(d.leftTerm.indices)
+    if d.rightTerm.memoryLayout.isSparse():
+      unrollNeeded |= set(d.rightTerm.indices)
+    if d.result.memoryLayout.isSparse():
+      unrollNeeded |= set(d.result.indices)
+    
+    toBeUnrolled &= unrollNeeded
+
+    return self._generateUnroll(cpp, routineCache, gemm_cfg, {}, list(toBeUnrolled))

@@ -631,18 +631,23 @@ class InitializerGenerator(object):
   VIEW_STRUCT_NAME = 'view'
   VIEW_FUN_NAME = 'create'
   VIEW_TYPE_NAME = 'type'
+  VIEW_TYPE_NAME_CONST = 'type_const'
   
   class TensorView(object):
     ARGUMENT_NAME = 'values'
 
-    def typename(self, dim, arch):
-      return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename)
+    def typename(self, dim, arch, const):
+      dtype = f'{arch.typename} const*' if const else f'{arch.typename} *'
+      return '::{}::{}<{},{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename, dtype)
     
     @classmethod
-    def arguments(cls, arch):
-      return '{}* {}'.format(arch.typename, cls.ARGUMENT_NAME)
+    def arguments(cls, arch, const):
+      if const:
+        return '{} const* {}'.format(arch.typename, cls.ARGUMENT_NAME)
+      else:
+        return '{} * {}'.format(arch.typename, cls.ARGUMENT_NAME)
     
-    def generate(cpp, group, memLayout):
+    def generate(cpp, group, memLayout, arch, index, const):
       raise NotImplementedError
     
     def listToInitializerList(self, lst):
@@ -658,9 +663,9 @@ class InitializerGenerator(object):
     START_NAME = 'Start'
     STOP_NAME = 'Stop'
 
-    def generate(self, cpp, memLayout, arch, index):
+    def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {}, {});'.format(
-          self.typename(len(memLayout.shape()), arch),
+          self.typename(len(memLayout.shape()), arch, const),
           self.ARGUMENT_NAME,
           self.listToInitializerList(memLayout.shape()),
           self.listToInitializerList([r.start for r in memLayout.bbox()]),
@@ -676,12 +681,13 @@ class InitializerGenerator(object):
     ROWIND_NAME = 'RowInd'
     COLPTR_NAME = 'ColPtr'
     
-    def typename(self, dim, arch):
-      return '::{}::{}<{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename)
+    def typename(self, dim, arch, const):
+      dtype = f'{arch.typename} const*' if const else f'{arch.typename} *'
+      return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename, dtype)
 
-    def generate(self, cpp, memLayout, arch, index):
+    def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {}, {});'.format(
-          self.typename(len(memLayout.shape()), arch),
+          self.typename(len(memLayout.shape()), arch, const),
           self.ARGUMENT_NAME,
           self.listToInitializerList(memLayout.shape()),
           self.ROWIND_NAME + (index if index is not None else ''),
@@ -894,14 +900,18 @@ class InitializerGenerator(object):
           cpp('{} {} {}[];'.format(STATIC, self._realPtrType, self.VALUES_BASENAME))
 
         cpp.emptyline()
-        viewArgs = self.TensorView.arguments(self._arch)
+        viewArgs = self.TensorView.arguments(self._arch, False)
+        viewArgsConst = self.TensorView.arguments(self._arch, True)
         if len(groupSize) == 0:
           ml = next(iter(tensors.values())).memoryLayout()
           tv = self._tensorViewGenerator(ml)
           with cpp.Struct(self.VIEW_STRUCT_NAME):
-            cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch)};')
+            cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch, False)};')
+            cpp(f'using {self.VIEW_TYPE_NAME_CONST} = {tv.typename(len(ml.shape()), self._arch, True)};')
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
-              tv.generate(cpp, ml, self._arch, None)
+              tv.generate(cpp, ml, self._arch, None, False)
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME_CONST)):
+              tv.generate(cpp, ml, self._arch, None, True)
         else:
           typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
           cpp('template<{}> struct {} {{}};'.format(typedArgs, self.VIEW_STRUCT_NAME))
@@ -910,13 +920,17 @@ class InitializerGenerator(object):
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
           tv = self._tensorViewGenerator(ml)
-          typename = tv.typename(len(ml.shape()), self._arch)
+          typename = tv.typename(len(ml.shape()), self._arch, False)
+          typenameConst = tv.typename(len(ml.shape()), self._arch, True)
           special = ','.join(str(g) for g in group)
           cpp('template<>')
           with cpp.Struct('{}::{}<{}>'.format(baseNameWithoutNamespace, self.VIEW_STRUCT_NAME, special)):
             cpp(f'using {self.VIEW_TYPE_NAME} = {typename};')
+            cpp(f'using {self.VIEW_TYPE_NAME_CONST} = {typenameConst};')
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
-              tv.generate(cpp, ml, self._arch, index(group))
+              tv.generate(cpp, ml, self._arch, index(group), False)
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME_CONST)):
+              tv.generate(cpp, ml, self._arch, index(group), True)
   
   def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True, constexpr=True, static=True):
     cexpr = CONSTEXPR + ' ' if constexpr else ''

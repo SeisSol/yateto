@@ -47,7 +47,7 @@ namespace yateto {
     }
 
   protected:
-    uint_t m_shape[Dim];
+    uint_t m_shape[Dim]{};
   };
 
   template<typename real_t, typename uint_t>
@@ -113,7 +113,7 @@ namespace yateto {
 
     template<typename F>
     void forall(F&& function) {
-      uint_t entry[Dim];
+      uint_t entry[Dim]{};
       std::copy(m_start, m_start + Dim, entry);
       while (entry[Dim-1] != m_stop[Dim-1]) {
         auto values = &operator[](entry);
@@ -136,7 +136,7 @@ namespace yateto {
 
     template<typename F>
     void forall(F&& function) const {
-      uint_t entry[Dim];
+      uint_t entry[Dim]{};
       std::copy(m_start, m_start + Dim, entry);
       while (entry[Dim-1] != m_stop[Dim-1]) {
         auto values = &operator[](entry);
@@ -158,7 +158,7 @@ namespace yateto {
     }
     
     void setZero() {
-      uint_t entry[Dim];
+      uint_t entry[Dim]{};
       std::copy(m_start, m_start + Dim, entry);
       while (entry[Dim-1] != m_stop[Dim-1]) {
         auto values = &operator[](entry);
@@ -235,7 +235,7 @@ namespace yateto {
     void copyToView(view_t& other) const {
       assert(Dim == other.dim());
       
-      uint_t entry[Dim];
+      uint_t entry[Dim]{};
       for (uint_t d = 0; d < Dim; ++d) {
         assert(this->shape(d) == other.shape(d));
         entry[d] = m_start[d];
@@ -267,9 +267,9 @@ namespace yateto {
     auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t> const {
       static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
-      uint_t begin[Dim];
-      uint_t size[nSlices];
-      uint_t stride[nSlices];
+      uint_t begin[Dim]{};
+      uint_t size[nSlices]{};
+      uint_t stride[nSlices]{};
       extractSubtensor(begin, size, stride, entry...);
       DenseTensorView<nSlices, real_t, uint_t> subtensor(&operator[](begin), size, stride);
       return subtensor;
@@ -331,9 +331,9 @@ namespace yateto {
     }
 
     real_t* m_values;
-    uint_t m_start[Dim];
-    uint_t m_stop[Dim];
-    uint_t m_stride[Dim];
+    uint_t m_start[Dim]{};
+    uint_t m_stop[Dim]{};
+    uint_t m_stride[Dim]{};
   };
 
   template<typename real_t, typename uint_t>

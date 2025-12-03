@@ -453,9 +453,13 @@ class PatternMemoryLayout(MemoryLayout):
     return self._pattern[tuple(entry)] - 1
   
   def subtensorOffset(self, topLeftEntry):
+    tle = topLeftEntry
     assert topLeftEntry in self._bbox
+
+    subpat = [self._pattern[tle] for ex in self._nonzeros if
+      all(e >= tle[i] for i,e in enumerate(ex))]
     
-    return 0
+    return subpat[0] - 1 if len(subpat) > 0 else 0
 
     #assert self._next[tuple(topLeftEntry)] > 0
 

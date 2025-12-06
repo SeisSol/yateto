@@ -470,6 +470,9 @@ class MemoryLayoutView(MemoryLayout):
     raise NotImplementedError()
   
   def isCompatible(self, spp):
+    # not 100%ly sure; but prevents errors in the method below
+    if spp.as_ndarray().shape != tuple(self.shape()):
+      return False
     return self.base.isCompatible(self.relspp(spp))
 
   def mayVectorizeDim(self, dim):

@@ -106,7 +106,7 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     right_indices = node.rightTerm().indices
     common_indices = left_indices & right_indices
 
-    if left_indices[0] in common_indices:
+    if len(left_indices) == 0 or left_indices[0] in common_indices:
       # swap terms becase we do not allow
       # tensor product along the leading dimension.
       # In other words, LoG will try to swap terms
@@ -118,6 +118,9 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
   def estimate_Product(self, node):
     cost = super().estimate_Product(node)
     left_term, right_term = self._get_terms(node)
+
+    # NOTE: the case rank-0 tensor product rank-0 tensor is currently ill-supported here,
+    # (we only save against _one_ rank-0 tensor in self._get_terms)
 
     bb = self._cache[left_term]
     cost /= bb[self._lead_dim].size()

@@ -43,10 +43,12 @@ class IndexedTensorDescription(TensorDescription):
     values = None
     datatype = None
     addressing = None
-    if hasattr(node, 'tensor'):
-      is_const = node.tensor.is_compute_constant()
+
+    baseNode = node.viewed()
+    if hasattr(baseNode, 'tensor'):
+      is_const = baseNode.tensor.is_compute_constant()
       if is_const:
-        values = node.tensor.values()
+        values = baseNode.tensor.values()
       datatype = None # node.tensor.datatype
       addressing = None # node.tensor.addressing
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)

@@ -73,7 +73,10 @@ class FindTensors(Visitor):
     return tensors
 
   def visit_IndexedTensor(self, node):
-    return {node.name(): node.tensor}
+    if node.tensor is not None and node.tensor.temporary:
+      return {}
+    else:
+      return {node.name(): node.tensor}
 
 class FindIndexPermutations(Visitor):
   class Variant(object):

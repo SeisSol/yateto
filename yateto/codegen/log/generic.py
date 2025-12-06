@@ -17,8 +17,6 @@ class Generic(object):
     cpp('{} {}* {} = {}{};'.format(self._arch.typename, 'const' if const else '', targetName, baseName, addressStr))
 
   def _alignedStart(self, term, loopIndices):
-    if len(loopIndices) == 0:
-      return True
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices)
     
   def _memLayout(self, term, I, J):
@@ -68,8 +66,6 @@ class Generic(object):
     innerBname = '_Bin' if hasInnerLoops else outerBname
     innerCname = '_Cin' if hasInnerLoops else outerCname
     innerPrefetchName = '_Cprefetchin' if hasInnerLoops and outerPrefetchName is not None else outerPrefetchName
-
-    alignedStartA = not hasOuterLoops or self._alignedStart(d.leftTerm, d.outerLoopIndices)
     
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In)

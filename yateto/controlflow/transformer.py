@@ -154,8 +154,11 @@ class DetermineLocalInitialization(object):
       # free buffers
       free = cfg[i].live - cfg[i+1].live
       for local in free:
-        if local in usedBuffers:
-          freeBuffers.appendleft(usedBuffers.pop(local))
+        # warning: local.isLocal() check is suboptimal (but currently good enough)
+        # refactor liveness for better results
+        if local.isLocal():
+          if local in usedBuffers:
+            freeBuffers.appendleft(usedBuffers.pop(local))
 
     if len(cfg) > 0:
       cfg[0].initBuffer = bufferSize

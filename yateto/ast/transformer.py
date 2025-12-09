@@ -87,6 +87,12 @@ class DeduceIndices(Transformer):
     self.visit(node.term(), bound)
     node.indices = deepcopy(node.term().indices)
     return node
+  
+  def visit_Elementwise(self, node, bound):
+    for child in node:
+      self.visit(child, bound)
+    node.indices = deepcopy(node[0].indices)
+    return node
 
   def visit_Assign(self, node, bound):
     lhs = node[0]
@@ -196,6 +202,11 @@ class EquivalentSparsityPattern(Transformer):
     node.setEqspp( node.computeSparsityPattern() )
     return node
   
+  def visit_Elementwise(self, node):
+    self.generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+  
   def getEqspp(self, terms, targetIndices):
     # Shortcut if all terms have dense eqspps
     if all(term.eqspp().is_dense() for term in terms):
@@ -237,4 +248,52 @@ class ComputeMemoryLayout(Transformer):
     return node
   
   def visit_IndexedTensor(self, node):
+    return node
+
+class SetDatatype1(Transformer):
+  def __init__(self, arch):
+    self.arch = arch
+
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    assert(len(node) > 0)
+    assert(all(child.datatype == node[0].datatype for child in node))
+    node.datatype = node[0].datatype
+    return node
+
+  def visit_IndexedTensor(self, node):
+    super().generic_visit(node)
+    node.datatype = node.tensor.getDatatype(self.arch)
+    return node
+  
+  def visit_Elementwise(self, node):
+    super().generic_visit(node)
+    node.datatype = node.optype.datatypeResult([c.datatype for c in node])
+    return node
+  
+  def visit_Assign(self, node):
+    super().generic_visit(node)
+    node.datatype = node[0].datatype
+    return node
+
+class SetDatatype2(Transformer):
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    assert(len(node) > 0)
+    assert(all(child.datatype == node[0].datatype for child in node))
+    node.datatype = node[0].datatype
+    return node
+
+  def visit_IndexedTensor(self, node):
+    super().generic_visit(node)
+    return node
+  
+  def visit_Elementwise(self, node):
+    super().generic_visit(node)
+    node.datatype = node.optype.datatypeResult([c.datatype for c in node])
+    return node
+  
+  def visit_Assign(self, node):
+    super().generic_visit(node)
+    node.datatype = node[0].datatype
     return node

@@ -20,7 +20,7 @@ class Generic(object):
 
     if d.beta == 0.0:
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
-      initializeWithZero(cpp, self._arch, d.result, writeBB)
+      initializeWithZero(cpp, d.result, writeBB)
 
     class CopyScaleAddBody(object):
       def __call__(s):

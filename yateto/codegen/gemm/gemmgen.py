@@ -7,8 +7,9 @@ from collections import namedtuple
 
 from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
-from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
+from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, toTinyTCType, toTinyTCImmediate
 from ..tiny_tensor_language import *
+from ...type import Datatype
 import importlib.util
 
 
@@ -66,9 +67,8 @@ class GemmGen(object):
       sha = hashlib.new('md5', usedforsecurity=False)
       sha.update(str(sppB).encode())
       name += '_' + sha.hexdigest()
-    return '{name}_{datatype}_{arch}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
+    return '{name}_{datatypeA}_{datatypeB}_{datatypeC}_{arch}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
       name=name,
-      datatype=self._arch.typename,
       arch=self._arch.name.replace('-', '_'),
       alphaSubs=self._alpha(gemm['alpha']),
       betaSubs=self._beta(gemm['beta']),
@@ -139,11 +139,18 @@ class GemmGen(object):
                                 d.beta, ptr_c, ldC,
                                 alignedA=d.alignedA,
                                 alignedC=d.alignedC,
-                                prefetchName=d.prefetchName))
+                                prefetchName=d.prefetchName,
+                                datatypeA=d.leftTerm.datatype,
+                                datatypeB=d.rightTerm.datatype,
+                                datatypeC=d.result.datatype))
     elif isinstance(self._gemm_cfg, GemmForge):
 
+      assert d.result.datatype == d.leftTerm.datatype
+      assert d.result.datatype == d.rightTerm.datatype
+      ctype = d.result.datatype.ctype()
+
       if gf_spec:
-        aux = BatchedOperationsAux(self._arch.typename)
+        aux = BatchedOperationsAux()
 
         matrix_a = gf.YatetoInterface.produce_dense_matrix((m, k),
                                                            d.leftTerm.memoryLayout.bbox(),
@@ -161,7 +168,7 @@ class GemmGen(object):
                                                            transpose=False)
 
         try:
-          vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=self._arch.typename)
+          vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=ctype)
           forge_generator = gf.GemmGenerator(vm)
           forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
           routine_name = forge_generator.get_base_name()
@@ -191,7 +198,7 @@ class GemmGen(object):
         raise RuntimeError('gemmforge module is not found. You can install it with pip3. '
                            'e.g., pip3 install gemmforge')
     elif isinstance(self._gemm_cfg, tinytc):
-      aux = BatchedOperationsAux(self._arch.typename)
+      aux = BatchedOperationsAux()
       gemm = {
         'M':            m.size(),
         'N':            n.size(),
@@ -209,12 +216,15 @@ class GemmGen(object):
         'beta':         self._beta(d.beta),
         'transA':       d.transA,
         'transB':       d.transB,
+        'datatypeA':    d.leftTerm.datatype,
+        'datatypeB':    d.rightTerm.datatype,
+        'datatypeC':    d.result.datatype,
       }
 
       kernel = tinytcGemmGen(self._arch, gemm)
 
       def call_arg(name, term, modified, offset):
-          return TinytcKernelArgument(name, term.name, term.is_compute_constant, term.is_temporary, modified, offset)
+          return TinytcKernelArgument(name, term.datatype, term.name, term.is_compute_constant, term.is_temporary, modified, offset)
       offset_a = self._offset(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
       offset_b = self._offset(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
       offset_c = self._offset(term=d.result, offset2=(m.start, n.start), transpose=False)
@@ -222,8 +232,8 @@ class GemmGen(object):
               call_arg('A', d.leftTerm, False, offset_a),
               call_arg('B', d.rightTerm, False, offset_b),
               call_arg('C', d.result, True, offset_c)]
-      routine_name = 'tinytc_wrapper_{typename}_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_tA{transA}_tB{transB}'.format(typename=self._arch.typename, **gemm)
-      wrapper = TinytcWrapper(kernel, args, self._arch.typename, routine_name)
+      routine_name = 'tinytc_wrapper_{datatypeA}_{datatypeB}_{datatypeC}_m{M}_n{N}_k{K}_ldA{LDA}_{addrA}_{distA}_ldB{LDB}_{addrB}_{distB}_ldC{LDC}_{addrC}_{distC}_alpha{alpha}_beta{beta}_tA{transA}_tB{transB}'.format(**gemm)
+      wrapper = TinytcWrapper(kernel, args, routine_name)
 
       cpp(wrapper.call())
       prototype = wrapper.prototype()
@@ -243,7 +253,9 @@ class GemmGen(object):
         'prefetch':     'BL2viaC' if self._arch.enablePrefetch and d.prefetchName is not None else 'nopf',
         'transA': d.transA,
         'transB': d.transB,
-
+        'datatypeA': d.leftTerm.datatype,
+        'datatypeB': d.rightTerm.datatype,
+        'datatypeC': d.result.datatype,
       }
 
       routineName = self.generateRoutineName(gemm, sppA, sppB)
@@ -323,7 +335,19 @@ Stderr: {result.stderr}""")
   def __call__(self, routineName, fileName):
     cpu_arch = self._arch.host_name
 
+    assert self._gemmDescr['datatypeC'] == self._gemmDescr['datatypeA']
+    assert self._gemmDescr['datatypeC'] == self._gemmDescr['datatypeB']
+
     if self._mode == 'pspamm':
+      assert self._gemmDescr['datatypeC'] in [Datatype.BF16, Datatype.F16, Datatype.F32, Datatype.F64]
+
+      precision = {
+        Datatype.BF16: 'BF16',
+        Datatype.F16: 'H',
+        Datatype.F32: 'S',
+        Datatype.F64: 'D'
+      }[self._gemmDescr['datatypeC']]
+
       pspamm_arch = cpu_arch
       if cpu_arch == 'a64fx':
         pspamm_arch = 'arm_sve512'
@@ -358,7 +382,7 @@ Stderr: {result.stderr}""")
         '--output_filename',
         fileName,
         '--precision',
-        self._arch.precision
+        precision
       ]
       if self._gemmDescr['prefetch'] != 'nopf':
         argList.extend(['--prefetching', self._gemmDescr['prefetch']])
@@ -369,6 +393,14 @@ Stderr: {result.stderr}""")
       for key, val in self._blockSize.items():
         argList.extend(['--' + key, val])
     else:
+      assert self._gemmDescr['datatypeC'] in [Datatype.I16, Datatype.F32, Datatype.F64]
+
+      precision = {
+        Datatype.I16: 'I16',
+        Datatype.F32: 'SP',
+        Datatype.F64: 'DP'
+      }[self._gemmDescr['datatypeC']]
+
       libxsmm_arch = cpu_arch
       if cpu_arch in ['naples', 'rome', 'milan', 'avx2-256']:
         # names are Zen1, Zen2, Zen3, respectively
@@ -393,7 +425,7 @@ Stderr: {result.stderr}""")
         self._gemmDescr['alignedC'],
         libxsmm_arch, # libxsmm has no support for rome, hsw works well in practice
         self._gemmDescr['prefetch'],
-        self._arch.precision + 'P'
+        precision
       ]
     class SparsityWrapper:
       def __init__(self, shape, spp):
@@ -438,13 +470,18 @@ Stderr: {result.stderr}""")
         self._callGenerator(argList)
 
     if self._mode == 'pspamm':
-      return 'void {name}(const {type}* A, const {type}* B, {type}* C, {type} alpha, {type} beta, const {type}* prefetch);'.format(name=routineName, type=self._arch.typename)
+      return 'void {name}(const {atype}* A, const {btype}* B, {ctype}* C, {ctype} alpha, {ctype} beta, const {ctype}* prefetch);'.format(name=routineName,
+        atype=self._gemmDescr['datatypeA'].ctype(),
+        btype=self._gemmDescr['datatypeB'].ctype(),
+        ctype=self._gemmDescr['datatypeC'].ctype(),
+        )
 
     # LIBXSMM header
+    datatype = self._gemmDescr['datatypeC'].ctype()
     if self._gemmDescr['prefetch'] == 'nopf':
-      return 'void {name}(const {type}* A, const {type}* B, {type}* C);'.format(name=routineName, type=self._arch.typename)
+      return 'void {name}(const {type}* A, const {type}* B, {type}* C);'.format(name=routineName, type=datatype)
     else:
-      return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=self._arch.typename)
+      return 'void {name}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch);'.format(name=routineName, type=datatype)
 
 class GemmForgeWriter(GpuRoutineGenerator):
   def __init__(self, forge_generator, headers):
@@ -500,6 +537,9 @@ class LibxsmmGemmGen(ExecuteGemmGen):
     prefetch = self._gemmDescr['prefetch']
     transA = self._gemmDescr['transA']
     transB = self._gemmDescr['transB']
+    datatypeA = self._gemmDescr['datatypeA']
+    datatypeB = self._gemmDescr['datatypeB']
+    datatypeC = self._gemmDescr['datatypeC']
 
     flags = ["LIBXSMM_GEMM_FLAG_NONE"]
     if transA:
@@ -535,7 +575,7 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
   {prefetch_flag} // prefetch
 ); 
 """.format(kernel_var_name=kernel_var_name,
-           prec=self._arch.typename, M=M, N=N, K=K,
+           prec=datatypeC.ctype(), M=M, N=N, K=K,
            ldA=ldA, ldB=ldB, ldC=ldC,
            alpha=alpha, beta=beta,
            flag=libxsmm_flag_str,
@@ -563,7 +603,8 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
 """
 
   def _functionSignature(self, routineName):
-    return 'void {routineName}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch)'.format(routineName=routineName, type=self._arch.typename)
+    datatypeC = self._gemmDescr['datatypeC'].ctype()
+    return 'void {routineName}(const {type}* A, const {type}* B, {type}* C, const {type}* A_prefetch, const {type}* B_prefetch, const {type}* C_prefetch)'.format(routineName=routineName, type=datatypeC)
 
   def __call__(self, routineName, fileName):
     func_signature = self._functionSignature(routineName)
@@ -574,50 +615,55 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
     return func_signature + ";"
 
 def tinytcGemmGen(arch, gd):
-  scalar_ty = ScalarType(FloatingType.f64) if arch.bytesPerReal == 8 else ScalarType(FloatingType.f32)
-
-  Operand = namedtuple('Operand', ['name', 'addr', 'rows', 'cols', 'ld', 'dist'])
+  Operand = namedtuple('Operand', ['name', 'addr', 'rows', 'cols', 'ld', 'dist', 'datatype'])
+  def scalar_type(op):
+    return toTinyTCType(op.datatype)
   def data_type(op):
-    if op.addr == 'pointer_based':
+    scalar_ty = scalar_type(op)
+    if op.addr == AddressingMode.INDIRECT:
       return GroupType(MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld)), DYNAMIC)
-    elif op.addr == 'strided':
+    elif op.addr == AddressingMode.STRIDED:
       return MemrefType(scalar_ty, (op.rows, op.cols, DYNAMIC), (1, op.ld, op.dist))
-    elif op.addr == 'none':
+    elif op.addr == AddressingMode.NONE:
       return MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld))
     else:
       raise NameError(op.addr)
   def load_inst(op, batch, gid):
     zero = IntImmValue(IntegerType.index, 0)
     dyn = IntImmValue(IntegerType.index, DYNAMIC)
-    if op.addr == 'pointer_based':
+    if op.addr == AddressingMode.INDIRECT:
       return LoadInst(batch, [gid])
-    elif op.addr == 'strided':
+    elif op.addr == AddressingMode.STRIDED:
       return SubviewInst(batch, [zero,zero,gid], [dyn,dyn,None])
-    elif op.addr == 'none':
+    elif op.addr == AddressingMode.NONE:
       return SubviewInst(batch, [zero,zero], [dyn,dyn])
     else:
       raise NameError(op.addr)
 
-  opA = Operand('A', gd['addrA'], gd['M'], gd['K'], gd['LDA'], gd['distA'])
-  opB = Operand('B', gd['addrB'], gd['K'], gd['N'], gd['LDB'], gd['distB'])
-  opC = Operand('C', gd['addrC'], gd['M'], gd['N'], gd['LDC'], gd['distC'])
+  opA = Operand('A', gd['addrA'], gd['M'], gd['K'], gd['LDA'], gd['distA'], gd['datatypeA'])
+  opB = Operand('B', gd['addrB'], gd['K'], gd['N'], gd['LDB'], gd['distB'], gd['datatypeB'])
+  opC = Operand('C', gd['addrC'], gd['M'], gd['N'], gd['LDC'], gd['distC'], gd['datatypeC'])
 
   T = lambda x: Transpose.t if x else Transpose.n
   tA = T(gd['transA'])
   tB = T(gd['transB'])
-  beta = gd['beta']
+  alphaV = gd['alpha']
+  betaV = gd['beta']
 
-  alpha = LocalValue(scalar_ty, 'alpha')
-  Abatch = LocalValue(data_type(opA), 'Abatch')
-  Bbatch = LocalValue(data_type(opB), 'Bbatch')
-  Cbatch = LocalValue(data_type(opC), 'Cbatch')
+  scalar_ty_a = toTinyTCType(ocA.datatype)
+  scalar_ty_b = toTinyTCType(ocB.datatype)
+  scalar_ty_c = toTinyTCType(ocC.datatype)
+  alpha = bb.add(ConstantInst(toTinyTCImmediate(scalar_ty_c, alphaV))) if isinstance(alphaV, (int, float)) else LocalValue(scalar_ty_c, 'alpha')
+  Abatch = LocalValue(scalar_ty_a, 'Abatch')
+  Bbatch = LocalValue(scalar_ty_b, 'Bbatch')
+  Cbatch = LocalValue(scalar_ty_c, 'Cbatch')
   kernel = Function('gemm', [alpha, Abatch, Bbatch, Cbatch], None)
   bb = RegionBuilder()
   gid = bb.add(GroupIdInst())
   A = bb.add(load_inst(opA, Abatch, gid))
   B = bb.add(load_inst(opB, Bbatch, gid))
   C = bb.add(load_inst(opC, Cbatch, gid))
-  beta = bb.add(ConstantInst(FloatImmValue(scalar_ty, beta)))
+  beta = bb.add(ConstantInst(toTinyTCImmediate(scalar_ty_c, betaV))) if isinstance(betaV, (int, float)) else LocalValue(scalar_ty_c, 'beta')
   bb.add(GemmInst(tA, tB, alpha, A, B, beta, C))
   kernel.body = bb.get_product()
   AssignIdentifiers().visit(kernel)

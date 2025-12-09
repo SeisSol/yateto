@@ -21,7 +21,7 @@ class Generic(object):
 
     if not d.add:
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
-      initializeWithZero(cpp, self._arch, d.result, writeBB)
+      initializeWithZero(cpp, d.result, writeBB)
 
     class ProductBody(object):
       def __call__(s):
@@ -42,7 +42,7 @@ class Generic(object):
     d = self._descr
 
     if not d.add:
-      initializeWithZero(cpp, self._arch, d.result)
+      initializeWithZero(cpp, d.result)
 
     left = d.result.indices.positions(d.leftTerm.indices, sort=False)
     right = d.result.indices.positions(d.rightTerm.indices, sort=False)

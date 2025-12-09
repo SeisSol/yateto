@@ -232,7 +232,10 @@ class PSpaMM(CodeGenerator):
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     # NOTE: PSpaMM 0.3.0+ supports SIMD-aligned block sparsity in A (which is currently covered by sparseA + alignedA)
-    return self.archSupported() and alignedC and alignedA and (not transA and not transB) and target == 'cpu' and self._equalType(datatypeA, datatypeB, datatypeC, [Datatype.BF16, Datatype.F16, Datatype.F32, Datatype.F64])
+    # also, it supports for AVX512/10 and SVE unaligned matmuls in 0.3.1
+    noAlign = self._arch.host_name.lower() in {'thunderx2t99', 'knl', 'skx', 'a64fx', 'bergamo', 'turin', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'avx10-128', 'avx10-256', 'avx10-512'}
+    alignment = sparseA and alignedA or not sparseA and (noAlign or alignedA)
+    return self.archSupported() and (alignedC or noAlign) and alignment and (not transA and not transB) and target == 'cpu' and self._equalType(datatypeA, datatypeB, datatypeC, [Datatype.BF16, Datatype.F16, Datatype.F32, Datatype.F64])
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     if sparseB:

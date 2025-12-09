@@ -39,16 +39,18 @@ class IndexedTensorDescription(TensorDescription):
 
   @classmethod
   def fromNode(cls, var, node):
-    datatype = node.datatype
+    baseNode = node.viewed()
+    datatype = baseNode.datatype
 
     is_const = False
     values = None
     addressing = None
-    if hasattr(node, 'tensor'):
-      is_const = node.tensor.is_compute_constant()
+
+    if hasattr(baseNode, 'tensor'):
+      is_const = baseNode.tensor.is_compute_constant()
       if is_const:
-        values = node.tensor.values()
-      addressing = node.tensor.addressing
+        values = baseNode.tensor.values()
+      addressing = baseNode.tensor.addressing
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
   
   @classmethod

@@ -203,7 +203,8 @@ class Tensor(IdentifiedType):
                alignStride=False,
                namespace=None,
                datatype=None,
-               addressing=None):
+               addressing=None,
+               temporary=False):
     super().__init__(name, namespace=namespace, datatype=datatype)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
@@ -220,6 +221,8 @@ class Tensor(IdentifiedType):
 
     # default addressing mode. If not given, deduce it
     self.addressing = addressing
+
+    self.temporary = temporary
 
     if namespace is None:
       self.namespace = ''

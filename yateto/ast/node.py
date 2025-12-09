@@ -3,6 +3,7 @@ from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
 from .. import aspp, ops
+import numpy as np
 
 class Node(ABC):
   def __init__(self):
@@ -10,6 +11,7 @@ class Node(ABC):
     self._children = []
     self._eqspp = None
     self.datatype = None
+    self.prefetch = None
   
   def size(self):
     return self.indices.size()
@@ -120,6 +122,63 @@ class Node(ABC):
   def __rtruediv__(self, other):
     return Elementwise(ops.Div(), other, self)
 
+  def subslice(self, index, start, end):
+    return SliceView(self, index, start, end)
+  
+  def subselect(self, index, position):
+    return SliceView(self, index, position, position + 1)
+  
+  def viewed(self):
+    return self
+
+class SliceView(Node):
+  def __init__(self, subnode, index, start, end):
+    super().__init__()
+    self._children = [subnode]
+    self.index = index
+    self.start = start
+    self.end = end
+  
+  def name(self):
+    return self.term().name()
+  
+  def viewed(self):
+    return self.term().viewed()
+  
+  def term(self):
+    return self[0]
+  
+  def nonZeroFlops(self):
+    return 0
+  
+  def setIndexPermutation(self, indices, permuteEqspp=True):
+    assert str(indices) == str(self.indices)
+
+  def memoryLayout(self):
+    return self._memoryLayout
+  
+  def getMemoryLayout(self, memoryLayout):
+    return memoryLayout.subslice(list(self.indices).index(self.index), self.start, self.end)
+
+  def computeMemoryLayout(self):
+    self._memoryLayout = self.getMemoryLayout(self.term().memoryLayout())
+  
+  def computeSparsityPattern(self, *spps):
+    assert len(spps) in (0, 1)
+    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    
+    if isinstance(spp, aspp.dense):
+      nowshape = spp.shape
+      subshape = tuple(self.end - self.start if self.indices[i] == self.index else nowshape[i] for i in range(spp.ndim))
+      return aspp.dense(subshape)
+    else:
+      subslice = tuple(slice(self.start, self.end) if self.indices[i] == self.index else slice(None) for i in range(spp.ndim))
+      subarray = spp.as_ndarray()[subslice]
+      return aspp.general(subarray)
+  
+  def __str__(self):
+    return f'{type(self).__name__}[{self.index}: {self.start}..{self.end}]'
+
 class IndexedTensor(Node):
   def __init__(self, tensor, indexNames):
     super().__init__()
@@ -155,7 +214,6 @@ class Op(Node):
     super().__init__()
     self._children = list(args)
     self._memoryLayout = None
-    self.prefetch = None
   
   def memoryLayout(self):
     return self._memoryLayout
@@ -165,14 +223,18 @@ class Op(Node):
 
   def computeMemoryLayout(self):
     alignStride = False
+    alignOffset = 2**64
     if self.indices is not None and len(self.indices) > 0:
       for child in self:
         if self.indices[0] in child.indices:
           position = child.indices.find(self.indices[0])
           if child.memoryLayout().mayVectorizeDim(position):
             alignStride = True
-            break
-    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride)
+            alignOffset = min(alignOffset, child.memoryLayout().alignmentOffset(position))
+
+    # NOTE: the offset is needed for slicing. Since we don't use selector matrices, the alignment might be off.
+
+    self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride, alignOffset=alignOffset)
 
   def fixedIndexPermutation(self):
     return False
@@ -296,8 +358,8 @@ class Assign(Op):
     return self._condition
   
   def setChildren(self, children):
-    if not isinstance(children[0], IndexedTensor):
-      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0]))
+    if not isinstance(children[0].viewed(), IndexedTensor):
+      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0].viewed()))
     super().setChildren(children)
     
   def nonZeroFlops(self):

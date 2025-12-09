@@ -68,7 +68,7 @@ class dense(ASpp):
 
   def reshape(self, shape):
     rsh = type(self)(shape)
-    assert rsh.size == self.size
+    assert rsh.size == self.size, f'Size mismatch: {rsh.size} ({rsh.shape}) vs. {self.size} ({self.shape})'
     return rsh
 
   def transposed(self, perm):

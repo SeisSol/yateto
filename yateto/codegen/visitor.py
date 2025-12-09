@@ -481,7 +481,7 @@ class UnitTestGenerator(KernelGenerator):
 
   @classmethod
   def _name(cls, var):
-    if var.isLocal():
+    if not var.isGlobal():
       return str(var)
     return '_ut_' + cls._tensorName(var)
 

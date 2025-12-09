@@ -402,11 +402,11 @@ Stderr: {result.stderr}""")
       }[self._gemmDescr['datatypeC']]
 
       libxsmm_arch = cpu_arch
-      if cpu_arch in ['naples', 'rome', 'milan']:
+      if cpu_arch in ['naples', 'rome', 'milan', 'avx2-256']:
         # names are Zen1, Zen2, Zen3, respectively
         # no explicit support for these archs yet, but they have the same instruction sets (AVX2+FMA3) that HSW also needs
         libxsmm_arch = 'hsw'
-      elif cpu_arch in ['bergamo', 'turin']:
+      elif cpu_arch in ['bergamo', 'turin', 'avx10-512']:
         libxsmm_arch = 'skx'
       argList = [
         self._cmd,

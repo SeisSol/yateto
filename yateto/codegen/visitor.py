@@ -907,7 +907,7 @@ class InitializerGenerator(object):
             name = f'{self.VALUES_BASENAME}{index(group)}'
             aligned = ''
             if tensor.memoryLayout().alignedStride():
-              aligned = f' __attribute__((aligned({self._arch.alignment})))'
+              aligned = f' __attribute__((aligned({self._arch.cacheline})))'
             cpp(f'{STATIC} {self._realType(datatype)} {name}[]{aligned};')
             nValueArrays += 1
         if nValueArrays > 1:

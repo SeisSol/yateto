@@ -37,7 +37,7 @@ class KernelFactory(object):
         if len(self._freeList) == 0:
           self._cpp(f'int {self.ERROR_NAME};')
         self._cpp(f'{datatype.ctype()}* {bufname};')
-        self._cpp(f'{self.ERROR_NAME} = posix_memalign(reinterpret_cast<void**>(&{bufname}), {self._arch.alignment}, {size}*sizeof({datatype.ctype()}));')
+        self._cpp(f'{self.ERROR_NAME} = posix_memalign(reinterpret_cast<void**>(&{bufname}), {self._arch.cacheline}, {size}*sizeof({datatype.ctype()}));')
         if iniZero:
           self._cpp.memset(bufname, size, datatype.ctype())
         if memory:
@@ -50,7 +50,7 @@ class KernelFactory(object):
           ini = ' = {}'
         elif memory:
           ini = ' = {{{}}}'.format(', '.join(memory))
-        self._cpp(f'alignas({self._arch.alignment}) {datatype.ctype()} {bufname}[{size}] {ini};')
+        self._cpp(f'alignas({self._arch.cacheline}) {datatype.ctype()} {bufname}[{size}] {ini};')
     else:
       declaration = f'{datatype.ctype()}* {bufname}'
       total_size = f'{BatchedOperationsAux.NUM_ELEMENTS_NAME} * {size}'

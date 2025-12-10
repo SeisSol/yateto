@@ -42,6 +42,8 @@ example.add(g)
 if hasattr(gemm_configuration, cmdLineArgs.variant):
   concrete_gemm = getattr(gemm_configuration, cmdLineArgs.variant)
   gemm_cfg = GeneratorCollection([concrete_gemm(arch)])
+elif cmdLineArgs.variant == 'none':
+  gemm_cfg = GeneratorCollection([])
 else:
   raise RuntimeError(f'YATETO::ERROR: unknown \"{cmdLineArgs.variant}\" GEMM tool. '
                      f'Please, refer to the documentation')

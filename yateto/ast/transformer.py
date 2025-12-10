@@ -76,11 +76,21 @@ class DeduceIndices(Transformer):
     for child in node:
       self.visit(child, bound)
 
-    ok = all(node[0].indices <= child.indices and child.indices <= node[0].indices for child in node)
+    # allow the following:
+    # * different addends may have different indices
+    # * different addends may have different permutations of said indices
+    # * but: different addends need to have the same index sizes
+    # Currently, the node[0] index order take precedence over later children
+
+    addIndices = deepcopy(node[0].indices)
+    for i in range(1, len(node)):
+      addIndices = addIndices.mergeStrict(node[i].indices)
+
+    ok = all(child.indices <= addIndices for child in node)
     if not ok:
       raise ValueError('Add: Indices do not match: ', *[child.indices for child in node])
 
-    node.indices = deepcopy(node[0].indices)
+    node.indices = addIndices
     return node
 
   def visit_ScalarMultiplication(self, node, bound):
@@ -107,7 +117,7 @@ class DeduceIndices(Transformer):
     self.visit(rhs, bound=set(lhs.indices))
 
     node.indices = lhs.indices
-    if not (lhs.indices <= rhs.indices and lhs.indices <= rhs.indices):
+    if not (rhs.indices <= lhs.indices):
       raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
 
     return node

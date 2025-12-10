@@ -143,22 +143,26 @@ class OptimizedKernelFactory(KernelFactory):
     return generator.generate(self._cpp, routineCache)
 
   def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
-    term = arguments[0]
-    description = copyscaleadd.Description(
-      alpha = scalar,
-      beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription.fromVar(result, node.indices),
-      term = IndexedTensorDescription.fromVar(term, node.term().indices)
-    )
-    generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
-    return generator.generate(self._cpp, routineCache)
+    result = IndexedTensorDescription.fromNode(result, node)
+    term = IndexedTensorDescription.fromNode(arguments[0], node.term())
+    return self._csa(result, term, add, scalar, routineCache, gemm_cfg)
+  
+  def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    result = IndexedTensorDescription.fromNode(result, node)
+    term = IndexedTensorDescription.fromNode(arguments[0], node.term())
+    return self._csa(result, term, add, scalar, routineCache, gemm_cfg)
   
   def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
+    result = IndexedTensorDescription.fromVar(result, self._indices(result))
+    term = IndexedTensorDescription.fromVar(term, self._indices(term))
+    return self._csa(result, term, add, scalar, routineCache, gemm_cfg)
+  
+  def _csa(self, result, term, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
       alpha = scalar,
       beta = 1.0 if add else 0.0,
-      result = IndexedTensorDescription.fromVar(result, self._indices(result)),
-      term = IndexedTensorDescription.fromVar(term, self._indices(term))
+      result = result,
+      term = term
     )
     generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache)
@@ -202,6 +206,12 @@ class UnitTestFactory(KernelFactory):
 
   def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.indices <= node.term().indices and node.term().indices <= node.indices
+    resultTerm = self._formatTerm(result, node.indices)
+    termTerm = self._formatTerm(arguments[0], node.term().indices)
+    return self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)
+  
+  def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    assert node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)
@@ -313,6 +323,10 @@ class ExportFactory(KernelFactory):
     return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
 
   def create_Permute(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+    term = arguments[0]
+    return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices), [IndexedTensorDescription.fromVar(term, node.term().indices)], add, scalar, False, False)
+
+  def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
     return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices), [IndexedTensorDescription.fromVar(term, node.term().indices)], add, scalar, False, False)
   

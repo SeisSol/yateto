@@ -2,7 +2,7 @@ from ..ast.visitor import Visitor
 from yateto import Scalar
 from .graph import *
 from ..memory import DenseMemoryLayout
-from ..ast.node import Permute
+from ..ast.node import Permute, Broadcast
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
@@ -18,17 +18,25 @@ class AST2ControlFlow(Visitor):
 
   def _ml(self, node):
     return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()
+  
+  def _addTransformOp(self, permute, variable):
+    if not self._simpleMemoryLayout:
+      permute.setEqspp( permute.computeSparsityPattern() )
+      permute.computeMemoryLayout()
+    result = self._nextTemporary(permute)
+    action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
+    self._addAction(action)
+    return result
 
   def _addPermuteIfRequired(self, indices, term, variable):
     if indices != term.indices:
-      permute = Permute(term, indices)
-      if not self._simpleMemoryLayout:
-        permute.setEqspp( permute.computeSparsityPattern() )
-        permute.computeMemoryLayout()
-      result = self._nextTemporary(permute)
-      action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
-      self._addAction(action)
-      return result
+      if indices <= term.indices and term.indices <= indices:
+        # same indices; you'll only need to permute
+        return self._addTransformOp(Permute(term, indices), variable)
+      
+      # we need to broadcast as well afterwards
+      intermediate = self._addTransformOp(Permute.subPermute(term, indices), variable)
+      return self._addTransformOp(Broadcast(term, indices), intermediate)
     return variable
 
   def generic_visit(self, node):

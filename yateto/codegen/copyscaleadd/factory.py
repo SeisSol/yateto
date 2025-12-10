@@ -24,14 +24,22 @@ class Description(object):
     
     assert self.alpha != 0.0, 'copyscaleadd does not support alpha=0.0 at the moment.'
     assert self.beta == 1.0 or self.beta == 0.0, 'copyscaleadd supports only beta=0.0 or beta=1.0 at the moment.'
- 
+
     rA = loopRanges(self.term, self.term.indices)
     rB = loopRanges(self.result, self.result.indices)
     assert testLoopRangesAContainedInB(rA, rB)
-    assert self.term.indices <= self.result.indices and self.result.indices <= self.term.indices
+    assert self.term.indices <= self.result.indices
+
+    # restrict ranges to rA where possible;
+    # broadcast to all other ranges
+
+    rAB = rA
+    for idx in rB:
+      if idx not in rA:
+        rAB[idx] = rB[idx]
     
-    self.loopRanges = rA
-    
+    self.loopRanges = rAB
+
 
 def generator(arch, descr, gemm_cfg, target):
   if target == 'gpu':

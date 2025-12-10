@@ -58,9 +58,18 @@ class Node(ABC):
   def setIndexPermutation(self, indices, permuteEqspp=True):
     pass
 
-  def permute(self, indices, spp):
-    perm = tuple(indices.find(idx) for idx in self.indices)
+  def permute(self, indices, spp, strict=True):
+    perm = tuple(indices.find(idx) for idx in self.indices if idx in indices or strict)
     return spp.transposed(perm)
+  
+  def reshape(self, indices, spp):
+    rshp = [indices.indexSize(idx) if idx in indices else 1 for idx in self.indices]
+    return spp.reshape(rshp)
+  
+  def broadcast(self, indices, spp):
+    reshaped = self.reshape(indices, spp)
+    bcst = [1 if idx in indices else self.indices.indexSize(idx) for idx in self.indices]
+    return reshaped.broadcast(bcst)
 
   def _checkMultipleScalarMults(self):
     if isinstance(self, ScalarMultiplication):
@@ -198,7 +207,7 @@ class Add(Op):
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       spps = [node.eqspp() for node in self]
-    permute_summand = lambda i: self.permute(self[i].indices, spps[i])
+    permute_summand = lambda i: self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], False))
     spp = permute_summand(0)
     for i in range(1, len(spps)):
       add_spp = permute_summand(i)
@@ -284,9 +293,12 @@ class Assign(BinOp):
     return self.permute(self.rightTerm().indices, spp)
 
 class Permute(UnaryOp):
+  # permute a given tensor
+
   def __init__(self, term, targetIndices):
     super().__init__(term)
     self.indices = targetIndices
+    assert term.indices <= self.indices and self.indices <= term.indices
 
   def nonZeroFlops(self):
     return 0
@@ -295,6 +307,27 @@ class Permute(UnaryOp):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
     return self.permute(self.term().indices, spp)
+  
+  @classmethod
+  def subPermute(cls, term, indices):
+    return cls(term, indices.extract(term.indices))
+
+class Broadcast(UnaryOp):
+  # broadcast (i.e. copy) a tensor to some extra dimensions
+  # needed for an Einstein-sum-conformant accumulator operation
+
+  def __init__(self, term, targetIndices):
+    super().__init__(term)
+    self.indices = targetIndices
+    assert term.indices <= self.indices
+
+  def nonZeroFlops(self):
+    return 0
+
+  def computeSparsityPattern(self, *spps):
+    assert len(spps) <= 1
+    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    return self.broadcast(self.term().indices, spp)
 
 def _productContractionLoGSparsityPattern(node, *spps):
   if len(spps) == 0:

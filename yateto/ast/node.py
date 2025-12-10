@@ -290,7 +290,7 @@ class Assign(BinOp):
   
   def computeSparsityPattern(self, *spps):
     spp = spps[1] if len(spps) == 2 else self.rightTerm().eqspp()
-    return self.permute(self.rightTerm().indices, spp)
+    return self.broadcast(self.rightTerm().indices, self.permute(self.rightTerm().indices, spp, False))
 
 class Permute(UnaryOp):
   # permute a given tensor
@@ -310,7 +310,9 @@ class Permute(UnaryOp):
   
   @classmethod
   def subPermute(cls, term, indices):
-    return cls(term, indices.extract(term.indices))
+    subIndexNames = [idx for idx in indices if idx in term.indices]
+    subIndices = Indices(subIndexNames, term.indices.subShape(subIndexNames))
+    return cls(term, subIndices)
 
 class Broadcast(UnaryOp):
   # broadcast (i.e. copy) a tensor to some extra dimensions

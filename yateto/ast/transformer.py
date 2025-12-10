@@ -108,7 +108,7 @@ class DeduceIndices(Transformer):
     self.visit(rhs, bound=set(lhs.indices))
 
     node.indices = lhs.indices
-    if not (lhs.indices <= rhs.indices and lhs.indices <= rhs.indices):
+    if not (rhs.indices <= lhs.indices):
       raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
 
     return node

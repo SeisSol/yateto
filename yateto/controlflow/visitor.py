@@ -39,14 +39,16 @@ class AST2ControlFlow(Visitor):
       termOrder = [idx for idx in term.indices]
 
       intermediate = variable
+      inode = term
       if order != termOrder:
         # permute needed, run before broadcast
-        intermediate = self._addTransformOp(Permute.subPermute(term, indices), variable)
+        inode = Permute.subPermute(term, indices)
+        intermediate = self._addTransformOp(inode, variable)
       
       result = intermediate
       if len(term.indices) != len(indices):
         # broadcast needed, more output than input indices
-        result = self._addTransformOp(Broadcast(term, indices), intermediate)
+        result = self._addTransformOp(Broadcast(inode, indices), intermediate)
 
     return result
 

@@ -12,6 +12,8 @@ from .factory import *
 from .common import BatchedOperationsAux
 from ..type import Scalar
 
+import numpy as np
+
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
 STATIC = 'static'
@@ -646,6 +648,8 @@ class InitializerGenerator(object):
       raise NotImplementedError
     
     def listToInitializerList(self, lst):
+      if isinstance(lst, np.ndarray):
+        lst = lst.flatten()
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
     
     def formatArray(self, numberType, name, values, declarationOnly):
@@ -692,6 +696,24 @@ class InitializerGenerator(object):
       cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
       cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
 
+  class PatternMatrixView(TensorView):
+    PATTERN_NAME = 'Pattern'
+    
+    def typename(self, dim, arch):
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim}, {arch.typename},{arch.uintTypename}>'
+
+    def generate(self, cpp, memLayout, arch, index):
+      cpp( 'return {}({}, {}, {});'.format(
+          self.typename(len(memLayout.shape()), arch),
+          self.ARGUMENT_NAME,
+          self.listToInitializerList(memLayout.shape()),
+          self.PATTERN_NAME + (index if index is not None else '')
+        )
+      )
+
+    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
+      cpp(self.formatArray(numberType, namespace + self.PATTERN_NAME + index, memLayout.pattern(), declarationOnly))
+
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
     self._numberType = '{} const'.format(self._arch.uintTypename)
@@ -734,7 +756,8 @@ class InitializerGenerator(object):
   def _tensorViewGenerator(self, memoryLayout):
     memLayoutMap = {
       'DenseMemoryLayout': self.DenseTensorView,
-      'CSCMemoryLayout': self.CSCMatrixView
+      'CSCMemoryLayout': self.CSCMatrixView,
+      'PatternMemoryLayout': self.PatternMatrixView
     }
     return memLayoutMap[type(memoryLayout).__name__]()
   

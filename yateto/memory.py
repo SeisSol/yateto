@@ -271,10 +271,6 @@ class DenseMemoryLayout(MemoryLayout):
   
   def spp(self):
     raise NotImplementedError()
-    #subslice = tuple(slice(d.start, d.end) if d in self._bbox)
-    #superarray = np.zeros(tuple(self._stride), dtype=bool)
-    #superarray[subslice] = spp.as_ndarray()
-    #return aspp.general(superarray)
   
   def storage(self):
     return self
@@ -470,9 +466,10 @@ class MemoryLayoutView(MemoryLayout):
     raise NotImplementedError()
   
   def isCompatible(self, spp):
-    # not 100%ly sure; but prevents errors in the method below
+    # only a rough criterion. Can possibly be refined.
     if spp.as_ndarray().shape != tuple(self.shape()):
       return False
+
     return self.base.isCompatible(self.relspp(spp))
 
   def mayVectorizeDim(self, dim):

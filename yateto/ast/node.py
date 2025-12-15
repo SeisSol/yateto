@@ -61,9 +61,18 @@ class Node(ABC):
   def setIndexPermutation(self, indices, permuteEqspp=True):
     pass
 
-  def permute(self, indices, spp):
-    perm = tuple(indices.find(idx) for idx in self.indices)
+  def permute(self, indices, spp, strict=True):
+    perm = tuple(indices.find(idx) for idx in self.indices if idx in indices or strict)
     return spp.transposed(perm)
+  
+  def reshape(self, indices, spp):
+    rshp = [indices.indexSize(idx) if idx in indices else 1 for idx in self.indices]
+    return spp.reshape(rshp)
+  
+  def broadcast(self, indices, spp):
+    reshaped = self.reshape(indices, spp)
+    bcst = [1 if idx in indices else self.indices.indexSize(idx) for idx in self.indices]
+    return reshaped.broadcast(bcst)
 
   def _checkMultipleScalarMults(self):
     if isinstance(self, ScalarMultiplication):
@@ -223,7 +232,8 @@ class Op(Node):
 
   def computeMemoryLayout(self):
     alignStride = False
-    alignOffset = 2**64
+    alignOffset = float('inf')
+
     if self.indices is not None and len(self.indices) > 0:
       for child in self:
         if self.indices[0] in child.indices:
@@ -232,7 +242,7 @@ class Op(Node):
             alignStride = True
             alignOffset = min(alignOffset, child.memoryLayout().alignmentOffset(position))
 
-    # NOTE: the offset is needed for slicing. Since we don't use selector matrices, the alignment might be off.
+    # NOTE: the offset is needed for slicing. Since we don't use selector matrices, the EQSPP alignment might be off.
 
     self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride, alignOffset=alignOffset)
 
@@ -267,7 +277,7 @@ class Add(Op):
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       spps = [node.eqspp() for node in self]
-    permute_summand = lambda i: self.permute(self[i].indices, spps[i])
+    permute_summand = lambda i: self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], False))
     spp = permute_summand(0)
     for i in range(1, len(spps)):
       add_spp = permute_summand(i)
@@ -367,7 +377,7 @@ class Assign(Op):
   
   def computeSparsityPattern(self, *spps):
     spp = spps[1] if len(spps) >= 2 else self.rightTerm().eqspp()
-    return self.permute(self.rightTerm().indices, spp)
+    return self.broadcast(self.rightTerm().indices, self.permute(self.rightTerm().indices, spp, False))
   
   def __str__(self):
     selfname = type(self).__name__
@@ -376,9 +386,12 @@ class Assign(Op):
     return f'{selfname}[{indices}]: {self.leftTerm()} <- {self.rightTerm()}{condition}'
 
 class Permute(UnaryOp):
+  # permute a given tensor
+
   def __init__(self, term, targetIndices):
     super().__init__(term)
     self.indices = targetIndices
+    assert term.indices <= self.indices and self.indices <= term.indices
 
   def nonZeroFlops(self):
     return 0
@@ -387,6 +400,29 @@ class Permute(UnaryOp):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
     return self.permute(self.term().indices, spp)
+  
+  @classmethod
+  def subPermute(cls, term, indices):
+    subIndexNames = [idx for idx in indices if idx in term.indices]
+    subIndices = Indices(subIndexNames, term.indices.subShape(subIndexNames))
+    return cls(term, subIndices)
+
+class Broadcast(UnaryOp):
+  # broadcast (i.e. copy) a tensor to some extra dimensions
+  # needed for an Einstein-sum-conformant accumulator operation
+
+  def __init__(self, term, targetIndices):
+    super().__init__(term)
+    self.indices = targetIndices
+    assert term.indices <= self.indices
+
+  def nonZeroFlops(self):
+    return 0
+
+  def computeSparsityPattern(self, *spps):
+    assert len(spps) <= 1
+    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    return self.broadcast(self.term().indices, spp)
 
 def _productContractionLoGSparsityPattern(node, *spps):
   if len(spps) == 0:

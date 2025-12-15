@@ -80,6 +80,20 @@ class Indices(object):
     indexNames = self._indices + other._indices
     shape = self.subShape(self._indices) + other.subShape(other._indices)
     return Indices(indexNames, shape)
+  
+  def mergeStrict(self, other):
+    indexNames = list(self._indices)
+    shape = list(self.subShape(self._indices))
+    otherShape = other.subShape(other._indices)
+    for idx,shp in zip(other._indices, otherShape):
+      if idx not in self._indices:
+        indexNames += idx
+        shape += [shp]
+      else:
+        myPos = indexNames.index(idx)
+        myShp = shape[myPos]
+        assert myShp == shp, f"Index merge failed. {self} vs. {other} in {idx}: {myShp} vs. {shp}"
+    return Indices(tuple(indexNames), tuple(shape))
     
   def sorted(self):
     indexNames = sorted(self._indices)

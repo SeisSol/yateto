@@ -8,7 +8,7 @@ jobs:
     container: 
       image: seissol/gha-cpu:davschneller-gpu-image
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install Yateto
       run: |
@@ -46,10 +46,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        generator: [Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS, PSpaMM]
+        generator: [none, Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS, PSpaMM]
         
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install Yateto
       run: |
@@ -73,7 +73,7 @@ jobs:
     - name: Codegen Tests
       run: |
         cd ./tests/code-gen
-        for example in matmul minimal; do
+        for example in matmul minimal indices slicing; do
           for build_type in Debug Release; do
             for precision in single double; do
               echo " ====== Test Config: ======"
@@ -85,7 +85,7 @@ jobs:
               cd ./build-${example}-${build_type}-${precision}
               cmake .. -GNinja -DEXAMPLES=${example} -DCMAKE_BUILD_TYPE=${build_type} -DPRECISION=${precision} -DVARIANT=${{ matrix.generator }} -DARCH=hsw
               ninja
-              ninja test
+              ctest -j --rerun-failed --output-on-failure
               cd ..
             done
           done

@@ -225,7 +225,8 @@ class Op(Node):
 
   def computeMemoryLayout(self):
     alignStride = False
-    alignOffset = 2**64
+    alignOffset = float('inf')
+
     if len(self.indices) > 0:
       for child in self:
         if self.indices[0] in child.indices:
@@ -234,7 +235,7 @@ class Op(Node):
             alignStride = True
             alignOffset = min(alignOffset, child.memoryLayout().alignmentOffset(position))
 
-    # NOTE: the offset is needed for slicing. Since we don't use selector matrices, the alignment might be off.
+    # NOTE: the offset is needed for slicing. Since we don't use selector matrices, the EQSPP alignment might be off.
 
     self._memoryLayout = DenseMemoryLayout.fromSpp(self.eqspp(), alignStride=alignStride, alignOffset=alignOffset)
 

@@ -107,12 +107,16 @@ class DeduceIndices(Transformer):
     lhs = node[0]
     rhs = node[1]
     
-    tlhs = lhs.viewed()
-    if not isinstance(tlhs, IndexedTensor):
+    lhsTensor = lhs.viewed()
+    if not isinstance(lhsTensor, IndexedTensor):
       raise ValueError('Assign: Left-hand side must be of type IndexedTensor')
-    
-    # recurse through all views to get the restricted indices
-    self.visit(lhs, bound=set(tlhs.indices))
+
+    # we cannot get the indices of a view directly; so we need to start at the viewed lhs tensor
+    # (for tensors, we know their final indices before this transform)
+
+    self.visit(lhs, bound=set(lhsTensor.indices))
+
+    # now use the restricted (viewed) index ranges onto the rhs AST
 
     self.visit(rhs, bound=set(lhs.indices))
 

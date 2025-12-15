@@ -61,6 +61,11 @@ class AST2ControlFlow(Visitor):
     
     return result
   
+  def visit_SliceView(self, node):
+    var = self.visit(node.term())
+    ml = node.getMemoryLayout(var.memoryLayout())
+    return VariableView(var, ml, node.eqspp())
+
   def visit_Add(self, node):
     variables = [self.visit(child) for child in node]
     assert len(variables) > 1
@@ -97,13 +102,13 @@ class AST2ControlFlow(Visitor):
     return variables[0]
   
   def visit_IndexedTensor(self, node):
-    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor)
-  
+    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, is_temporary=node.tensor.temporary)
+
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
 
   def _nextTemporary(self, node):
-    name = '{}{}'.format(self.TEMPORARY_RESULT, self._tmp)
+    name = f'{self.TEMPORARY_RESULT}{self._tmp}'
     self._tmp += 1
     return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True)
 

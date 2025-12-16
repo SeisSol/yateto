@@ -138,7 +138,7 @@ class DetermineLocalInitialization(object):
     for i in range(n-1):
       ua = cfg[i].action
       # assign buffer
-      if ua and not ua.isCompound() and ua.result.isLocal():
+      if ua and not ua.isCompound() and not ua.result.isGlobal():
         if ua.result in usedBuffers:
             buf = usedBuffers[ua.result]
         elif len(freeBuffers) > 0:
@@ -149,7 +149,7 @@ class DetermineLocalInitialization(object):
         cfg[i].bufferMap[ua.result] = buf
         usedBuffers[ua.result] = buf
 
-        size = ua.result.memoryLayout().requiredReals()
+        size = ua.result.viewed().memoryLayout().storage().requiredReals()
         if buf in bufferSize:
           bufferSize[buf] = max(bufferSize[buf], size)
         else:
@@ -158,8 +158,11 @@ class DetermineLocalInitialization(object):
       # free buffers
       free = cfg[i].live - cfg[i+1].live
       for local in free:
-        if local in usedBuffers:
-          freeBuffers.appendleft(usedBuffers.pop(local))
+        # warning: local.isLocal() check is suboptimal (but currently good enough)
+        # refactor liveness for better results
+        if local.isLocal():
+          if local in usedBuffers:
+            freeBuffers.appendleft(usedBuffers.pop(local))
 
     if len(cfg) > 0:
       cfg[0].initBuffer = bufferSize

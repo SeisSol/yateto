@@ -83,7 +83,8 @@ class Tensor(IdentifiedType):
                spp=None,
                memoryLayoutClass=DenseMemoryLayout,
                alignStride=False,
-               namespace=None):
+               namespace=None,
+               temporary=False):
     super().__init__(name, namespace=namespace)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
@@ -97,6 +98,8 @@ class Tensor(IdentifiedType):
     self._name = name
     self._shape = shape
     self._values = None
+
+    self.temporary = temporary
 
     if namespace is None:
       self.namespace = ''

@@ -41,6 +41,10 @@ class ASpp(ABC):
   @abstractmethod
   def transposed(self, shape):
     pass
+  
+  @abstractmethod
+  def broadcast(self, shape):
+    pass
 
   @abstractmethod
   def indexSum(self, sourceIndices, targetIndices):
@@ -68,11 +72,14 @@ class dense(ASpp):
 
   def reshape(self, shape):
     rsh = type(self)(shape)
-    assert rsh.size == self.size
+    assert rsh.size == self.size, f'Size mismatch: {rsh.size} ({rsh.shape}) vs. {self.size} ({self.shape})'
     return rsh
 
   def transposed(self, perm):
     return type(self)(tuple(self.shape[p] for p in perm))
+  
+  def broadcast(self, bcst):
+    return type(self)(tuple(shp * bc for shp, bc in zip(self.shape, bcst)))
 
   def indexSum(self, sourceIndices, targetIndices):
     return type(self)(tuple(self.shape[sourceIndices.find(targetIndex)] for targetIndex in targetIndices))
@@ -159,6 +166,9 @@ class general(ASpp):
 
   def transposed(self, perm):
     return type(self)(self.pattern.transpose(perm).copy(order=self.NUMPY_DEFAULT_ORDER))
+  
+  def broadcast(self, bcst):
+    return type(self)(np.tile(self.pattern, bcst).copy(order=self.NUMPY_DEFAULT_ORDER))
 
   def indexSum(self, sourceIndices, targetIndices):
     return general(np.einsum('{}->{}'.format(sourceIndices, targetIndices), self.pattern))

@@ -73,7 +73,7 @@ jobs:
     - name: Codegen Tests
       run: |
         cd ./tests/code-gen
-        for example in matmul minimal indices slicing; do
+        for example in matmul minimal indices slicing bugfixing; do
           for build_type in Debug Release; do
             for precision in single double; do
               echo " ====== Test Config: ======"

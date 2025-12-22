@@ -290,6 +290,9 @@ class DenseMemoryLayout(MemoryLayout):
   
   def alignmentOffset(self, dim):
     return 0
+  
+  def equalStride(self, dim):
+    return True
 
 class CSCMemoryLayout(MemoryLayout):
   def __init__(self, spp, alignStride=False):
@@ -352,7 +355,7 @@ class CSCMemoryLayout(MemoryLayout):
   def colPointer(self):
     return self._colPtr
   
-  def isAlignedAddressString(self, indices, I = None):
+  def isAlignedAddressString(self, indices, I = None, Z = None):
     if I is None:
       I = set(indices)
     positions = indices.positions(I)
@@ -434,6 +437,9 @@ class CSCMemoryLayout(MemoryLayout):
 
   def isSparse(self):
     return True
+  
+  def equalStride(self, dim):
+    return False
 
 
 class PatternMemoryLayout(MemoryLayout):
@@ -609,6 +615,9 @@ class PatternMemoryLayout(MemoryLayout):
 
   def __eq__(self, other):
     return self._bbox == other._bbox and np.array_equal(self._pattern, other._pattern)
+  
+  def equalStride(self, dim):
+    return False
 
 class AlignedCSCMemoryLayout:
   @classmethod
@@ -678,14 +687,14 @@ class MemoryLayoutView(MemoryLayout):
   def mayVectorizeDim(self, dim):
     return self.base.mayVectorizeDim(dim)
   
-  def isAlignedAddressString(self, indices, I = None):
-    return self.base.isAlignedAddressString(indices, I)
+  def isAlignedAddressString(self, indices, I = None, Z = None):
+    return self.base.isAlignedAddressString(indices, I, Z)
   
-  def addressString(self, indices, I = None, prefix='_', offsets=()):
+  def addressString(self, indices, I = None, Z = None, prefix='_', offsets=()):
     if len(offsets) == 0:
       offsets = [0] * len(self._shape)
     newOffsets = tuple(offsets[i] if self.index != i else offsets[i] + self.start for i in range(len(self._shape)))
-    return self.base.addressString(indices, I, prefix, newOffsets)
+    return self.base.addressString(indices, I, Z, prefix, newOffsets)
   
   def subslice(self, index, start, end):
     return MemoryLayoutView(self, index, start, end)

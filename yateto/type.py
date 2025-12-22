@@ -1,10 +1,134 @@
 import re
-from .ast.node import Node, IndexedTensor
 from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
 from . import aspp
+from enum import Enum
 
-class AbstractType(object):
+import numpy as np
+
+class Datatype(Enum):
+  BOOL = 0
+  I8 = 1
+  I16 = 2
+  I32 = 3
+  I64 = 4
+  F32 = 5
+  F64 = 6
+  F16 = 7
+  BF16 = 8
+  F128 = 9
+
+  def __str__(self):
+    return {
+      Datatype.BOOL: 'bool',
+      Datatype.I8: 'i8',
+      Datatype.I16: 'i16',
+      Datatype.I32: 'i32',
+      Datatype.I64: 'i64',
+      Datatype.F32: 'f32',
+      Datatype.F64: 'f64',
+      Datatype.F128: 'f128',
+      Datatype.F16: 'f16',
+      Datatype.BF16: 'bf16',
+    }[self]
+
+  def ctype(self):
+    return {
+      Datatype.BOOL: 'bool',
+      Datatype.I8: 'int8_t',
+      Datatype.I16: 'int16_t',
+      Datatype.I32: 'int32_t',
+      Datatype.I64: 'int64_t',
+      Datatype.F32: 'float',
+      Datatype.F64: 'double',
+      Datatype.F16: 'yateto::f16_ty',
+      Datatype.BF16: 'yateto::bf16_ty',
+      Datatype.F128: 'yateto::f128_ty',
+    }[self]
+  
+  def nptype(self):
+    return {
+      Datatype.BOOL: np.bool,
+      Datatype.I8: np.int8,
+      Datatype.I16: np.int16,
+      Datatype.I32: np.int32,
+      Datatype.I64: np.int64,
+      Datatype.F32: np.float32,
+      Datatype.F64: np.float64,
+      Datatype.F16: np.float16,
+      Datatype.BF16: np.float32, # NYI
+      Datatype.F128: np.float128,
+    }[self]
+  
+  def size(self):
+    # unpacked size
+    return {
+      Datatype.BOOL: 1,
+      Datatype.I8: 1,
+      Datatype.I16: 2,
+      Datatype.I32: 4,
+      Datatype.I64: 8,
+      Datatype.F32: 4,
+      Datatype.F64: 8,
+      Datatype.F16: 2,
+      Datatype.BF16: 2,
+      Datatype.F128: 16,
+    }[self]
+  
+  def safeint(self, value):
+    # allow inf/-inf to be treated as int
+    return int(max(-2**64, min(2**64, value)))
+
+  def literal(self, value):
+    # (note: the extra lambda mapping is needed to prevent type errors)
+    return {
+      Datatype.BOOL: lambda value: 'true' if value else 'false',
+      Datatype.I8: lambda value: f'static_cast<int8_t>({self.safeint(value)}LL)',
+      Datatype.I16: lambda value: f'static_cast<int16_t>({self.safeint(value)}LL)',
+      Datatype.I32: lambda value: f'static_cast<int32_t>({self.safeint(value)}LL)',
+      Datatype.I64: lambda value: f'static_cast<int64_t>({self.safeint(value)}LL)',
+      Datatype.F32: lambda value: f'{float(value):.16}f',
+      Datatype.F64: lambda value: f'{float(value):.16}',
+      Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
+      Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
+      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({float(value):.32}q)',
+    }[self](value)
+
+class AddressingMode(Enum):
+  DIRECT = 0
+  STRIDED = 1
+  INDIRECT = 2
+  SCALAR = 3
+
+  def pointer_type(self):
+    return {
+      AddressingMode.DIRECT: '*',
+      AddressingMode.STRIDED: '*',
+      AddressingMode.INDIRECT: '**',
+      AddressingMode.SCALAR: '',
+    }[self]
+
+class Symbol(object):
+  def __init__(self, datatype):
+    # datatype == None is treated as datatype == arch.datatype
+    self.datatype = datatype
+  
+  def getDatatype(self, arch):
+    return arch.datatype if self.datatype is None else self.datatype
+
+class ScalarMixin:
+  pass
+
+class ImmediateScalar(Symbol, ScalarMixin):
+  def __init__(self, data, datatype):
+    super().__init__(datatype)
+    self.data = data
+
+class AbstractType(Symbol):
+  def __init__(self, name, datatype):
+    super().__init__(datatype)
+    self._name = name
+  
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
@@ -15,18 +139,16 @@ class AbstractType(object):
 class IdentifiedType(AbstractType):
   BASE_NAME = r'[a-zA-Z]\w*'
   GROUP_INDEX = r'(0|[1-9]\d*)'
-  GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
-  VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
+  GROUP_INDICES = rf'\(({GROUP_INDEX}(,{GROUP_INDEX})*)\)'
+  VALID_NAME = rf'^{BASE_NAME}({GROUP_INDICES})?$'
 
-  def __init__(self, name, namespace=None):
+  def __init__(self, name, namespace=None, datatype=None):
+    super().__init__(name, datatype)
     if not self.isValidName(name):
-      raise ValueError('Invalid name (must match regexp {}): {}'.format(self.VALID_NAME, name))
-    
-    self._name = name
+      raise ValueError(f'Invalid name (must match regexp {self.VALID_NAME}): {name}')
+
     self.namespace = namespace
 
-    self.datatype = None # TODO
-  
   def __str__(self):
     return self._name
 
@@ -69,9 +191,9 @@ class IdentifiedType(AbstractType):
   def __hash__(self):
     return hash(self._name)
 
-class Scalar(IdentifiedType):  
-  def __init__(self, name, namespace=None):
-    super().__init__(name, namespace=namespace)
+class Scalar(IdentifiedType, ScalarMixin):  
+  def __init__(self, name, namespace=None, datatype=None):
+    super().__init__(name, namespace=namespace, datatype=datatype)
   
   def __hash__(self):
     return hash(self._name)
@@ -84,8 +206,10 @@ class Tensor(IdentifiedType):
                memoryLayoutClass=DenseMemoryLayout,
                alignStride=False,
                namespace=None,
+               datatype=None,
+               addressing=None,
                temporary=False):
-    super().__init__(name, namespace=namespace)
+    super().__init__(name, namespace=namespace, datatype=datatype)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
     
@@ -93,11 +217,14 @@ class Tensor(IdentifiedType):
       raise ValueError('shape must not contain entries smaller than 1')
     
     if not self.isValidName(name):
-      raise ValueError('Tensor name invalid (must match regexp {}): {}'.format(self.VALID_NAME, name))
+      raise ValueError(f'Tensor name invalid (must match regexp {self.VALID_NAME}): {name}')
 
     self._name = name
     self._shape = shape
     self._values = None
+
+    # default addressing mode. If not given, deduce it
+    self.addressing = addressing
 
     self.temporary = temporary
 
@@ -147,6 +274,7 @@ class Tensor(IdentifiedType):
     self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
 
   def __getitem__(self, indexNames):
+    from .ast.node import IndexedTensor
     return IndexedTensor(self, indexNames)
   
   def shape(self):

@@ -38,6 +38,7 @@
 #
 
 from .memory import DenseMemoryLayout
+from .type import Datatype
 from collections import namedtuple
 from typing import Union
 import re
@@ -70,18 +71,16 @@ class Architecture(object):
 
     self.precision = precision.upper()
     if self.precision == 'D':
-      self.bytesPerReal = 8
-      self.typename = 'double'
       self.epsilon = 2.22e-16
+      self.datatype = Datatype.F64
     elif self.precision == 'S':
-      self.bytesPerReal = 4
-      self.typename = 'float'
       self.epsilon = 1.19e-7
+      self.datatype = Datatype.F32
     else:
       raise ValueError(f'Unknown precision type {self.precision}')
     self.alignment = alignment
-    assert self.alignment % self.bytesPerReal == 0
-    self.alignedReals = self.alignment // self.bytesPerReal
+    assert self.alignment % self.datatype.size() == 0
+    self.alignedReals = self.alignment // self.datatype.size()
     self.enablePrefetch = enablePrefetch
 
     self.uintTypename = 'unsigned'
@@ -110,10 +109,10 @@ class Architecture(object):
     return offset % self.alignedReals == 0
 
   def formatConstant(self, constant):
-    return str(constant) + ('f' if self.precision == 'S' else '')
+    return self.datatype.literal(constant)
 
-  def onHeap(self, numReals):
-    return (numReals * self.bytesPerReal) > self._tmpStackLimit
+  def onHeap(self, byteCount):
+    return byteCount > self._tmpStackLimit
   
   def __eq__(self, other):
     return self.name == other.name

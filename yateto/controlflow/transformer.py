@@ -23,9 +23,9 @@ class MergeScalarMultiplications(object):
 
 class LivenessAnalysis(object):
   def visit(self, cfg):
-    cfg[-1].live = set()
+    cfg[-1].live = LiveSet({})
     for i in reversed(range(len(cfg)-1)):
-      cfg[i].live = (cfg[i+1].live - {cfg[i].action.result}) | cfg[i].action.variables()
+      cfg[i].live = (cfg[i+1].live - {cfg[i].action.result: cfg[i].action.condition}) | {var:cfg[i].action.condition for var in cfg[i].action.variables()}
     return cfg
 
 class SubstituteForward(object):
@@ -34,12 +34,12 @@ class SubstituteForward(object):
     for i in range(n):
       ua = cfg[i].action
       v = cfg[i+1]
-      
+
       if not ua.isCompound() \
           and ua.isRHSVariable() \
           and ua.term.writable \
           and ua.result.isLocal() \
-          and ua.term not in v.live \
+          and (ua.term, ua.condition) not in v.live \
           and (ua.hasTrivialScalar() or ua.term.isLocal()):
 
         when = ua.result
@@ -62,7 +62,7 @@ class SubstituteBackward(object):
         found = -1
         for j in range(i):
           u = cfg[j]
-          if by not in u.live and not u.action.isCompound() and u.action.result == va.term:
+          if (va.result, va.condition) not in u.live and not u.action.isCompound() and u.action.result == va.term:
             found = j
             break
         if found >= 0:
@@ -136,7 +136,7 @@ class DetermineLocalInitialization(object):
       # assign buffer
       if ua and not ua.isCompound() and not ua.result.isGlobal():
         if ua.result in usedBuffers:
-            buf = usedBuffers[ua.result]
+          buf = usedBuffers[ua.result]
         elif len(freeBuffers) > 0:
           buf = freeBuffers.pop()
         else:
@@ -145,14 +145,15 @@ class DetermineLocalInitialization(object):
         cfg[i].bufferMap[ua.result] = buf
         usedBuffers[ua.result] = buf
 
-        size = ua.result.viewed().memoryLayout().storage().requiredReals()
+        # NOTE: size in bytes
+        size = ua.result.viewed().memoryLayout().storage().requiredReals() * ua.result.datatype.size()
         if buf in bufferSize:
           bufferSize[buf] = max(bufferSize[buf], size)
         else:
           bufferSize[buf] = size
 
       # free buffers
-      free = cfg[i].live - cfg[i+1].live
+      free = cfg[i].live.variables() - cfg[i+1].live.variables()
       for local in free:
         # warning: local.isLocal() check is suboptimal (but currently good enough)
         # refactor liveness for better results

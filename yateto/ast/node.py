@@ -2,7 +2,7 @@ import re
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
-from .. import aspp
+from .. import aspp, ops
 import numpy as np
 
 class Node(ABC):
@@ -10,6 +10,7 @@ class Node(ABC):
     self.indices = None
     self._children = []
     self._eqspp = None
+    self.datatype = None
     self.prefetch = None
   
   def size(self):
@@ -108,7 +109,7 @@ class Node(ABC):
   
   def __add__(self, other):
     if not isinstance(other, Node):
-      raise ValueError('Unsupported operation: Cannot add {} to {}.'.format(self, other))
+      raise ValueError(f'Unsupported operation: Cannot add {self} to {other}.')
     return self._binOp(other, Add)
   
   def __radd__(self, other):
@@ -124,6 +125,12 @@ class Node(ABC):
   def __le__(self, other):
     return Assign(self, other)
   
+  def __truediv__(self, other):
+    return Elementwise(ops.Div(), self, other)
+  
+  def __rtruediv__(self, other):
+    return Elementwise(ops.Div(), other, self)
+
   def subslice(self, index, start, end):
     return SliceView(self, index, start, end)
   
@@ -209,7 +216,7 @@ class IndexedTensor(Node):
     return it
 
   def __str__(self):
-    return '{}[{}]'.format(self.tensor.name(), str(self.indices))
+    return f'{self.tensor.name()}[{str(self.indices)}]'
 
 class Op(Node):
   def __init__(self, *args):
@@ -227,7 +234,7 @@ class Op(Node):
     alignStride = False
     alignOffset = float('inf')
 
-    if len(self.indices) > 0:
+    if self.indices is not None and len(self.indices) > 0:
       for child in self:
         if self.indices[0] in child.indices:
           position = child.indices.find(self.indices[0])
@@ -342,7 +349,24 @@ class BinOp(Op):
       raise ValueError('BinOp node must have exactly 2 children.')
     super().setChildren(children)
 
-class Assign(BinOp):
+class Assign(Op):
+  def __init__(self, lTerm, rTerm, condition=True):
+    if isinstance(condition, Node):
+      super().__init__(lTerm, rTerm, condition)
+    else:
+      super().__init__(lTerm, rTerm)
+    
+    self._condition = condition
+  
+  def leftTerm(self):
+    return self._children[0]
+  
+  def rightTerm(self):
+    return self._children[1]
+  
+  def condition(self):
+    return self._condition
+  
   def setChildren(self, children):
     if not isinstance(children[0].viewed(), IndexedTensor):
       raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0].viewed()))
@@ -352,8 +376,14 @@ class Assign(BinOp):
     return 0
   
   def computeSparsityPattern(self, *spps):
-    spp = spps[1] if len(spps) == 2 else self.rightTerm().eqspp()
+    spp = spps[1] if len(spps) >= 2 else self.rightTerm().eqspp()
     return self.broadcast(self.rightTerm().indices, self.permute(self.rightTerm().indices, spp, False))
+  
+  def __str__(self):
+    selfname = type(self).__name__
+    indices = self.indices if self.indices != None else '<not deduced>'
+    condition = '' if isinstance(self.condition(), bool) and self.condition() else f' if {self.condition()}'
+    return f'{selfname}[{indices}]: {self.leftTerm()} <- {self.rightTerm()}{condition}'
 
 class Permute(UnaryOp):
   # permute a given tensor
@@ -553,7 +583,6 @@ class LoopOverGEMM(BinOp):
 
     return True if len(left_indices - right_indices) == 1 else False
 
-
 class FusedGEMMs(Op):
   def __init__(self):
     super().__init__()
@@ -578,3 +607,118 @@ class FusedGEMMs(Op):
 
   def is_empty(self):
     return len(self._children) == 0
+
+class IfThenElse(Op):
+  def __init__(self, condition, yesTerm, noTerm):
+    if isinstance(condition, Node):
+      super().__init__(yesTerm, noTerm, condition)
+    else:
+      super().__init__(yesTerm, noTerm)
+    
+    self._condition = condition
+    
+  def condition(self):
+    return condition
+  
+  def nonZeroFlops(self):
+    return 0
+  
+  def computeSparsityPattern(self, *spps):
+    # TODO: yesTerm OR noTerm
+    spp = spps[0] if len(spps) >= 2 else self.term().eqspp()
+    return spp
+  
+  def __str__(self):
+    indices = self.indices if self.indices != None else '<not deduced>'
+    return f'{type(self).__name__}[{indices}]'
+
+class Elementwise(Op):
+  def __init__(self, optype: ops.Operation, *terms):
+    nodeTerms = [term for term in terms if isinstance(term, Node)]
+    super().__init__(*nodeTerms)
+
+    self.nodeTermIndices = [None] * len(terms)
+    self.termTemplate = [None] * len(terms)
+    index = 0
+    for i, term in enumerate(terms):
+      if isinstance(term, Node):
+        self.nodeTermIndices[i] = index
+        index += 1
+      else:
+        self.nodeTermIndices[i] = None
+        self.termTemplate[i] = term
+
+    self.optype = optype
+    self.terms = terms
+
+    self.indices = Indices()
+    for nodeTerm in nodeTerms:
+      nodeIndices = nodeTerm.indices if nodeTerm.indices is not None else Indices()
+      K = self.indices & nodeIndices
+      # assert self.indices.subShape(K) == nodeTerm.subShape(K)
+      self.indices = self.indices.merged(nodeIndices - K)
+
+  def nonZeroFlops(self):
+    return self.eqspp().count_nonzero()
+  
+  def fillTerms(self, terms):
+    assert len(terms) == len(self)
+    return [terms[index] if template is None else template for template, index in zip(self.termTemplate, self.nodeTermIndices)]
+  
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [node.eqspp() for node in self]
+    xspp = spps[0]
+    return spps[0]
+  
+  def __str__(self):
+    indices = self.indices if self.indices != None else '<not deduced>'
+    return f'{type(self).__name__}({self.optype})[{indices}]'
+
+class Reduction(UnaryOp):
+  def __init__(self, optype, term, sumIndex):
+    # TODO: what if we datatype/field does not match the operation? (w.r.t. the sparsity patterns)
+    super().__init__(term)
+    self.indices = term.indices - set([sumIndex])
+    self._reductionIndex = term.indices.extract(sumIndex)
+    self.optype = optype
+  
+  def nonZeroFlops(self):
+    return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
+  
+  def reductionIndex(self):
+    return self._reductionIndex
+  
+  def reductionIndices(self):
+    return [self._reductionIndex]
+  
+  def computeSparsityPattern(self, *spps):
+    assert len(spps) <= 1
+    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    return spp.indexSum(self.term().indices, self.indices)
+  
+  def __str__(self):
+    indices = self.indices if self.indices != None else '<not deduced>'
+    return f'{type(self).__name__}({self.optype})[{indices}]'
+
+class Accumulate(Op):
+  def __init__(self, optype, *operands):
+    super().__init__(*operands)
+
+    self.optype = optype
+
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [node.eqspp() for node in self]
+    permute_summand = lambda i: self.permute(self[i].indices, spps[i])
+    spp = permute_summand(0)
+    for i in range(1, len(spps)):
+      add_spp = permute_summand(i)
+      spp = aspp.add(spp, add_spp)
+    return spp
+
+  def nonZeroFlops(self):
+    nzFlops = 0
+    for child in self:
+      nzFlops += child.eqspp().count_nonzero()
+    return nzFlops - self.eqspp().count_nonzero()

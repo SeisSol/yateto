@@ -1,4 +1,3 @@
-from ...memory import CSCMemoryLayout
 from ..common import *
 from .generic import Generic
 

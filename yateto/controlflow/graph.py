@@ -25,10 +25,10 @@ class Variable(object):
     return result.memoryLayout().isCompatible(self.eqspp())
 
   def isGlobal(self):
-    return self.tensor is not None
+    return self.tensor is not None and not self.tensor.temporary
 
   def isLocal(self):
-    return not self.isGlobal()
+    return not self.isGlobal() and (self.tensor is None or not self.tensor.temporary)
 
   def memoryLayout(self):
     return self._memoryLayout
@@ -46,14 +46,77 @@ class Variable(object):
     return str(self)
   
   def __eq__(self, other):
-    isEq = self.name == other.name
-    assert not isEq or (self.writable == other.writable and self._memoryLayout == other._memoryLayout)
+    isEq = self.name == other.viewed().name # and self._memoryLayout == other._memoryLayout
+    assert not isEq or (self.writable == other.viewed().writable and self._memoryLayout == other.viewed()._memoryLayout)
     return isEq
 
   def setWritable(self, name):
     if self.name == name:
       self.writable = True
+  
+  def viewed(self):
+    return self
 
+class VariableView(object):
+  def __init__(self, variable, memoryLayout, eqspp):
+    self.variable = variable.viewed()
+    self._memoryLayout = memoryLayout
+    self._eqspp = eqspp
+
+  @property
+  def tensor(self):
+    return self.variable.tensor
+  
+  @property
+  def writable(self):
+    return self.variable.writable
+  
+  @property
+  def is_temporary(self):
+    return self.variable.is_temporary
+  
+  def maySubstitute(self, when, by):
+    return self.substituted(when, by).memoryLayout().isCompatible(self.eqspp())
+  
+  def substituted(self, when, by, memoryLayout=None):
+    return by if self == when else self
+
+  def viewed(self):
+    return self.variable
+
+  def variables(self):
+    return {self.variable}
+
+  def resultCompatible(self, result):
+    return result.memoryLayout().isCompatible(self.eqspp())
+
+  def isGlobal(self):
+    return self.variable.isGlobal()
+
+  def isLocal(self):
+    return self.variable.isLocal()
+
+  def memoryLayout(self):
+    return self._memoryLayout
+
+  def eqspp(self):
+    return self._eqspp
+
+  def __hash__(self):
+    return hash(self.variable.name)
+  
+  def __str__(self):
+    return f'{self.variable.name}'
+  
+  def __repr__(self):
+    return str(self)
+  
+  def __eq__(self, other):
+    isEq = self.variable == other.viewed() and self._memoryLayout == other._memoryLayout
+    return isEq
+
+  def setWritable(self, name):
+    self.variable.setWritable(name)
 
 class Expression(object):
   def __init__(self, node, memoryLayout, variables):
@@ -68,7 +131,7 @@ class Expression(object):
     return self.node.eqspp()
 
   def variables(self):
-    return set([var for var in self._variables])
+    return set([var.viewed() for var in self._variables])
 
   def variableList(self):
     return self._variables

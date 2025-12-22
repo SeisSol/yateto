@@ -2,7 +2,7 @@ from ..ast.visitor import Visitor
 from yateto import Scalar
 from .graph import *
 from ..memory import DenseMemoryLayout
-from ..ast.node import Permute
+from ..ast.node import Permute, Broadcast
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
@@ -18,18 +18,39 @@ class AST2ControlFlow(Visitor):
 
   def _ml(self, node):
     return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()
+  
+  def _addTransformOp(self, permute, variable):
+    if not self._simpleMemoryLayout:
+      permute.setEqspp( permute.computeSparsityPattern() )
+      permute.computeMemoryLayout()
+    result = self._nextTemporary(permute)
+    action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
+    self._addAction(action)
+    return result
 
   def _addPermuteIfRequired(self, indices, term, variable):
+    result = variable
     if indices != term.indices:
-      permute = Permute(term, indices)
-      if not self._simpleMemoryLayout:
-        permute.setEqspp( permute.computeSparsityPattern() )
-        permute.computeMemoryLayout()
-      result = self._nextTemporary(permute)
-      action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
-      self._addAction(action)
-      return result
-    return variable
+      # always assume that we write into the _bigger_ output
+      # (otherwise, there'd need to be a reduction/IndexSum first)
+      assert term.indices <= indices
+
+      order = [idx for idx in indices if idx in term.indices]
+      termOrder = [idx for idx in term.indices]
+
+      intermediate = variable
+      inode = term
+      if order != termOrder:
+        # permute needed, run before broadcast
+        inode = Permute.subPermute(term, indices)
+        intermediate = self._addTransformOp(inode, variable)
+      
+      result = intermediate
+      if len(term.indices) != len(indices):
+        # broadcast needed, more output than input indices
+        result = self._addTransformOp(Broadcast(inode, indices), intermediate)
+
+    return result
 
   def generic_visit(self, node):
     variables = [self.visit(child) for child in node]
@@ -40,6 +61,11 @@ class AST2ControlFlow(Visitor):
     
     return result
   
+  def visit_SliceView(self, node):
+    var = self.visit(node.term())
+    ml = node.getMemoryLayout(var.memoryLayout())
+    return VariableView(var, ml, node.eqspp())
+
   def visit_Add(self, node):
     variables = [self.visit(child) for child in node]
     assert len(variables) >= 1
@@ -76,13 +102,13 @@ class AST2ControlFlow(Visitor):
     return variables[0]
   
   def visit_IndexedTensor(self, node):
-    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor)
-  
+    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, is_temporary=node.tensor.temporary)
+
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
 
   def _nextTemporary(self, node):
-    name = '{}{}'.format(self.TEMPORARY_RESULT, self._tmp)
+    name = f'{self.TEMPORARY_RESULT}{self._tmp}'
     self._tmp += 1
     return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True)
 

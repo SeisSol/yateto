@@ -2,7 +2,7 @@ import sys
 from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
-from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication
+from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication, SliceView
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -76,29 +76,52 @@ class DeduceIndices(Transformer):
     for child in node:
       self.visit(child, bound)
 
-    ok = all(node[0].indices <= child.indices and child.indices <= node[0].indices for child in node)
+    # allow the following:
+    # * different addends may have different indices
+    # * different addends may have different permutations of said indices
+    # * but: different addends need to have the same index sizes
+    # Currently, the node[0] index order take precedence over later children
+
+    addIndices = deepcopy(node[0].indices)
+    for i in range(1, len(node)):
+      addIndices = addIndices.mergeStrict(node[i].indices)
+
+    ok = all(child.indices <= addIndices for child in node)
     if not ok:
       raise ValueError('Add: Indices do not match: ', *[child.indices for child in node])
 
-    node.indices = deepcopy(node[0].indices)
+    node.indices = addIndices
     return node
 
   def visit_ScalarMultiplication(self, node, bound):
     self.visit(node.term(), bound)
     node.indices = deepcopy(node.term().indices)
     return node
+  
+  def visit_SliceView(self, node, bound):
+    self.visit(node.term(), bound)
+    node.indices = Indices(node.term().indices, [shape if index != node.index else (node.end - node.start) for index, shape in zip(node.term().indices, node.term().shape())])
+    return node
 
   def visit_Assign(self, node, bound):
     lhs = node[0]
     rhs = node[1]
     
-    if not isinstance(lhs, IndexedTensor):
+    lhsTensor = lhs.viewed()
+    if not isinstance(lhsTensor, IndexedTensor):
       raise ValueError('Assign: Left-hand side must be of type IndexedTensor')
+
+    # we cannot get the indices of a view directly; so we need to start at the viewed lhs tensor
+    # (for tensors, we know their final indices before this transform)
+
+    self.visit(lhs, bound=set(lhsTensor.indices))
+
+    # now use the restricted (viewed) index ranges onto the rhs AST
 
     self.visit(rhs, bound=set(lhs.indices))
 
     node.indices = lhs.indices
-    if not (lhs.indices <= rhs.indices and lhs.indices <= rhs.indices):
+    if not (rhs.indices <= lhs.indices):
       raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
 
     return node
@@ -218,6 +241,11 @@ class EquivalentSparsityPattern(Transformer):
 
     # TODO: Backtracking of equivalent sparsity pattern to children?
 
+    return node
+  
+  def visit_SliceView(self, node):
+    self.generic_visit(node)
+    node.setEqspp(node.computeSparsityPattern())
     return node
 
 class SetSparsityPattern(Transformer):

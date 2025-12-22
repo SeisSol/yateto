@@ -24,7 +24,7 @@ class AST2ControlFlow(Visitor):
     if not self._simpleMemoryLayout:
       permute.setEqspp( permute.computeSparsityPattern() )
       permute.computeMemoryLayout()
-    permute.datatype = term.datatype
+    permute.datatype = permute[0].datatype
     result = self._nextTemporary(permute)
     action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False, condition=self._condition[-1])
     self._addAction(action)

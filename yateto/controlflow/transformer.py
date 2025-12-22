@@ -99,7 +99,11 @@ class MergeActions(object):
         V = ua.variables()
         for j in range(i+1,n):
           va = cfg[j].action
-          if va.isRHSVariable() and ua.result == va.term and va.result not in V and (ua.hasTrivialScalar() or va.hasTrivialScalar()):
+          if va.isRHSVariable() \
+              and ua.result == va.term \
+              and va.result not in V \
+              and (ua.hasTrivialScalar() or va.hasTrivialScalar()) \
+              and ua.result.isLocal():
             found = j
             break
           elif ua.result in va.variables() or ua.result == va.result:

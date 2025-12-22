@@ -27,8 +27,8 @@ class Description(object):
     self.beta = beta
     self.prefetchName = prefetchName
     
-    self.isACsc = self.leftTerm.memoryLayout.isCSC()
-    self.isBCsc = self.rightTerm.memoryLayout.isCSC()
+    self.isACsc = self.leftTerm.memoryLayout.isSparse()
+    self.isBCsc = self.rightTerm.memoryLayout.isSparse()
     
     bbA = BoundingBox.fromSpp(self.leftTerm.eqspp)
     bbB = BoundingBox.fromSpp(self.rightTerm.eqspp)

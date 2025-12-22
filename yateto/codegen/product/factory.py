@@ -9,8 +9,8 @@ class Description(object):
     self.leftTerm = leftTerm
     self.rightTerm = rightTerm
 
-    self.isACsc = self.leftTerm.memoryLayout.isCSC()
-    self.isBCsc = self.rightTerm.memoryLayout.isCSC()
+    self.isACsc = self.leftTerm.memoryLayout.isSparse()
+    self.isBCsc = self.rightTerm.memoryLayout.isSparse()
     
     rA = loopRanges(self.leftTerm, self.result.indices)
     rB = loopRanges(self.rightTerm, self.result.indices)

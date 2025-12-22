@@ -109,7 +109,7 @@ class Node(ABC):
   
   def __add__(self, other):
     if not isinstance(other, Node):
-      raise ValueError('Unsupported operation: Cannot add {} to {}.'.format(self, other))
+      raise ValueError(f'Unsupported operation: Cannot add {self} to {other}.')
     return self._binOp(other, Add)
   
   def __radd__(self, other):
@@ -688,6 +688,9 @@ class Reduction(UnaryOp):
   
   def reductionIndex(self):
     return self._reductionIndex
+  
+  def reductionIndices(self):
+    return [self._reductionIndex]
   
   def computeSparsityPattern(self, *spps):
     assert len(spps) <= 1

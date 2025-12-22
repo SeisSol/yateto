@@ -41,8 +41,9 @@ class Datatype(Enum):
       Datatype.I64: 'int64_t',
       Datatype.F32: 'float',
       Datatype.F64: 'double',
-      Datatype.F16: 'int16_t',
-      Datatype.BF16: 'int16_t',
+      Datatype.F16: 'yateto::f16_ty',
+      Datatype.BF16: 'yateto::bf16_ty',
+      Datatype.F128: 'yateto::f128_ty',
     }[self]
   
   def nptype(self):
@@ -74,20 +75,23 @@ class Datatype(Enum):
       Datatype.F128: 16,
     }[self]
   
+  def safeint(self, value):
+    # allow inf/-inf to be treated as int
+    return int(max(-2**64, min(2**64, value)))
+
   def literal(self, value):
-    # TODO: BF16, F16
     # (note: the extra lambda mapping is needed to prevent type errors)
     return {
       Datatype.BOOL: lambda value: 'true' if value else 'false',
-      Datatype.I8: lambda value: f'static_cast<int8_t>({int(value)}LL)',
-      Datatype.I16: lambda value: f'static_cast<int16_t>({int(value)}LL)',
-      Datatype.I32: lambda value: f'static_cast<int32_t>({int(value)}LL)',
-      Datatype.I64: lambda value: f'static_cast<int64_t>({int(value)}LL)',
+      Datatype.I8: lambda value: f'static_cast<int8_t>({self.safeint(value)}LL)',
+      Datatype.I16: lambda value: f'static_cast<int16_t>({self.safeint(value)}LL)',
+      Datatype.I32: lambda value: f'static_cast<int32_t>({self.safeint(value)}LL)',
+      Datatype.I64: lambda value: f'static_cast<int64_t>({self.safeint(value)}LL)',
       Datatype.F32: lambda value: f'{float(value):.16}f',
       Datatype.F64: lambda value: f'{float(value):.16}',
-      Datatype.F16: lambda value: f'static_cast<f16_ty>({float(value):.16})',
-      Datatype.BF16: lambda value: f'static_cast<bf16_ty>({float(value):.16})',
-      Datatype.F128: lambda value: f'static_cast<f128_ty>({float(value):.32}q)',
+      Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
+      Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
+      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({float(value):.32}q)',
     }[self](value)
 
 class AddressingMode(Enum):

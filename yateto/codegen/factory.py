@@ -3,7 +3,7 @@ from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
 from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
-from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise
+from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar
 
 class KernelFactory(object):
@@ -275,9 +275,7 @@ class UnitTestFactory(KernelFactory):
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
-    argTerm = self._formatTerm(arguments[0], node.term())
-
-    termTerm = node.optype.callstr(*node.fillTerms(argTerms))
+    termTerm = self._formatTerm(arguments[0], node.term().indices)
 
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
 

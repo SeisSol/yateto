@@ -16,11 +16,11 @@ class Generic(object):
     assert len(sumIndex) == 1
     class IndexSumBody(object):
       def __call__(s):
-        target = '{}[{}]'.format(d.result.name, d.result.memoryLayout.addressString(d.result.indices))
+        target = f'{d.result.name}[{d.result.memoryLayout.addressString(d.result.indices)}]'
         initialValue = target if d.add else d.result.datatype.literal(d.optype.neutral())
         cpp(f'{d.result.datatype.ctype()} acc = {initialValue};')
-        with cpp.For('int {0} = {1}; {0} < {2}; ++{0}'.format(sumIndex, d.sumLoopRange.start, d.sumLoopRange.stop)):
-          argstr = {d.term.name}[{d.term.memoryLayout.addressString(d.term.indices)}]
+        with cpp.For(f'int {sumIndex} = {d.sumLoopRange.start}; {sumIndex} < {d.sumLoopRange.stop}; ++{sumIndex}'):
+          argstr = f'{d.term.name}[{d.term.memoryLayout.addressString(d.term.indices)}]'
           cpp( f'acc = {d.optype.callstr('acc', argstr)};' )
         mult = f'{d.alpha} * ' if d.alpha != 1.0 else ''
         cpp( f'{target} = {mult}acc;' )

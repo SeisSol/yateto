@@ -2,6 +2,12 @@ from . import ops
 from .ast import node
 from .type import Datatype
 
+def add(x, y): return node.Elementwise(ops.Add(), x, y)
+def mul(x, y): return node.Elementwise(ops.Mul(), x, y)
+def bitwise_or(x, y): return node.Elementwise(ops.Or(), x, y)
+def bitwise_and(x, y): return node.Elementwise(ops.And(), x, y)
+def bitwise_xor(x, y): return node.Elementwise(ops.Xor(), x, y)
+
 def sin(x): return node.Elementwise(ops.Sin(), x)
 def cos(x): return node.Elementwise(ops.Cos(), x)
 def tan(x): return node.Elementwise(ops.Tan(), x)
@@ -25,8 +31,8 @@ def cbrt(x): return node.Elementwise(ops.Cbrt(), x)
 
 def abs(x): return node.Elementwise(ops.Abs(), x)
 
-def max(x, y): return node.Elementwise(ops.Max(), x, y)
-def min(x, y): return node.Elementwise(ops.Min(), x, y)
+def maximum(x, y): return node.Elementwise(ops.Max(), x, y)
+def minimum(x, y): return node.Elementwise(ops.Min(), x, y)
 def pow(x, y): return node.Elementwise(ops.Pow(), x, y)
 
 def assign(lhs, rhs): return node.Assign(lhs, rhs)
@@ -47,11 +53,13 @@ def reduction(op, term, indices):
     if len(indices) == 0:
         return term
     else:
-        reduction(op, node.Reduction(op, term, indices[0]), indices[1:])
+        return reduction(op, node.Reduction(op, term, indices[0]), indices[1:])
 
 def sum(term, indices): return reduction(ops.Add(), term, indices)
-def product(term, indices): return reduction(ops.Mul(), term, indices)
+def prod(term, indices): return reduction(ops.Mul(), term, indices)
 def all(term, indices): return reduction(ops.And(), term, indices)
 def any(term, indices): return reduction(ops.Or(), term, indices)
+def min(term, indices): return reduction(ops.Min(), term, indices)
+def max(term, indices): return reduction(ops.Max(), term, indices)
 
 def cast(x, dtype): return node.Elementwise(ops.Typecast(dtype), x)

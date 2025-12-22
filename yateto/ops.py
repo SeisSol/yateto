@@ -191,7 +191,9 @@ class Abs(Operation, CFunctionMixin, UnaryArgsMixin):
         return argtypes[0]
 
 
-class Max(Operation, CFunctionMixin, BinaryArgsMixin):
+class Max(Operation, CFunctionMixin, BinaryArgsMixin, CommutativeMonoidMixin):
+    def neutral(self):
+        return -float('inf')
     def cppname(self):
         return 'std::max'
     def call(self, *args):
@@ -199,7 +201,9 @@ class Max(Operation, CFunctionMixin, BinaryArgsMixin):
     def datatypeResult(self, argtypes):
         # assert argtypes[0] == argtypes[1]
         return argtypes[0]
-class Min(Operation, CFunctionMixin, BinaryArgsMixin):
+class Min(Operation, CFunctionMixin, BinaryArgsMixin, CommutativeMonoidMixin):
+    def neutral(self):
+        return float('inf')
     def cppname(self):
         return 'std::min'
     def call(self, *args):
@@ -315,7 +319,7 @@ class CmpGt(Operation, CBinaryOperatorMixin, BinaryArgsMixin):
         return args[0] > args[1]
     def datatypeResult(self, argtypes):
         return Datatype.BOOL
-class CmpGt(Operation, CBinaryOperatorMixin, BinaryArgsMixin):
+class CmpGe(Operation, CBinaryOperatorMixin, BinaryArgsMixin):
     def cppname(self, *args):
         return '>='
     def call(self, *args):

@@ -34,16 +34,16 @@ class DeduceIndices(Transformer):
       elif isinstance(self._targetIndices, Indices):
         node.indices = self._targetIndices
       else:
-        raise ValueError('Target indices type ({}) is not supported.'.format(self._targetIndices.__class__.__name__))
+        raise ValueError(f'Target indices type ({self._targetIndices.__class__.__name__}) is not supported.')
       if not (node.indices <= oldIndices and oldIndices <= node.indices):
-        raise ValueError('Target index dimensions do not match: {} != {}'.format(node.indices.__repr__(), oldIndices.__repr__()))
+        raise ValueError(f'Target index dimensions do not match: {node.indices.__repr__()} != {oldIndices.__repr__()}')
 
     return node
 
   def visit_IndexedTensor(self, node, bound):
     if set(node.indices) > bound:
       free = node.indices - bound
-      raise ValueError('The indices {} are not bound in {}.'.format(free.__repr__(), node))
+      raise ValueError(f'The indices {free.__repr__()} are not bound in {node}.')
     return node
 
   def visit_Einsum(self, node, bound):
@@ -103,6 +103,11 @@ class DeduceIndices(Transformer):
       self.visit(child, bound)
     node.indices = deepcopy(node[0].indices)
     return node
+  
+  def visit_Reduction(self, node, bound):
+    subbound = bound | set(node.reductionIndices())
+    self.visit(node.term(), subbound)
+    return node
 
   def visit_SliceView(self, node, bound):
     self.visit(node.term(), bound)
@@ -128,7 +133,7 @@ class DeduceIndices(Transformer):
 
     node.indices = lhs.indices
     if not (rhs.indices <= lhs.indices):
-      raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
+      raise ValueError(f'Index dimensions do not match: {lhs.indices.__repr__()} != {rhs.indices.__repr__()}')
 
     return node
 
@@ -226,6 +231,11 @@ class EquivalentSparsityPattern(Transformer):
     return node
   
   def visit_Elementwise(self, node):
+    self.generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+  
+  def visit_Reduction(self, node):
     self.generic_visit(node)
     node.setEqspp( node.computeSparsityPattern() )
     return node

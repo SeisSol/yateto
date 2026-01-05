@@ -480,9 +480,6 @@ class PatternMemoryLayout(MemoryLayout):
 
     self._nonzeros = nonzeros
 
-    # TODO: self._next = np.zeros(self._shape, dtype=int, order='F')
-    # point to the top-left entry
-
   def requiredReals(self):
     return len(self._nonzeros)
   
@@ -508,14 +505,14 @@ class PatternMemoryLayout(MemoryLayout):
     tle = topLeftEntry
     assert topLeftEntry in self._bbox
 
-    subpat = [self._pattern[tle] for ex in self._nonzeros if
+    subpat = [self._pattern[ex] for ex in self._nonzeros if
       all(e >= tle[i] for i,e in enumerate(ex))]
     
-    return subpat[0] - 1 if len(subpat) > 0 else 0
+    result = subpat[0] - 1 if len(subpat) > 0 else 0
 
-    #assert self._next[tuple(topLeftEntry)] > 0
+    assert result >= 0
 
-    #return self._next[tuple(topLeftEntry)] - 1
+    return result
 
   def entries(self, *rng):
     return [tuple(e - r.start for e,r in zip(ex, rng)) for ex in self._nonzeros if
@@ -615,9 +612,11 @@ class PatternMemoryLayout(MemoryLayout):
 
   def __eq__(self, other):
     return self._bbox == other._bbox and np.array_equal(self._pattern, other._pattern)
-  
+
   def equalStride(self, dim):
-    return False
+    # search for: all zeros
+    nzp = (self._pattern != 0)
+    return nzp.sum(axis=dim) == nzp.max(axis=dim) * nzp.shape[dim]
 
 class AlignedCSCMemoryLayout:
   @classmethod
@@ -775,3 +774,6 @@ class MemoryLayoutView(MemoryLayout):
       newval = val + self.start
       val = newval - DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(newval)
     return val
+  
+  def equalStride(self, dim):
+    return self.base.equalStride(dim)

@@ -696,7 +696,7 @@ class InitializerGenerator(object):
       cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
       cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
 
-  class PatternMatrixView(TensorView):
+  class PatternTensorView(TensorView):
     PATTERN_NAME = 'Pattern'
     
     def typename(self, dim, arch):
@@ -757,7 +757,7 @@ class InitializerGenerator(object):
     memLayoutMap = {
       'DenseMemoryLayout': self.DenseTensorView,
       'CSCMemoryLayout': self.CSCMatrixView,
-      'PatternMemoryLayout': self.PatternMatrixView
+      'PatternMemoryLayout': self.PatternTensorView
     }
     return memLayoutMap[type(memoryLayout).__name__]()
   

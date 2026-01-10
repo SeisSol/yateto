@@ -480,23 +480,35 @@ namespace yateto {
   };
 
   template<unsigned Dim, typename real_t, typename uint_t>
-  class PatternMatrixView : public TensorView<Dim, real_t, uint_t> {
+  class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
   public:
     // TODO: remove const_cast<uint_t*>(pattern)
 
-    explicit PatternMatrixView(real_t* values, std::initializer_list<uint_t> shape, uint_t const* pattern)
+    explicit PatternTensorView(real_t* values, std::initializer_list<uint_t> shape, uint_t const* pattern)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(const_cast<uint_t*>(pattern), shape) {
 
-      m_pattern.forall([&](const auto& index, const auto& idxval) {
-        if (idxval > 0) {
-          ++m_size;
-        }
-      });
+      computeSize();
     }
 
-    explicit PatternMatrixView(real_t* values, uint_t const shape[], uint_t const* pattern)
+    explicit PatternTensorView(real_t* values, uint_t const shape[], uint_t const* pattern)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(const_cast<uint_t*>(pattern), shape) {
 
+      computeSize();
+    }
+
+    explicit PatternTensorView(real_t* values, std::initializer_list<uint_t> shape, DenseTensorView<Dim, uint_t, uint_t> pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(std::move(pattern)) {
+
+      computeSize();
+    }
+
+    explicit PatternTensorView(real_t* values, uint_t const shape[], DenseTensorView<Dim, uint_t, uint_t> pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(std::move(pattern)) {
+
+      computeSize();
+    }
+
+    void computeSize() {
       m_pattern.forall([&](const auto& index, const auto& idxval) {
         if (idxval > 0) {
           ++m_size;
@@ -581,7 +593,7 @@ namespace yateto {
     auto subtensor(Entry... entry) const {
       static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       const auto patternSubtensor = m_pattern.subtensor(entry...);
-      return PatternMatrixView<count_slices<uint_t, Entry...>::value, real_t, uint_t>(m_values, this->m_shape, patternSubtensor);
+      return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t>(m_values, this->m_shape, patternSubtensor);
     }
 
   protected:

@@ -206,14 +206,14 @@ namespace yateto {
     }
 
     template<typename... Entry>
-    real_t operator()(Entry... entry) const {
+    const real_t& operator()(Entry... entry) const {
       static_assert(sizeof...(entry) == Dim,
                         "Number of arguments to operator() const does not match the tensor dimension.");
       assert(isInRange(entry...));
       return m_values[address(entry...)];
     }
 
-    real_t operator[](uint_t const entry[Dim]) const {
+    const real_t& operator[](uint_t const entry[Dim]) const {
       uint_t addr = 0;
       for (uint_t d = 0; d < Dim; ++d) {
         assert(entry[d] >= m_start[d] && entry[d] < m_stop[d]);
@@ -264,7 +264,7 @@ namespace yateto {
     }
 
     template<typename... Entry>
-    auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t> const {
+    auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t> {
       static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
       uint_t begin[Dim]{};
@@ -590,7 +590,7 @@ namespace yateto {
     }
 
     template<typename... Entry>
-    auto subtensor(Entry... entry) const {
+    auto subtensor(Entry... entry) {
       static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       const auto patternSubtensor = m_pattern.subtensor(entry...);
       return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t>(m_values, this->m_shape, patternSubtensor);

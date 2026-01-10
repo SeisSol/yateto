@@ -649,7 +649,7 @@ class InitializerGenerator(object):
     
     def listToInitializerList(self, lst):
       if isinstance(lst, np.ndarray):
-        lst = lst.flatten()
+        lst = lst.flatten(order='K')
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
     
     def formatArray(self, numberType, name, values, declarationOnly):

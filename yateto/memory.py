@@ -452,7 +452,7 @@ class PatternMemoryLayout(MemoryLayout):
     self.aligned = alignStride
 
     self._bbox = BoundingBox.fromSpp(spp)
-    if self.aligned:
+    if alignStride:
       range0 = self._bbox[0]
       rnew = Range( DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(range0.start), DenseMemoryLayout.ALIGNMENT_ARCH.alignedUpper(range0.stop) )
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
@@ -460,7 +460,7 @@ class PatternMemoryLayout(MemoryLayout):
     nonzeros = spp.nonzero()
     nonzeros = sorted(zip(*nonzeros), key=lambda x: x[::-1])
 
-    if self.aligned:
+    if alignStride:
       nonzeros_pre = set(nonzeros)
       for nonzero in nonzeros:
         lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
@@ -473,6 +473,7 @@ class PatternMemoryLayout(MemoryLayout):
       nonzeros = list(nonzeros_pre)
       nonzeros = sorted(zip(*[[nonzero[i] for nonzero in nonzeros] for i in range(len(self._shape))]), key=lambda x: x[::-1])
     
+    # keep everything in F order
     self._pattern = np.zeros(self._shape, dtype=int, order='F')
 
     for i, nonzero in enumerate(nonzeros):
@@ -556,7 +557,7 @@ class PatternMemoryLayout(MemoryLayout):
     for p in positionsI:
       selector[p] = slice(None)
     
-    pattern = self._pattern[tuple(selector)].transpose(positionsI).flatten()
+    pattern = self._pattern[tuple(selector)].transpose(positionsI).flatten(order='F')
 
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
 

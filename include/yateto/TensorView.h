@@ -529,7 +529,7 @@ namespace yateto {
     }
 
     template<typename ...Args>
-    real_t operator()(Args... index) const {
+    const real_t& operator()(Args... index) const {
       static_assert((std::is_integral_v<Args> && ...));
       const auto idx = m_pattern(index...);
       return m_values[idx - 1];
@@ -554,7 +554,7 @@ namespace yateto {
       return m_values[idx - 1];
     }
 
-    real_t operator[](const uint_t entry[Dim]) const {
+    const real_t& operator[](const uint_t entry[Dim]) const {
       const auto idx = m_pattern[entry];
       return m_values[idx - 1];
     }

@@ -33,7 +33,7 @@ jobs:
           mkdir -p ./build-${build_type} && cd ./build-${build_type}
           cmake .. -GNinja -DCMAKE_BUILD_TYPE=${build_type}
           ninja
-          ninja test
+          ctest -j --rerun-failed --output-on-failure
           cd ..
         done
 

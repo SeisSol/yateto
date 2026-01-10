@@ -109,7 +109,7 @@ class GemmGen(object):
     if d.isBCsc:
       sppB = d.rightTerm.memoryLayout.entries(k, n)
       sppBRows = d.rightTerm.memoryLayout.shape()[0]
-    
+
     if d.isACsc and d.isBCsc:
       # count the flops by splitting into outer products (i.e. partition by k)
       # for each outer product, we need to compute all-by-all nonzero entries for m and n

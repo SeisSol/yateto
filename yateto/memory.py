@@ -394,6 +394,10 @@ class CSCMemoryLayout(MemoryLayout):
     for col in colRange:
       e.extend([(self._rowIndex[i]-rowRange.start, col-colRange.start) for i in range(self._colPtr[col], self._colPtr[col+1])])
     return e
+  
+  def entriesRel(self, *rng):
+    entries = self.entries(*rng)
+    return list(enumerate(entries))
 
   def alignedStride(self):
     return self.aligned
@@ -479,7 +483,7 @@ class PatternMemoryLayout(MemoryLayout):
     for i, nonzero in enumerate(nonzeros):
       self._pattern[tuple(nonzero)] = i + 1 if pattern is None else pattern[tuple(nonzero)]
 
-    self._nonzeros = nonzeros
+    self._nonzeros = list(nonzeros)
 
   def requiredReals(self):
     return len(self._nonzeros)
@@ -519,6 +523,11 @@ class PatternMemoryLayout(MemoryLayout):
     return [tuple(e - r.start for e,r in zip(ex, rng)) for ex in self._nonzeros if
       all(e >= r.start and e < r.stop for e,r in zip(ex, rng))]
 
+  def entriesRel(self, *rng):
+    offset = self.subtensorOffset(tuple(r.start for r in rng))
+    return [(self._pattern[ex] - 1 - offset, tuple(e - r.start for e,r in zip(ex, rng))) for ex in self._nonzeros if
+      all(e >= r.start and e < r.stop for e,r in zip(ex, rng))]
+
   def alignedStride(self):
     return self.aligned
 
@@ -545,7 +554,7 @@ class PatternMemoryLayout(MemoryLayout):
   
   def vec(self, indices, I, Z):
     positionsI = indices.positions(I)
-    positionsZ = indices.positions(Z)
+    positionsZ = indices.positionsIncomplete(Z)
 
     # I and Z need to partition perfectly
 
@@ -568,7 +577,7 @@ class PatternMemoryLayout(MemoryLayout):
   def unfold(self, indices, I, J, Z):
     positionsI = indices.positions(I)
     positionsJ = indices.positions(J)
-    positionsZ = indices.positions(Z)
+    positionsZ = indices.positionsIncomplete(Z)
 
     if positionsI[0] > positionsJ[0]:
       positionsJ, positionsI = positionsI, positionsJ
@@ -595,7 +604,7 @@ class PatternMemoryLayout(MemoryLayout):
       dimmap[p] = i
       i += 1
 
-    pattern = self._pattern.transpose(dimmap)[tuple(selector)].reshape((sizeI, sizeJ))
+    pattern = self._pattern.transpose(dimmap)[tuple(selector)].reshape((sizeI, sizeJ), order='F')
 
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
   
@@ -618,6 +627,9 @@ class PatternMemoryLayout(MemoryLayout):
     # search for: all zeros
     nzp = (self._pattern != 0)
     return nzp.sum(axis=dim) == nzp.max(axis=dim) * nzp.shape[dim]
+  
+  def alignmentOffset(self, dim):
+    return 0
 
 class AlignedCSCMemoryLayout:
   @classmethod
@@ -755,13 +767,11 @@ class MemoryLayoutView(MemoryLayout):
   def permuted(self, permutation):
     return MemoryLayoutView(self.base.permuted(permutation), permutation[self.index], self.start, self.end)
   
-  def entries(self, rowRange, colRange):
-    if self.index == 0:
-      return self.base.entries(Range(rowRange.start + self.start, rowRange.stop + self.start), colRange)
-    elif self.index == 1:
-      return self.base.entries(rowRange, Range(colRange.start + self.start, colRange.stop + self.start))
-    else:
-      raise NotImplementedError()
+  def entries(self, *rng):
+    return self.base.entries([Range(r.start + self.start, r.stop + self.start) if self.index == i else r for i,r in enumerate(rng)])
+  
+  def entriesRel(self, *rng):
+    return self.base.entriesRel([Range(r.start + self.start, r.stop + self.start) if self.index == i else r for i,r in enumerate(rng)])
   
   def mayFuse(self, positions):
     return (self.index not in positions or positions[-1] == self.index) and self.base.mayFuse(positions)

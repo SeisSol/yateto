@@ -31,12 +31,6 @@ class Generic(object):
     elif len(term.indices) == 2:
       return term.memoryLayout
     return term.memoryLayout.unfold(term.indices, I, J, fixed)
-  
-  def _unroll(self, term, I):
-    if not term.memoryLayout.isSparse():
-      return set()
-
-    return I
 
   def _reduce(self, term, subset, memLayout, fixed):
     return reduceSpp(term.eqspp, term.indices, subset, fixed).reshape(memLayout.shape())

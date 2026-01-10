@@ -15,6 +15,7 @@ def invert(pattern):
 
 def add(g):
   N = 4
+  M = 2
   A = Tensor('A', (N,), spp=np.array([1,0,0,1]), memoryLayoutClass=PatternMemoryLayout)
   B = Tensor('B', (N,), spp=np.array([1,0,1,0]), memoryLayoutClass=PatternMemoryLayout)
   D = Tensor('D', (N,), spp=np.ones((N,)), memoryLayoutClass=PatternMemoryLayout)
@@ -27,7 +28,15 @@ def add(g):
   C0 = Tensor('C0', (N,))
   C = Tensor('C', (N, N))
   C2 = Tensor('C2', (N, N, N))
-  C3 = Tensor('C3', (N, N, N, N, N, N))
+
+  YA = Tensor('YA', (M, M, M), spp=checkerboard((M, M, M)), memoryLayoutClass=PatternMemoryLayout)
+  YB = Tensor('YB', (M, M, M), spp=checkerboard((M, M, M)), memoryLayoutClass=PatternMemoryLayout)
+  YC = Tensor('YC', (M, M, M))
+  C4 = Tensor('C4', (M, M, M, M))
+
+  ZA = Tensor('ZA', (M, M, M, M, M, M), spp=checkerboard((M, M, M, M, M, M)), memoryLayoutClass=PatternMemoryLayout)
+  ZB = Tensor('ZB', (M, M, M, M, M, M), spp=invert(checkerboard((M, M, M, M, M, M))), memoryLayoutClass=PatternMemoryLayout)
+  ZC = Tensor('ZC', (M, M, M, M, M, M))
 
   class Counter:
     def __init__(self):
@@ -49,3 +58,7 @@ def add(g):
   _(C['ij'] <= B4['ik'] * B3['kj'] * B4['ij'])
   _(C2['zij'] <= B2['ik'] * Z['kjz'])
   _(C0['k'] <= B4['ik'] * A['i'])
+
+  _(C4['ijXY'] <= YA['Zik'] * YB['kXY'] * YC['Zkj'])
+  _(ZC['abcxyz'] <= ZA['abcijk'] * ZB['ijkxyz'])
+  _(ZC['abcxyz'] <= ZA['aibjck'] * ZB['zkyjxi'])

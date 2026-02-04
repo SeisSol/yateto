@@ -109,6 +109,9 @@ class KernelFamily(object):
   GROUP_INDEX = r'\((0|[1-9]\d*)\)'
   VALID_NAME = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX)
 
+  GROUP_INDEX2 = r'\(((?:0|[1-9]\d*)(?:,(?:0|[1-9]\d*))*)\)'
+  VALID_NAME2 = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX2)
+
   def __init__(self, namespace=None):
     self._kernels = dict()
     self.name = None
@@ -133,9 +136,18 @@ class KernelFamily(object):
     return re.match(cls.VALID_NAME, name) is not None
   
   @classmethod
+  def isValidName2(cls, name):
+    return re.match(cls.VALID_NAME2, name) is not None
+  
+  @classmethod
   def group(cls, name):
     m = re.search(cls.GROUP_INDEX, name)
     return int(m.group(1))
+
+  def groupLinear(self, name):
+    m = re.search(self.GROUP_INDEX2, name)
+    grp = [int(s) for s in m.group(1).split(',')]
+    return self.linear(self.stride(), grp)
   
   def setStride(self, stride):
     self._stride = stride
@@ -185,6 +197,20 @@ def simpleParameterSpace(*args):
 def parameterSpaceFromRanges(*args):
   return list(itertools.product(*[list(i) for i in args]))
 
+class KernelChain:
+  def __init__(self, name, namespace, setup, target):
+    self.name = name
+    self.namespace = namespace
+    self.setup = setup
+    self.target = target
+
+    if self.namespace is None:
+      self.namespace = ''
+  
+  @classmethod
+  def isValidName(cls, name):
+    return re.match(Kernel.VALID_NAME, name) is not None
+
 class GlobalRoutineCache:
   def __init__(self):
     self.cache = RoutineCache()
@@ -231,6 +257,7 @@ class Generator(object):
   def __init__(self, arch):
     self._kernels = list()
     self._kernelFamilies = dict()
+    self._kernelChains = list()
     self._arch = arch
 
   def arch(self):
@@ -274,6 +301,24 @@ class Generator(object):
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
       family.add(indexedName, ast, prefetch, namespace, target=target)
   
+  def addChain(self, name: str, chainDesc: List[List[str]], namespace=None,
+                target='cpu'):
+    """
+      Add a kernel chain. I.e. combine multiple kernels into a single one.
+      Needs support from the routine exporter (to, e.g. merge them into GPU kernels),
+      otherwise it's equal to just calling all the respective kernels in sequence.
+
+      The `chainDesc` parameter is a two-stage list:
+      * For the first layer, between each list entry, we insert a grid-wide synchronization. I.e. if you were to just launch the kernels in sequence.
+      * For the second layer, the kernels may potentially overlap (in the GPU case: we only insert block-level synchronization).
+      * Finally, we have the strings of registered Yateto kernels by the other two functions.
+
+      The names will be only checked once you generate the kernels. It's allowed to have a different element count per kernel; moreover,
+      family kernel instances are allowed as well.
+    """
+    
+    self._kernelChains.append(KernelChain(name, namespace, chainDesc, target))
+
   @classmethod
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
@@ -348,6 +393,13 @@ class Generator(object):
         kernel_family_dict[family.namespace].append(family)
       else:
         kernel_family_dict[family.namespace] = [family]
+    
+    chainkernel_dict = {}
+    for kernel in self._kernelChains:
+      if kernel.namespace in chainkernel_dict:
+        chainkernel_dict[kernel.namespace].append(kernel)
+      else:
+        chainkernel_dict[kernel.namespace] = [kernel]
 
     print('Generating kernels...')
     if routine_cache is None:
@@ -395,6 +447,33 @@ class Generator(object):
 
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
+              
+              # group kernel chains by namespace
+              for chain_namespace, chainkernels in chainkernel_dict.items():
+                for chainkernel in chainkernels:
+
+                  chainDescC = []
+                  for innerDesc in chainkernel.setup:
+                    innerDescC = []
+                    for kernelname in innerDesc:
+                      chainnsp, basename = Tensor.splitBasename(kernelname)
+                      if Kernel.isValidName(basename):
+                        innerDescC += [(kernelname, self._kernels[basename], '')]
+                      elif KernelFamily.isValidName2(basename):
+                        familyname = KernelFamily.baseName(basename)
+                        family = self._kernelFamilies[familyname]
+                        grp = family.groupLinear(basename)
+
+                        fullfamilyname = f'{chainnsp}kernel::{familyname}'
+                        innerDescC += [(fullfamilyname, family._kernels[grp], grp)]
+                      else:
+                        raise NotImplementedError(f'Invalid name: {kernelname}')
+                    chainDescC += [innerDescC]
+                  kernelOutline = optKernelGenerator.generateChainKernelOutline(chainDescC,
+                                                                           gemm_cfg,
+                                                                           chainkernel.target)
+                  with cpp.Namespace(chain_namespace), header.Namespace(chain_namespace):
+                    optKernelGenerator.generate(cpp, header, chainkernel.name, [kernelOutline])
       kernelSourceContent = kernelSource.getvalue()
 
     with Cpp(fKernels.cpp) as cpp:
@@ -481,3 +560,7 @@ class NamespacedGenerator(object):
   @_add_ns
   def addFamily(self, *args, **kwargs):
     return self.generator.addFamily(*args, **kwargs)
+  
+  @_add_ns
+  def addChain(self, *args, **kwargs):
+    return self.generator.addChain(*args, **kwargs)

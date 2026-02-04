@@ -13,7 +13,7 @@ class KernelFactory(object):
     self._arch = arch
     self._freeList = list()
     self._target = target
-    
+
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
     factory = getattr(self, method, self.generic_create)
@@ -74,25 +74,12 @@ class KernelFactory(object):
 
     self._freeList = []
 
-  def reset_stream(self):
-    if self._target == 'cpu':
-      pass
-    elif self._target == 'gpu':
-      self._cpp(f'{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
-    else:
-      raise RuntimeError('unknown compute target')
-
-  def reset_flags(self):
-    if self._target == 'cpu':
-      pass
-    elif self._target == 'gpu':
-      self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
-    else:
-      raise RuntimeError('unknown compute target')
-
   def _indices(self, var):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
+  
+  def supportsChainKernels(self):
+    return False
 
 class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target):
@@ -289,6 +276,9 @@ class ExportGenerator:
   def add_linear_operation(self, dest, ops, target, permute, add):
     pass
 
+  def region_switch(self, barrier):
+    pass
+
 class ExportFactory(KernelFactory):
   @classmethod
   def makeFactory(cls, generator):
@@ -364,3 +354,12 @@ class ExportFactory(KernelFactory):
       permute += [[]]
     
     return self.generator.add_linear_operation(dest, ops, target, permute, add)
+
+  def region_switch(self, barrier):
+    self.generator.region_switch(barrier)
+  
+  def set_region_name(self, name):
+    self.generator.set_region_name(name)
+
+  def supportsChainKernels(self):
+    return True

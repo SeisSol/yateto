@@ -7,17 +7,56 @@ class MetaGenerator:
     def __init__(self, templateType):
         self.templateType = templateType
         self.generators = []
-    
+
     def add_generator(self, template, generator, *args, **kwargs):
         assert len(self.templateType) == len(template)
         self.generators += [{
+            'name': kwargs["name"] if "name" in kwargs else str(len(self.generators)),
             'template': template,
             'generator': generator,
             'args': args,
             'kwargs': kwargs
         }]
-    
-    def generate(self, outputDir='', namespace='yateto', includes=[], declarationsTensors=[], declarationsKernels=[]):
+
+    def compile_list(self):
+        outfiles = []
+        for gendata in self.generators:
+            outdirname = f'metagen_{gendata["name"]}'
+            outdir = os.path.join(outputDir, outdirname)
+
+            genout = []
+            for file in ['tensor', 'init', 'kernel', 'test-kernel']:
+                genout += [file]
+            outfiles += [genout]
+        return outfiles
+
+    def generate_single(self, index, outputDir='', namespace='yateto'):
+        namespacepfx = 'yatetometagen'
+        gendata = self.generators[index]
+        subnamespace = f'{namespace}::{namespacepfx}_{gendata["name"]}'
+        outdirname = f'metagen_{gendata["name"]}'
+        outdir = os.path.join(outputDir, outdirname)
+        os.makedirs(outdir, exist_ok=True)
+
+        generator = gendata['generator']
+        template = gendata['template']
+        args = gendata['args']
+        kwargs = gendata['kwargs']
+
+        fixArchitectureGlobal(generator._arch)
+        result = generator.generate(*args, **kwargs, namespace=subnamespace, outputDir=outdir)
+
+        tensors = {}
+        kernels = {}
+
+        for tensor in result['tensors']:
+            tensors[tensor] = (subnamespace, template)
+        for kernel in result['kernels']:
+            kernels[kernel] = (subnamespace, template)
+
+        return tensors, kernels
+
+    def generate(self, outputDir='', namespace='yateto', includes=[], declarationsTensors=[], declarationsKernels=[], precompiled=None):
         tensors = {}
         kernels = {}
 
@@ -26,28 +65,20 @@ class MetaGenerator:
         for tensor in declarationsKernels:
             kernels[tensor] = []
 
-        namespacepfx = 'yatetometagen'
-        for i, gendata in enumerate(self.generators):
-            subnamespace = f'{namespace}::{namespacepfx}{i}'
-            outdir = os.path.join(outputDir, f'metagen{i}')
-            os.makedirs(outdir, exist_ok=True)
+        for index in range(len(self.generators)):
+            if precompiled is None:
+                local_tensors, local_kernels = self.generate_single(index, outputDir, namespace)
+            else:
+                local_tensors, local_kernels = precompiled[index]
 
-            generator = gendata['generator']
-            template = gendata['template']
-            args = gendata['args']
-            kwargs = gendata['kwargs']
-
-            fixArchitectureGlobal(generator._arch)
-            result = generator.generate(*args, **kwargs, namespace=subnamespace, outputDir=outdir)
-
-            for tensor in result['tensors']:
+            for tensor in local_tensors:
                 if tensor not in tensors:
                     tensors[tensor] = []
-                tensors[tensor] += [(subnamespace, template)]
-            for kernel in result['kernels']:
+                tensors[tensor] += [local_tensors[tensor]]
+            for kernel in local_kernels:
                 if kernel not in kernels:
                     kernels[kernel] = []
-                kernels[kernel] += [(subnamespace, template)]
+                kernels[kernel] += [local_kernels[kernel]]
 
         nspuppercase = namespace.upper()
 
@@ -57,8 +88,9 @@ class MetaGenerator:
                 with header.HeaderGuard(f'METAGEN_{nspuppercase}_{upper}_H_'):
                     for path in includes:
                         header.include(path)
-                    for i, gendata in enumerate(self.generators):
-                        header.include(f'metagen{i}/{name}.h')
+                    for gendata in self.generators:
+                        outdirname = f'metagen_{gendata["name"]}'
+                        header.include(f'{outdirname}/{name}.h')
                     with header.Namespace(namespace):
                         for entry in data:
                             self.template(header, entry, data[entry], f'{name}')
@@ -70,14 +102,15 @@ class MetaGenerator:
 
         def cppForward(name):
             with Cpp(os.path.join(outputDir, f'{name}.cpp')) as header:
-                for i, gendata in enumerate(self.generators):
-                    header.include(f'metagen{i}/{name}.cpp')
+                for gendata in self.generators:
+                    outdirname = f'metagen_{gendata["name"]}'
+                    header.include(f'{outdirname}/{name}.cpp')
         
         cppForward('tensor')
         cppForward('init')
         cppForward('kernel')
         cppForward('test-kernel')
-        
+
     def namespacing(self, header, spaces, inner):
         if len(spaces) == 0:
             inner()

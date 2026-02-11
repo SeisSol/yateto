@@ -66,10 +66,11 @@ namespace yateto {
     }
   };
 
-  template<unsigned Dim, typename real_t, typename uint_t=unsigned, typename data_t=real_t*>
+  template<unsigned Dim, typename real_t, typename uint_t=unsigned, bool Const = false>
   class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
   public:
-    static_assert(std::is_same_v<typename std::iterator_traits<data_t>::value_type, real_t>, "data_t iterator value type and real_t do not match");
+    using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+    using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
 
     explicit DenseTensorView(data_t values, std::initializer_list<uint_t> shape, std::initializer_list<uint_t> start, std::initializer_list<uint_t> stop)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values) {
@@ -154,7 +155,7 @@ namespace yateto {
     }
 
     template<typename... Entry>
-    typename std::iterator_traits<data_t>::reference operator()(Entry... entry) {
+    dataref_t operator()(Entry... entry) {
       static_assert(sizeof...(entry) == Dim,
                         "Number of arguments to operator() does not match the tensor dimension.");
       assert(isInRange(entry...));
@@ -178,7 +179,7 @@ namespace yateto {
       return m_values[addr];
     }
 
-    typename std::iterator_traits<data_t>::reference operator[](uint_t const entry[Dim]) {
+    dataref_t operator[](uint_t const entry[Dim]) {
       uint_t addr = 0;
       for (uint_t d = 0; d < Dim; ++d) {
         assert(entry[d] >= m_start[d] && entry[d] < m_stop[d]);
@@ -220,18 +221,30 @@ namespace yateto {
     }
 
     template<typename... Entry>
-    auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, data_t> const {
+    auto subtensor(Entry... entry) -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, Const> {
       static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
       uint_t begin[Dim];
       uint_t size[nSlices];
       uint_t stride[nSlices];
       extractSubtensor(begin, size, stride, entry...);
-      DenseTensorView<nSlices, real_t, uint_t> subtensor(&operator[](begin), size, stride);
+      DenseTensorView<nSlices, real_t, uint_t, Const> subtensor(&operator[](begin), size, stride);
       return subtensor;
     }
 
-    auto data() {
+    template<typename... Entry>
+    auto subtensor(Entry... entry) const -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, true> {
+      static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
+      constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
+      uint_t begin[Dim];
+      uint_t size[nSlices];
+      uint_t stride[nSlices];
+      extractSubtensor(begin, size, stride, entry...);
+      DenseTensorView<nSlices, real_t, uint_t, true> subtensor(&operator[](begin), size, stride);
+      return subtensor;
+    }
+
+    data_t data() {
       return m_values;
     }
 
@@ -292,9 +305,12 @@ namespace yateto {
     uint_t m_stride[Dim];
   };
 
-  template<typename real_t, typename uint_t, typename data_t>
-  class DenseTensorView<0,real_t,uint_t,data_t> : public TensorView<0, real_t, uint_t> {
+  template<typename real_t, typename uint_t, bool Const>
+  class DenseTensorView<0,real_t,uint_t,Const> : public TensorView<0, real_t, uint_t> {
   public:
+    using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+    using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
+
     explicit DenseTensorView(data_t values, std::initializer_list<uint_t> shape, std::initializer_list<uint_t> start, std::initializer_list<uint_t> stop)
       : TensorView<0, real_t, uint_t>(shape), m_values(values) {
     }
@@ -316,10 +332,11 @@ namespace yateto {
     data_t m_values;
   };
 
-  template<typename real_t, typename uint_t, typename data_t=real_t*>
+  template<typename real_t, typename uint_t, bool Const = false>
   class CSCMatrixView : public TensorView<2, real_t, uint_t> {
   public:
-    static_assert(std::is_same_v<typename std::iterator_traits<data_t>::value_type, real_t>, "data_t iterator value type and real_t do not match");
+    using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+    using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
 
     explicit CSCMatrixView(data_t values, std::initializer_list<uint_t> shape, uint_t const* rowInd, uint_t const* colPtr)
       : TensorView<2, real_t, uint_t>(shape), m_values(values), m_rowInd(rowInd), m_colPtr(colPtr) {
@@ -352,7 +369,7 @@ namespace yateto {
       return m_values[addr];
     }
 
-    typename std::iterator_traits<data_t>::reference operator()(uint_t row, uint_t col) {
+    dataref_t operator()(uint_t row, uint_t col) {
       assert(col >= 0 && col < this->shape(1));
       uint_t addr = m_colPtr[ col ];
       uint_t stop = m_colPtr[ col+1 ];
@@ -381,7 +398,7 @@ namespace yateto {
       return false;
     }
 
-    typename std::iterator_traits<data_t>::reference operator[](const uint_t entry[2]) {
+    dataref_t operator[](const uint_t entry[2]) {
       return operator()(entry[0], entry[1]);
     }
 

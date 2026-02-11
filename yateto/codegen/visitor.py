@@ -637,8 +637,8 @@ class InitializerGenerator(object):
     ARGUMENT_NAME = 'values'
 
     def typename(self, dim, arch, const):
-      dtype = f'{arch.typename} const*' if const else f'{arch.typename} *'
-      return '::{}::{}<{},{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename, dtype)
+      constStr = 'true' if const else 'false'
+      return '::{}::{}<{},{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename, constStr)
     
     @classmethod
     def arguments(cls, arch, const):
@@ -682,8 +682,8 @@ class InitializerGenerator(object):
     COLPTR_NAME = 'ColPtr'
     
     def typename(self, dim, arch, const):
-      dtype = f'{arch.typename} const*' if const else f'{arch.typename} *'
-      return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename, dtype)
+      constStr = 'true' if const else 'false'
+      return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename, constStr)
 
     def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {}, {});'.format(

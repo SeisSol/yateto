@@ -5,11 +5,15 @@ applications. You can find much more information about the package
 [here](https://arxiv.org/abs/1903.11521).
 
 ## Installation
+
 ```bash
 pip install -e .
 ```
 
+or include it into your project as a submodule.
+
 ## Usage
+
 ```python
 from yateto import *
 
@@ -28,7 +32,8 @@ def add(g):
 arch = useArchitectureIdentifiedBy("dhsw")
 generator = Generator(arch)
 add(generator)
-generator.generate(output_dir, GeneratorCollection([LIBXSMM(arch), Eigen(arch)]))
+generator.generate(output_dir, gemm_cfg=GeneratorCollection([LIBXSMM(arch), Eigen(arch)]))
 ...
 ```
 
+Note that the interfaces Yateto generates require C++17.

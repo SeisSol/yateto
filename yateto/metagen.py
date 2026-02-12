@@ -18,7 +18,7 @@ class MetaGenerator:
             'kwargs': kwargs
         }]
 
-    def compile_list(self):
+    def compile_list(self, outputDir=''):
         outfiles = []
         for gendata in self.generators:
             outdirname = f'metagen_{gendata["name"]}'
@@ -43,7 +43,7 @@ class MetaGenerator:
         args = gendata['args']
         kwargs = gendata['kwargs']
 
-        fixArchitectureGlobal(generator._arch)
+        fixArchitectureGlobal(generator.arch())
         result = generator.generate(*args, **kwargs, namespace=subnamespace, outputDir=outdir)
 
         tensors = {}
@@ -120,6 +120,8 @@ class MetaGenerator:
 
     def template(self, header, prename, foundin, subnsp):
         splitname = prename.split('::')
+
+        assert len(splitname) > 0
 
         def inner():
             name = splitname[-1]

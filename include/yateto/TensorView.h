@@ -163,14 +163,14 @@ namespace yateto {
     }
 
     template<typename... Entry>
-    real_t operator()(Entry... entry) const {
+    const real_t& operator()(Entry... entry) const {
       static_assert(sizeof...(entry) == Dim,
                         "Number of arguments to operator() const does not match the tensor dimension.");
       assert(isInRange(entry...));
       return m_values[address(entry...)];
     }
 
-    real_t operator[](uint_t const entry[Dim]) const {
+    const real_t& operator[](uint_t const entry[Dim]) const {
       uint_t addr = 0;
       for (uint_t d = 0; d < Dim; ++d) {
         assert(entry[d] >= m_start[d] && entry[d] < m_stop[d]);
@@ -354,7 +354,7 @@ namespace yateto {
       memset(m_values, 0, size() * sizeof(real_t));
     }
 
-    real_t operator()(uint_t row, uint_t col) const {
+    const real_t& operator()(uint_t row, uint_t col) const {
       assert(col >= 0 && col < this->shape(1));
       uint_t addr = m_colPtr[ col ];
       uint_t stop = m_colPtr[ col+1 ];
@@ -402,7 +402,7 @@ namespace yateto {
       return operator()(entry[0], entry[1]);
     }
 
-    real_t operator[](const uint_t entry[2]) const {
+    const real_t& operator[](const uint_t entry[2]) const {
       return operator()(entry[0], entry[1]);
     }
 

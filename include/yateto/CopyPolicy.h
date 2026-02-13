@@ -4,14 +4,13 @@
 #include <algorithm>
 
 namespace yateto {
-  template <typename float_t>
-  class SimpleCopyPolicy {
-  public:
-    float_t* copy(float_t const* first, float_t const* last, float_t*& mem) {
-      mem = std::copy(first, last, mem);
-      return mem;
-    }
-  };
-}
+template <typename float_t> class SimpleCopyPolicy {
+public:
+  float_t *copy(float_t const *first, float_t const *last, float_t *&mem) {
+    mem = std::copy(first, last, mem);
+    return mem;
+  }
+};
+} // namespace yateto
 
-#endif  // YATETO_COPY_POLICY_H_
+#endif // YATETO_COPY_POLICY_H_

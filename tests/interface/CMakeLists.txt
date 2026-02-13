@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 enable_testing()
 # generate and add an interface test
- add_custom_command(COMMAND ${CXXTEST_PYTHON_TESTGEN_EXECUTABLE} 
+ add_custom_command(COMMAND ${CXXTEST_PYTHON_TESTGEN_EXECUTABLE}
                             --error-printer -o TensorView.t.cpp ${CMAKE_SOURCE_DIR}/TensorView.t.h
                     OUTPUT  TensorView.t.cpp
                     COMMENT "Generating a test runner")

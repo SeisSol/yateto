@@ -3,8 +3,10 @@
  * This file is part of SeisSol.
  *
  * @author Alexander Heinecke (Alexander.Heinecke@mytum.de)
- * @author Sebastian Rettenberger (sebastian.rettenberger AT tum.de, http://www5.in.tum.de/wiki/index.php/Sebastian_Rettenberger)
- * @author Carsten Uphoff (c.uphoff AT tum.de, http://www5.in.tum.de/wiki/index.php/Carsten_Uphoff,_M.Sc.)
+ * @author Sebastian Rettenberger (sebastian.rettenberger AT tum.de,
+ * http://www5.in.tum.de/wiki/index.php/Sebastian_Rettenberger)
+ * @author Carsten Uphoff (c.uphoff AT tum.de,
+ * http://www5.in.tum.de/wiki/index.php/Carsten_Uphoff,_M.Sc.)
  *
  * @section LICENSE
  * Copyright (c) 2016-2017, SeisSol Group
@@ -48,97 +50,82 @@
 /**
  * Stopwatch
  *
- * Part of SeisSol, so you can easily calculate the needed time of SeisSol computations with a high precision
+ * Part of SeisSol, so you can easily calculate the needed time of SeisSol
+ * computations with a high precision
  */
-class Stopwatch
-{
+class Stopwatch {
 private:
-	struct timespec m_start;
+  struct timespec m_start;
 
-	/** Time already spent */
-	long long m_time;
-  
+  /** Time already spent */
+  long long m_time;
+
   /** Returns the time difference in nanoseconds. */
-  long long difftime(struct timespec const& end)
-  {
-    return 1000000000L * (end.tv_sec - m_start.tv_sec) + end.tv_nsec - m_start.tv_nsec;
+  long long difftime(struct timespec const &end) {
+    return 1000000000L * (end.tv_sec - m_start.tv_sec) + end.tv_nsec -
+           m_start.tv_nsec;
   }
-  
-  double seconds(long long time) 
-  {
-    return 1.0e-9 * time;
-  }
+
+  double seconds(long long time) { return 1.0e-9 * time; }
 
 public:
-	/**
-	 * Constructor
-	 *
-	 * resets the Stopwatch
-	 */
-	Stopwatch() : m_time(0)
-  {}
+  /**
+   * Constructor
+   *
+   * resets the Stopwatch
+   */
+  Stopwatch() : m_time(0) {}
 
-	/**
-	 * Destructor
-	 */
-	~Stopwatch()
-	{}
+  /**
+   * Destructor
+   */
+  ~Stopwatch() {}
 
-	/**
-	 * Reset the stopwatch to zero
-	 */
-	void reset()
-	{
-		m_time = 0;
-	}
+  /**
+   * Reset the stopwatch to zero
+   */
+  void reset() { m_time = 0; }
 
-	/**
-	 * starts the time measuring
-	 */
-	void start()
-	{
-		clock_gettime(CLOCK_MONOTONIC, &m_start);
-	}
+  /**
+   * starts the time measuring
+   */
+  void start() { clock_gettime(CLOCK_MONOTONIC, &m_start); }
 
-	/**
-	 * get time measuring
-	 *
-	 * @return measured time (until now) in seconds
-	 */
-	double split()
-	{
-		struct timespec end;
-		clock_gettime(CLOCK_MONOTONIC, &end);
-    
+  /**
+   * get time measuring
+   *
+   * @return measured time (until now) in seconds
+   */
+  double split() {
+    struct timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
     return seconds(difftime(end));
-	}
+  }
 
-	/**
-	 * pauses the measuring
-	 *
-	 * @return measured time (until now) in seconds
-	 */
-	double pause()
-	{
-		struct timespec end;
-		clock_gettime(CLOCK_MONOTONIC, &end);
+  /**
+   * pauses the measuring
+   *
+   * @return measured time (until now) in seconds
+   */
+  double pause() {
+    struct timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
 
-		m_time += difftime(end);
-		return seconds(m_time);
-	}
+    m_time += difftime(end);
+    return seconds(m_time);
+  }
 
-	/**
-	 * stops time measuring
-	 *
-	 * @return measured time in seconds
-	 */
-	double stop()
-	{
-		double time = pause();
-		reset();
-		return time;
-	}
+  /**
+   * stops time measuring
+   *
+   * @return measured time in seconds
+   */
+  double stop() {
+    double time = pause();
+    reset();
+    return time;
+  }
 };
 
 #endif // STOPWATCH_H
-

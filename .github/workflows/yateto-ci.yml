@@ -5,7 +5,7 @@ on: push
 jobs:
   general:
     runs-on: ubuntu-latest
-    container: 
+    container:
       image: seissol/gha-cpu:davschneller-gpu-image
     steps:
     - uses: actions/checkout@v5
@@ -13,11 +13,11 @@ jobs:
     - name: Install Yateto
       run: |
         pip3 install -e . --break-system-packages
-    
+
     - name: Python Tests
       run: |
         python3 -m unittest tests/internals/*.py
-    
+
     - name: install-packages
       run: |
         apt-get update -y
@@ -25,7 +25,7 @@ jobs:
         add-apt-repository ppa:deadsnakes/ppa
         apt-get update -y
         apt-get install -y cxxtest
-        
+
     - name: Interface Tests
       run: |
         cd ./tests/interface
@@ -39,7 +39,7 @@ jobs:
 
   codegen:
     runs-on: ubuntu-latest
-    container: 
+    container:
       image: seissol/gha-cpu:davschneller-gpu-image
     env:
       CTEST_OUTPUT_ON_FAILURE: 1
@@ -47,14 +47,14 @@ jobs:
       fail-fast: false
       matrix:
         generator: [none, Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS, PSpaMM]
-        
+
     steps:
     - uses: actions/checkout@v5
 
     - name: Install Yateto
       run: |
         pip3 install -e . --break-system-packages
-        
+
     - name: install-packages
       run: |
         apt-get update -y
@@ -62,7 +62,7 @@ jobs:
         add-apt-repository ppa:deadsnakes/ppa
         apt-get update -y
         apt-get install -y cxxtest
-    
+
     - name: install-libxsmm
       if: ${{ matrix.generator == 'LIBXSMM_JIT' }}
       run: |

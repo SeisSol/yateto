@@ -7,12 +7,11 @@ typedef double real;
 #elif REAL_SIZE == 4
 typedef float real;
 #else
-#  error REAL_SIZE not supported.
+#error REAL_SIZE not supported.
 #endif
 
-void fillWithStuff(real* A, unsigned reals) {
+void fillWithStuff(real *A, unsigned reals) {
   for (unsigned j = 0; j < reals; ++j) {
-      A[j] = drand48();
+    A[j] = drand48();
   }
 }
-

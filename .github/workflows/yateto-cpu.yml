@@ -1,14 +1,14 @@
-name: Yateto CI
+name: yateto-cpu
 
 on: push
 
 jobs:
   general:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: seissol/gha-cpu:davschneller-gpu-image
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install Yateto
       run: |
@@ -38,7 +38,7 @@ jobs:
         done
 
   codegen:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: seissol/gha-cpu:davschneller-gpu-image
     env:
@@ -49,7 +49,7 @@ jobs:
         generator: [none, Eigen, LIBXSMM, LIBXSMM_JIT, OpenBLAS, PSpaMM]
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install Yateto
       run: |

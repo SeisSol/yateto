@@ -500,37 +500,38 @@ namespace yateto {
     uint_t const* m_colPtr;
   };
 
-  template<unsigned Dim, typename real_t, typename uint_t>
+  template<unsigned Dim, typename real_t, typename uint_t, bool Const = false>
   class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
   public:
-    // TODO: remove const_cast<uint_t*>(pattern)
+    using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+    using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
 
-    explicit PatternTensorView(real_t* values, std::initializer_list<uint_t> shape, uint_t const* pattern)
-      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(const_cast<uint_t*>(pattern), shape) {
-
-      computeSize();
-    }
-
-    explicit PatternTensorView(real_t* values, uint_t const shape[], uint_t const* pattern)
-      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(const_cast<uint_t*>(pattern), shape) {
+    explicit PatternTensorView(data_t values, std::initializer_list<uint_t> shape, uint_t const* pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(pattern, shape) {
 
       computeSize();
     }
 
-    explicit PatternTensorView(real_t* values, std::initializer_list<uint_t> shape, DenseTensorView<Dim, uint_t, uint_t> pattern)
+    explicit PatternTensorView(data_t values, uint_t const shape[], uint_t const* pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(pattern, shape) {
+
+      computeSize();
+    }
+
+    explicit PatternTensorView(data_t values, std::initializer_list<uint_t> shape, DenseTensorView<Dim, uint_t, uint_t, true> pattern)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(std::move(pattern)) {
 
       computeSize();
     }
 
-    explicit PatternTensorView(real_t* values, uint_t const shape[], DenseTensorView<Dim, uint_t, uint_t> pattern)
+    explicit PatternTensorView(data_t values, uint_t const shape[], DenseTensorView<Dim, uint_t, uint_t, true> pattern)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(std::move(pattern)) {
 
       computeSize();
     }
 
     void computeSize() {
-      m_pattern.forall([&](const auto& index, const auto& idxval) {
+      m_pattern.forall([&](const auto& /*index*/, const auto& idxval) {
         if (idxval > 0) {
           ++m_size;
         }
@@ -542,7 +543,7 @@ namespace yateto {
     }
 
     void setZero() {
-      m_pattern.forall([&](const auto& index, const auto& idxval) {
+      m_pattern.forall([&](const auto& /*index*/, const auto& idxval) {
         if (idxval > 0) {
           m_values[idxval - 1] = 0;
         }
@@ -557,7 +558,7 @@ namespace yateto {
     }
 
     template<typename ...Args>
-    real_t& operator()(Args... index) {
+    dataref_t operator()(Args... index) {
       static_assert((std::is_integral_v<Args> && ...));
       const auto idx = m_pattern(index...);
       return m_values[idx - 1];
@@ -570,7 +571,7 @@ namespace yateto {
       return idx > 0;
     }
 
-    real_t& operator[](const uint_t entry[Dim]) {
+    dataref_t operator[](const uint_t entry[Dim]) {
       const auto idx = m_pattern[entry];
       return m_values[idx - 1];
     }
@@ -599,7 +600,7 @@ namespace yateto {
     }
 
     template<class view_t>
-    void copyToView(view_t& other) {
+    void copyToView(view_t& other) const {
       m_pattern.forall([&](const auto& index, const auto& idxval) {
         if (idxval > 0) {
           other[index] = m_values[idxval - 1];
@@ -614,12 +615,19 @@ namespace yateto {
     auto subtensor(Entry... entry) {
       static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
       const auto patternSubtensor = m_pattern.subtensor(entry...);
-      return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t>(m_values, this->m_shape, patternSubtensor);
+      return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, Const>(m_values, this->m_shape, patternSubtensor);
+    }
+
+    template<typename... Entry>
+    auto subtensor(Entry... entry) const {
+      static_assert(sizeof...(entry) == Dim, "Number of arguments to subtensor() does not match tensor dimension.");
+      const auto patternSubtensor = m_pattern.subtensor(entry...);
+      return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, true>(m_values, this->m_shape, patternSubtensor);
     }
 
   protected:
-    real_t* m_values{nullptr};
-    DenseTensorView<Dim, uint_t, uint_t> m_pattern;
+    data_t m_values{nullptr};
+    DenseTensorView<Dim, uint_t, uint_t, true> m_pattern;
     std::size_t m_size{0};
   };
 } // namespace yateto

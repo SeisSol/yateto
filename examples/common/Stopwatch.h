@@ -54,21 +54,20 @@
  * computations with a high precision
  */
 class Stopwatch {
-private:
+  private:
   struct timespec m_start;
 
   /** Time already spent */
   long long m_time;
 
   /** Returns the time difference in nanoseconds. */
-  long long difftime(struct timespec const &end) {
-    return 1000000000L * (end.tv_sec - m_start.tv_sec) + end.tv_nsec -
-           m_start.tv_nsec;
+  long long difftime(struct timespec const& end) {
+    return 1000000000L * (end.tv_sec - m_start.tv_sec) + end.tv_nsec - m_start.tv_nsec;
   }
 
   double seconds(long long time) { return 1.0e-9 * time; }
 
-public:
+  public:
   /**
    * Constructor
    *

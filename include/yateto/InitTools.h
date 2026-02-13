@@ -2,6 +2,7 @@
 #define YATETO_INITTOOLS_H_
 
 #include "CopyPolicy.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -11,7 +12,8 @@ namespace yateto {
  *
  * @return a number of tensors.
  * */
-template <class T> constexpr size_t numFamilyMembers() {
+template <class T>
+constexpr size_t numFamilyMembers() {
   return sizeof(T::Size) / sizeof(T::Size[0]);
 }
 
@@ -35,7 +37,8 @@ constexpr size_t alignedUpper(int_t size, size_t alignment) {
  *  @param alignment a size of a vector register in bytes
  *  @return number of real numbers inside of a vector register
  * */
-template <typename float_t> constexpr size_t alignedReals(size_t alignment) {
+template <typename float_t>
+constexpr size_t alignedReals(size_t alignment) {
   return alignment / sizeof(float_t);
 }
 
@@ -49,15 +52,15 @@ template <typename float_t> constexpr size_t alignedReals(size_t alignment) {
  * @return a size of a tensor family
  * */
 template <class T>
-constexpr size_t computeFamilySize(size_t alignedReals = 1,
-                                   size_t n = numFamilyMembers<T>()) {
+constexpr size_t computeFamilySize(size_t alignedReals = 1, size_t n = numFamilyMembers<T>()) {
   return n == 0 ? 0
                 : alignedUpper(T::Size[n - 1], alignedReals) +
                       computeFamilySize<T>(alignedReals, n - 1);
 }
 
-template <typename float_t, typename CopyPolicyT> class CopyManager {
-public:
+template <typename float_t, typename CopyPolicyT>
+class CopyManager {
+  public:
   /** Copies data from a tensor to a given memory chunk.
    *
    *  NOTE: The function shifts and aligns a pointer w.r.t. to a given vector
@@ -71,8 +74,7 @@ public:
    *  @param alignment.
    * */
   template <class T>
-  void copyTensorToMemAndSetPtr(float_t *&mem, float_t *&ptr,
-                                size_t alignment = 1) {
+  void copyTensorToMemAndSetPtr(float_t*& mem, float_t*& ptr, size_t alignment = 1) {
     ptr = mem;
     copyValuesToMem(mem, T::Values, T::Values + T::Size, alignment);
   }
@@ -90,9 +92,9 @@ public:
    *  @param alignment a size of a vector register (in bytes).
    * */
   template <class T>
-  void copyFamilyToMemAndSetPtr(
-      float_t *&mem, typename T::template Container<float_t const *> &container,
-      size_t alignment = 1) {
+  void copyFamilyToMemAndSetPtr(float_t*& mem,
+                                typename T::template Container<const float_t*>& container,
+                                size_t alignment = 1) {
 
     // determine a size of the container i.e a number of tensor that it holds
     size_t n = sizeof(T::Size) / sizeof(T::Size[0]);
@@ -106,7 +108,7 @@ public:
     }
   }
 
-protected:
+  protected:
   /** Copies a tensor to a given memory chunk, and shifts a given pointer.
    *
    *  NOTE: The function shifts and aligns a pointer w.r.t. to a given vector
@@ -119,8 +121,8 @@ protected:
    *  @param last a pointer to the end of tensor data.
    *  @param alignment a size of a vector register (in bytes).
    * */
-  virtual void copyValuesToMem(float_t *&mem, float_t const *first,
-                               float_t const *last, size_t alignment) {
+  virtual void
+      copyValuesToMem(float_t*& mem, const float_t* first, const float_t* last, size_t alignment) {
 
     // copy data
     mem = copier.copy(first, last, mem);
@@ -132,7 +134,7 @@ protected:
     assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);
   }
 
-private:
+  private:
   CopyPolicyT copier{};
 };
 

@@ -9,10 +9,10 @@
 #include <type_traits>
 
 namespace yateto {
-template <typename uint_t = unsigned> class slice {
-public:
-  explicit slice(uint_t start = 0,
-                 uint_t stop = std::numeric_limits<uint_t>::max())
+template <typename uint_t = unsigned>
+class slice {
+  public:
+  explicit slice(uint_t start = 0, uint_t stop = std::numeric_limits<uint_t>::max())
       : start(start), stop(stop) {}
 
   uint_t start;
@@ -27,13 +27,14 @@ struct count_slices<uint_t, Head, Tail...>
                              ((std::is_same_v<Head, slice<uint_t>>) ? 1 : 0) +
                                  count_slices<uint_t, Tail...>::value> {};
 
-template <unsigned Dim, typename real_t, typename uint_t> class TensorView {
-public:
+template <unsigned Dim, typename real_t, typename uint_t>
+class TensorView {
+  public:
   explicit TensorView(std::initializer_list<uint_t> shape) {
     std::copy(shape.begin(), shape.end(), m_shape);
   }
 
-  explicit TensorView(uint_t const shape[]) {
+  explicit TensorView(const uint_t shape[]) {
     for (uint_t d = 0; d < Dim; ++d) {
       m_shape[d] = shape[d];
     }
@@ -43,30 +44,30 @@ public:
 
   uint_t shape(uint_t dim) const { return m_shape[dim]; }
 
-protected:
+  protected:
   uint_t m_shape[Dim];
 };
 
 template <typename real_t, typename uint_t>
 class TensorView<0, real_t, uint_t> {
-public:
+  public:
   explicit TensorView(std::initializer_list<uint_t> shape) {}
 
-  explicit TensorView(uint_t const shape[]) {}
+  explicit TensorView(const uint_t shape[]) {}
 
   static constexpr uint_t dim() { return 0; }
 
   uint_t shape(uint_t dim) const { return 0; }
 };
 
-template <unsigned Dim, typename real_t, typename uint_t = unsigned,
-          bool Const = false>
+template <unsigned Dim, typename real_t, typename uint_t = unsigned, bool Const = false>
 class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
-public:
-  using data_t = std::conditional_t<Const, const real_t *, real_t *>;
-  using dataref_t = std::conditional_t<Const, const real_t &, real_t &>;
+  public:
+  using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+  using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
 
-  explicit DenseTensorView(data_t values, std::initializer_list<uint_t> shape,
+  explicit DenseTensorView(data_t values,
+                           std::initializer_list<uint_t> shape,
                            std::initializer_list<uint_t> start,
                            std::initializer_list<uint_t> stop)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values) {
@@ -81,8 +82,10 @@ public:
     computeStride();
   }
 
-  explicit DenseTensorView(data_t values, uint_t const shape[],
-                           uint_t const start[], uint_t const stop[])
+  explicit DenseTensorView(data_t values,
+                           const uint_t shape[],
+                           const uint_t start[],
+                           const uint_t stop[])
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values) {
     for (uint_t d = 0; d < Dim; ++d) {
       m_start[d] = start[d];
@@ -91,7 +94,7 @@ public:
     computeStride();
   }
 
-  explicit DenseTensorView(data_t values, uint_t const shape[])
+  explicit DenseTensorView(data_t values, const uint_t shape[])
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_start{} {
     for (uint_t d = 0; d < Dim; ++d) {
       m_stop[d] = shape[d];
@@ -99,8 +102,7 @@ public:
     computeStride();
   }
 
-  explicit DenseTensorView(data_t values, uint_t const shape[],
-                           uint_t const stride[])
+  explicit DenseTensorView(data_t values, const uint_t shape[], const uint_t stride[])
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_start{} {
     for (uint_t d = 0; d < Dim; ++d) {
       m_stop[d] = shape[d];
@@ -108,9 +110,7 @@ public:
     }
   }
 
-  uint_t size() const {
-    return (m_stop[Dim - 1] - m_start[Dim - 1]) * m_stride[Dim - 1];
-  }
+  uint_t size() const { return (m_stop[Dim - 1] - m_start[Dim - 1]) * m_stride[Dim - 1]; }
 
   void setZero() {
     uint_t entry[Dim];
@@ -134,28 +134,27 @@ public:
   }
 
   template <typename Head>
-  bool isInRange(const uint_t start[Dim], const uint_t stop[Dim], int dim,
-                 Head head) const {
-    return static_cast<uint_t>(head) >= start[dim] &&
-           static_cast<uint_t>(head) < stop[dim];
+  bool isInRange(const uint_t start[Dim], const uint_t stop[Dim], int dim, Head head) const {
+    return static_cast<uint_t>(head) >= start[dim] && static_cast<uint_t>(head) < stop[dim];
   }
 
   template <typename Head, typename... Tail>
-  bool isInRange(const uint_t start[Dim], const uint_t stop[Dim], int dim,
-                 Head head, Tail... tail) const {
-    return static_cast<uint_t>(head) >= start[dim] &&
-           static_cast<uint_t>(head) < stop[dim] &&
+  bool isInRange(
+      const uint_t start[Dim], const uint_t stop[Dim], int dim, Head head, Tail... tail) const {
+    return static_cast<uint_t>(head) >= start[dim] && static_cast<uint_t>(head) < stop[dim] &&
            isInRange(start, stop, dim + 1, tail...);
   }
 
-  template <typename... Entry> bool isInRange(Entry... entry) const {
+  template <typename... Entry>
+  bool isInRange(Entry... entry) const {
     static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to isInRange(...) does not match the "
                   "tensor dimension.");
     return isInRange(m_start, m_stop, 0, entry...);
   }
 
-  template <typename... Entry> dataref_t operator()(Entry... entry) {
+  template <typename... Entry>
+  dataref_t operator()(Entry... entry) {
     static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to operator() does not match the tensor "
                   "dimension.");
@@ -163,7 +162,8 @@ public:
     return m_values[address(entry...)];
   }
 
-  template <typename... Entry> const real_t &operator()(Entry... entry) const {
+  template <typename... Entry>
+  const real_t& operator()(Entry... entry) const {
     static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to operator() const does not match the "
                   "tensor dimension.");
@@ -171,7 +171,7 @@ public:
     return m_values[address(entry...)];
   }
 
-  const real_t &operator[](uint_t const entry[Dim]) const {
+  const real_t& operator[](const uint_t entry[Dim]) const {
     uint_t addr = 0;
     for (uint_t d = 0; d < Dim; ++d) {
       assert(entry[d] >= m_start[d] && entry[d] < m_stop[d]);
@@ -180,7 +180,7 @@ public:
     return m_values[addr];
   }
 
-  dataref_t operator[](uint_t const entry[Dim]) {
+  dataref_t operator[](const uint_t entry[Dim]) {
     uint_t addr = 0;
     for (uint_t d = 0; d < Dim; ++d) {
       assert(entry[d] >= m_start[d] && entry[d] < m_stop[d]);
@@ -189,7 +189,8 @@ public:
     return m_values[addr];
   }
 
-  template <class view_t> void copyToView(view_t &other) const {
+  template <class view_t>
+  void copyToView(view_t& other) const {
     assert(Dim == other.dim());
 
     uint_t entry[Dim];
@@ -222,43 +223,37 @@ public:
 
   template <typename... Entry>
   auto subtensor(Entry... entry)
-      -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t,
-                         Const> {
-    static_assert(
-        sizeof...(entry) == Dim,
-        "Number of arguments to subtensor() does not match tensor dimension.");
+      -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, Const> {
+    static_assert(sizeof...(entry) == Dim,
+                  "Number of arguments to subtensor() does not match tensor dimension.");
     constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
     uint_t begin[Dim];
     uint_t size[nSlices];
     uint_t stride[nSlices];
     extractSubtensor(begin, size, stride, entry...);
-    DenseTensorView<nSlices, real_t, uint_t, Const> subtensor(
-        &operator[](begin), size, stride);
+    DenseTensorView<nSlices, real_t, uint_t, Const> subtensor(&operator[](begin), size, stride);
     return subtensor;
   }
 
   template <typename... Entry>
   auto subtensor(Entry... entry) const
-      -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t,
-                         true> {
-    static_assert(
-        sizeof...(entry) == Dim,
-        "Number of arguments to subtensor() does not match tensor dimension.");
+      -> DenseTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, true> {
+    static_assert(sizeof...(entry) == Dim,
+                  "Number of arguments to subtensor() does not match tensor dimension.");
     constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
     uint_t begin[Dim];
     uint_t size[nSlices];
     uint_t stride[nSlices];
     extractSubtensor(begin, size, stride, entry...);
-    DenseTensorView<nSlices, real_t, uint_t, true> subtensor(&operator[](begin),
-                                                             size, stride);
+    DenseTensorView<nSlices, real_t, uint_t, true> subtensor(&operator[](begin), size, stride);
     return subtensor;
   }
 
   data_t data() { return m_values; }
 
-  const real_t *data() const { return m_values; }
+  const real_t* data() const { return m_values; }
 
-protected:
+  protected:
   void computeStride() {
     m_stride[0] = 1;
     for (uint_t d = 0; d < Dim - 1; ++d) {
@@ -266,7 +261,8 @@ protected:
     }
   }
 
-  template <typename Head> uint_t address(Head head) const {
+  template <typename Head>
+  uint_t address(Head head) const {
     assert(static_cast<uint_t>(head) >= m_start[Dim - 1] &&
            static_cast<uint_t>(head) < m_stop[Dim - 1]);
     return (head - m_start[Dim - 1]) * m_stride[Dim - 1];
@@ -274,24 +270,20 @@ protected:
 
   template <typename Head, typename... Tail>
   uint_t address(Head head, Tail... tail) const {
-    uint_t const d = (Dim - 1) - sizeof...(tail);
-    assert(static_cast<uint_t>(head) >= m_start[d] &&
-           static_cast<uint_t>(head) < m_stop[d]);
+    const uint_t d = (Dim - 1) - sizeof...(tail);
+    assert(static_cast<uint_t>(head) >= m_start[d] && static_cast<uint_t>(head) < m_stop[d]);
     return (head - m_start[d]) * m_stride[d] + address(tail...);
   }
 
   template <typename T, std::enable_if_t<std::is_integral_v<T>, int> = 0>
-  void extractDim(uint_t *&begin, uint_t *&, uint_t *&, uint_t dimNo,
-                  T entry) const {
+  void extractDim(uint_t*& begin, uint_t*&, uint_t*&, uint_t dimNo, T entry) const {
     assert(static_cast<uint_t>(entry) >= m_start[dimNo] &&
            static_cast<uint_t>(entry) < m_stop[dimNo]);
     *begin++ = entry;
   }
 
-  template <typename T,
-            std::enable_if_t<std::is_same_v<T, slice<uint_t>>, int> = 0>
-  void extractDim(uint_t *&begin, uint_t *&size, uint_t *&stride, uint_t dimNo,
-                  T dim) const {
+  template <typename T, std::enable_if_t<std::is_same_v<T, slice<uint_t>>, int> = 0>
+  void extractDim(uint_t*& begin, uint_t*& size, uint_t*& stride, uint_t dimNo, T dim) const {
     *begin = std::max(m_start[dimNo], dim.start);
     *size++ = std::min(m_stop[dimNo], dim.stop) - *begin;
     ++begin;
@@ -299,15 +291,14 @@ protected:
   }
 
   template <typename Head>
-  void extractSubtensor(uint_t *begin, uint_t *size, uint_t *stride,
-                        Head head) const {
+  void extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head) const {
     extractDim<Head>(begin, size, stride, Dim - 1, head);
   }
 
   template <typename Head, typename... Tail>
-  void extractSubtensor(uint_t *begin, uint_t *size, uint_t *stride, Head head,
-                        Tail... tail) const {
-    uint_t const d = (Dim - 1) - sizeof...(tail);
+  void
+      extractSubtensor(uint_t* begin, uint_t* size, uint_t* stride, Head head, Tail... tail) const {
+    const uint_t d = (Dim - 1) - sizeof...(tail);
     extractDim<Head>(begin, size, stride, d, head);
     extractSubtensor(begin, size, stride, tail...);
   }
@@ -319,13 +310,13 @@ protected:
 };
 
 template <typename real_t, typename uint_t, bool Const>
-class DenseTensorView<0, real_t, uint_t, Const>
-    : public TensorView<0, real_t, uint_t> {
-public:
-  using data_t = std::conditional_t<Const, const real_t *, real_t *>;
-  using dataref_t = std::conditional_t<Const, const real_t &, real_t &>;
+class DenseTensorView<0, real_t, uint_t, Const> : public TensorView<0, real_t, uint_t> {
+  public:
+  using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+  using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
 
-  explicit DenseTensorView(data_t values, std::initializer_list<uint_t> shape,
+  explicit DenseTensorView(data_t values,
+                           std::initializer_list<uint_t> shape,
                            std::initializer_list<uint_t> start,
                            std::initializer_list<uint_t> stop)
       : TensorView<0, real_t, uint_t>(shape), m_values(values) {}
@@ -334,35 +325,40 @@ public:
 
   void setZero() { m_values[0] = 0.0; }
 
-  template <class view_t> void copyToView(view_t &other) {
+  template <class view_t>
+  void copyToView(view_t& other) {
     other.m_values[0] = m_values[0];
   }
 
-protected:
+  protected:
   data_t m_values;
 };
 
 template <typename real_t, typename uint_t, bool Const = false>
 class CSCMatrixView : public TensorView<2, real_t, uint_t> {
-public:
-  using data_t = std::conditional_t<Const, const real_t *, real_t *>;
-  using dataref_t = std::conditional_t<Const, const real_t &, real_t &>;
+  public:
+  using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+  using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
 
-  explicit CSCMatrixView(data_t values, std::initializer_list<uint_t> shape,
-                         uint_t const *rowInd, uint_t const *colPtr)
-      : TensorView<2, real_t, uint_t>(shape), m_values(values),
-        m_rowInd(rowInd), m_colPtr(colPtr) {}
+  explicit CSCMatrixView(data_t values,
+                         std::initializer_list<uint_t> shape,
+                         const uint_t* rowInd,
+                         const uint_t* colPtr)
+      : TensorView<2, real_t, uint_t>(shape), m_values(values), m_rowInd(rowInd), m_colPtr(colPtr) {
+  }
 
-  explicit CSCMatrixView(data_t values, uint_t const shape[],
-                         uint_t const *rowInd, uint_t const *colPtr)
-      : TensorView<2, real_t, uint_t>(shape), m_values(values),
-        m_rowInd(rowInd), m_colPtr(colPtr) {}
+  explicit CSCMatrixView(data_t values,
+                         const uint_t shape[],
+                         const uint_t* rowInd,
+                         const uint_t* colPtr)
+      : TensorView<2, real_t, uint_t>(shape), m_values(values), m_rowInd(rowInd), m_colPtr(colPtr) {
+  }
 
   uint_t size() const { return m_colPtr[this->shape(1)]; }
 
   void setZero() { memset(m_values, 0, size() * sizeof(real_t)); }
 
-  const real_t &operator()(uint_t row, uint_t col) const {
+  const real_t& operator()(uint_t row, uint_t col) const {
     assert(col >= 0 && col < this->shape(1));
     uint_t addr = m_colPtr[col];
     uint_t stop = m_colPtr[col + 1];
@@ -406,18 +402,14 @@ public:
     return false;
   }
 
-  dataref_t operator[](const uint_t entry[2]) {
-    return operator()(entry[0], entry[1]);
-  }
+  dataref_t operator[](const uint_t entry[2]) { return operator()(entry[0], entry[1]); }
 
-  const real_t &operator[](const uint_t entry[2]) const {
-    return operator()(entry[0], entry[1]);
-  }
+  const real_t& operator[](const uint_t entry[2]) const { return operator()(entry[0], entry[1]); }
 
-  template <class view_t> void copyToView(view_t &other) {
+  template <class view_t>
+  void copyToView(view_t& other) {
     assert(2 == other.dim());
-    assert(this->shape(0) == other.shape(0) &&
-           this->shape(1) == other.shape(1));
+    assert(this->shape(0) == other.shape(0) && this->shape(1) == other.shape(1));
 
     uint_t entry[2];
     uint_t ncols = this->shape(1);
@@ -430,10 +422,10 @@ public:
     }
   }
 
-protected:
+  protected:
   data_t m_values;
-  uint_t const *m_rowInd;
-  uint_t const *m_colPtr;
+  const uint_t* m_rowInd;
+  const uint_t* m_colPtr;
 };
 } // namespace yateto
 

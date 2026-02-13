@@ -4,10 +4,10 @@
 using namespace yateto;
 
 class TensorViewTestSuite : public CxxTest::TestSuite {
-private:
+  private:
   double m_data[12];
 
-public:
+  public:
   void setUp() {
     for (int i = 0; i < 12; ++i) {
       m_data[i] = static_cast<double>(i + 1);

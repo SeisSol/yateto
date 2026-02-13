@@ -4,9 +4,10 @@
 #include <algorithm>
 
 namespace yateto {
-template <typename float_t> class SimpleCopyPolicy {
-public:
-  float_t *copy(float_t const *first, float_t const *last, float_t *&mem) {
+template <typename float_t>
+class SimpleCopyPolicy {
+  public:
+  float_t* copy(const float_t* first, const float_t* last, float_t*& mem) {
     mem = std::copy(first, last, mem);
     return mem;
   }

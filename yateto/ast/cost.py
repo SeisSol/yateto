@@ -25,7 +25,7 @@ class ShapeCostEstimator(CostEstimator):
     for size in node.shape():
       cost *= size
     return cost
-  
+
   def estimate_IndexSum(self, node):
     cost = node.sumIndex().shape()[0] - 1
     for size in node.indices.shape():
@@ -36,7 +36,7 @@ class ShapeCostEstimator(CostEstimator):
 class CachedCostEstimator(CostEstimator):
   def __init__(self):
     self._cost = dict()
-  
+
   def estimate(self, node):
     if node in self._cost:
       return self._cost[node]
@@ -95,7 +95,7 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     super().__init__()
     self._lead_dim = 0
     self._loaded_to_gpu_cache = {}
-  
+
   def generic_estimate(self, node):
     result = super().generic_estimate(node)
     self._loaded_to_gpu_cache[node] = set()
@@ -171,14 +171,14 @@ class ExactCost(CachedCostEstimator):
   def generic_estimate(self, node):
     self._cache[node] = node.eqspp()
     return 0
-  
+
   def estimate_Product(self, node):
     spp = node.computeSparsityPattern(self._cache[node.leftTerm()], self._cache[node.rightTerm()])
     self._cache[node] = spp
     return spp.count_nonzero()
-  
+
   def estimate_IndexSum(self, node):
     termSpp = self._cache[node.term()]
     spp = node.computeSparsityPattern(termSpp)
-    self._cache[node] = spp    
+    self._cache[node] = spp
     return termSpp.count_nonzero() - spp.count_nonzero()

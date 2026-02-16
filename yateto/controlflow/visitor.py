@@ -6,19 +6,19 @@ from ..ast.node import Permute, Broadcast
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
-  
+
   def __init__(self, simpleMemoryLayout=False):
     self._tmp = 0
     self._cfg = []
     self._writable = set()
     self._simpleMemoryLayout = simpleMemoryLayout
-  
+
   def cfg(self):
     return self._cfg + [ProgramPoint(None)]
 
   def _ml(self, node):
     return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()
-  
+
   def _addTransformOp(self, permute, variable):
     if not self._simpleMemoryLayout:
       permute.setEqspp( permute.computeSparsityPattern() )
@@ -44,7 +44,7 @@ class AST2ControlFlow(Visitor):
         # permute needed, run before broadcast
         inode = Permute.subPermute(term, indices)
         intermediate = self._addTransformOp(inode, variable)
-      
+
       result = intermediate
       if len(term.indices) != len(indices):
         # broadcast needed, more output than input indices
@@ -54,13 +54,13 @@ class AST2ControlFlow(Visitor):
 
   def generic_visit(self, node):
     variables = [self.visit(child) for child in node]
-    
+
     result = self._nextTemporary(node)
     action = ProgramAction(result, Expression(node, self._ml(node), variables), False)
     self._addAction(action)
-    
+
     return result
-  
+
   def visit_SliceView(self, node):
     var = self.visit(node.term())
     ml = node.getMemoryLayout(var.memoryLayout())
@@ -79,18 +79,18 @@ class AST2ControlFlow(Visitor):
       action = ProgramAction(tmp, rhs, add)
       self._addAction(action)
       add = True
-    
+
     return tmp
-  
+
   def visit_ScalarMultiplication(self, node):
     variable = self.visit(node.term())
 
     result = self._nextTemporary(node)
     action = ProgramAction(result, variable, False, node.scalar())
     self._addAction(action)
-    
+
     return result
-  
+
   def visit_Assign(self, node):
     self.updateWritable(node[0].name())
     variables = [self.visit(child) for child in node]
@@ -98,9 +98,9 @@ class AST2ControlFlow(Visitor):
     rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), variables[1])
     action = ProgramAction(variables[0], rhs, False)
     self._addAction(action)
-    
+
     return variables[0]
-  
+
   def visit_IndexedTensor(self, node):
     return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, is_temporary=node.tensor.temporary)
 

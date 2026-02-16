@@ -13,12 +13,12 @@ class KernelFactory(object):
     self._arch = arch
     self._freeList = list()
     self._target = target
-    
+
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
     factory = getattr(self, method, self.generic_create)
     return factory(node, *args)
-  
+
   def generic_create(self, node, *args):
     raise NotImplementedError
 
@@ -59,7 +59,7 @@ class KernelFactory(object):
 
   def allocateTemporary(self):
     return True
-  
+
   def post_generate(self, routine_cache):
     pass
 
@@ -118,7 +118,7 @@ class OptimizedKernelFactory(KernelFactory):
     description = fused_gemms.Description(node, result, arguments, add, scalar)
     generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
-  
+
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
     description = indexsum.Description(
@@ -129,7 +129,7 @@ class OptimizedKernelFactory(KernelFactory):
     )
     generator = indexsum.generator(self._arch, description, self._target)
     return generator.generate(self._cpp, routineCache)
-  
+
   def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = product.Description(
@@ -146,17 +146,17 @@ class OptimizedKernelFactory(KernelFactory):
     result = IndexedTensorDescription.fromNode(result, node)
     term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     return self._csa(result, term, add, scalar, routineCache, gemm_cfg)
-  
+
   def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromNode(result, node)
     term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     return self._csa(result, term, add, scalar, routineCache, gemm_cfg)
-  
+
   def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromVar(result, self._indices(result))
     term = IndexedTensorDescription.fromVar(term, self._indices(term))
     return self._csa(result, term, add, scalar, routineCache, gemm_cfg)
-  
+
   def _csa(self, result, term, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
       alpha = scalar,
@@ -177,30 +177,30 @@ class UnitTestFactory(KernelFactory):
   def _formatTerm(self, var, indices):
     address = var.memoryLayout().addressString(indices)
     return '{}[{}]'.format(self._name(var), address)
-  
+
   def create_Einsum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
-    
+
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
-    
+
     resultTerm = self._formatTerm(result, node.indices)
     terms = [self._formatTerm(arguments[i], child.indices) for i,child in enumerate(node)]
-    
+
     if scalar and scalar != 1.0:
       terms.insert(0, str(scalar))
-    
+
     if not add:
       self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), self._arch.typename)
-    
+
     class EinsumBody(object):
       def __call__(s):
         self._cpp( '{} += {};'.format(resultTerm, ' * '.join(terms)) )
         return len(terms)
 
     return forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False)
-  
+
   def create_ScalarMultiplication(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     return self.simple(result, arguments[0], add, scalar, routineCache)
 
@@ -209,7 +209,7 @@ class UnitTestFactory(KernelFactory):
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)
-  
+
   def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
@@ -282,10 +282,10 @@ class ExportGenerator:
 
   def __init__(self, arch):
     self.arch = arch
-  
+
   def generate(self, cpp, cache):
     pass
-  
+
   def add_linear_operation(self, dest, ops, target, permute, add):
     pass
 
@@ -297,25 +297,25 @@ class ExportFactory(KernelFactory):
   def __init__(self, generator, cpp, arch, target):
     super().__init__(cpp, arch, target)
     self.generator = generator
-  
+
   def post_generate(self, routine_cache):
     self.generator.generate(self._cpp, routine_cache)
 
   def allocateTemporary(self):
     return False
-  
+
   def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     makeNode = IndexedTensorDescription.fromNode
     argnodes = [makeNode(arguments[0], node.leftTerm()), makeNode(arguments[1], node.rightTerm())]
     return self.handleLinear(makeNode(result, node), argnodes, add, scalar, node.transA(), node.transB())
-  
+
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
     makeNode = IndexedTensorDescription.fromNode
     argnodes = [makeNode(arguments[0], node.term())]
     return self.handleLinear(makeNode(result, node), argnodes, add, scalar, False, False)
-  
+
   def create_Product(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     makeNode = IndexedTensorDescription.fromNode
@@ -329,7 +329,7 @@ class ExportFactory(KernelFactory):
   def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
     return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices), [IndexedTensorDescription.fromVar(term, node.term().indices)], add, scalar, False, False)
-  
+
   def simple(self, result, term, add, scalar, routineCache, gemm_cfg):
     return self.handleLinear(IndexedTensorDescription.fromVar(result, self._indices(result)), [IndexedTensorDescription.fromVar(term, self._indices(term))], add, scalar, False, False)
 
@@ -357,10 +357,10 @@ class ExportFactory(KernelFactory):
     # convert indices to loop numbers
 
     target, permute = self.getIndices(dest, ops)
-    
+
     if not (scalar == 1 or scalar == 1.0):
       ops += [scalar]
       target += [[]]
       permute += [[]]
-    
+
     return self.generator.add_linear_operation(dest, ops, target, permute, add)

@@ -1,27 +1,27 @@
 properties([
     parameters([string(
-                    defaultValue: 'runner', 
-                    description: 'agent name which tells where to run a job', 
+                    defaultValue: 'runner',
+                    description: 'agent name which tells where to run a job',
                     name: 'AGENT',
                     trim: true),
                 string(
-                    defaultValue: '', 
-                    description: 'target architecture (according to yateto format). If not given then taken from Jenkins env-vars', 
-                    name: 'ARCH', 
+                    defaultValue: '',
+                    description: 'target architecture (according to yateto format). If not given then taken from Jenkins env-vars',
+                    name: 'ARCH',
                     trim: true),
                 string(
-                    defaultValue: 'matmul minimal', 
-                    description: 'whitespace separate list of examples', 
-                    name: 'EXAMPLES', 
+                    defaultValue: 'matmul minimal',
+                    description: 'whitespace separate list of examples',
+                    name: 'EXAMPLES',
                     trim: true),
                 string(
-                    defaultValue: 'Eigen LIBXSMM OpenBLAS', 
-                    description: 'whitespace separate list of generators', 
-                    name: 'GENERATORS', 
+                    defaultValue: 'Eigen LIBXSMM OpenBLAS',
+                    description: 'whitespace separate list of generators',
+                    name: 'GENERATORS',
                     trim: true),
                 booleanParam(
-                    defaultValue: false, 
-                    description: 'if true the environment image will be build. Note: it will take a considerable amount of time', 
+                    defaultValue: false,
+                    description: 'if true the environment image will be build. Note: it will take a considerable amount of time',
                     name: 'BUILD_ENV_IMAGE')
     ])
 ])
@@ -52,12 +52,12 @@ pipeline {
                 }
             }
             steps {
-                // Make sure that Jenkins knows the location of Spack. 
+                // Make sure that Jenkins knows the location of Spack.
                 // You will need to add it to the Jenkins settings
                 dir("tests") {
                      script {
-                        withCredentials([usernamePassword(credentialsId: 'docker-hub', 
-                                                      usernameVariable: 'USERNAME', 
+                        withCredentials([usernamePassword(credentialsId: 'docker-hub',
+                                                      usernameVariable: 'USERNAME',
                                                       passwordVariable: 'PASSWORD')]) {
                             sh """
                             docker run --rm -v \$(pwd):/home -w /home ${USERNAME}/spack-ubuntu-1804:latest containerize > ./Dockerfile-env
@@ -79,10 +79,10 @@ pipeline {
             steps {
                 script {
                     def dockerFilePath = "tests/Dockerfile-setup"
-                    def buildParams = String.format("--no-cache --build-arg UID=%s --build-arg GID=%s --file %s .", 
+                    def buildParams = String.format("--no-cache --build-arg UID=%s --build-arg GID=%s --file %s .",
                                                     env.USER_ID, env.GROUP_ID, dockerFilePath)
                     def customImage = docker.build("yateto:latest", buildParams)
-                }                
+                }
             }
         }
         stage('RunTest') {
@@ -105,15 +105,15 @@ for example in ${EXAMPLES}; do
                 echo " Host Arch: ${ARCH}"
                 echo " Example: ${example}"
                 echo "==========================="
-                
+
                 cmake .. -DEXAMPLES=$example -DCMAKE_BUILD_TYPE=$build_type -DPRECISION=$precision -DVARIANT=$backend -DARCH=$ARCH
                 make
-                
+
                 STORAGE=/cache/$example-$backend-$precision-$build_type
                 echo $STORAGE
                 mkdir -p $STORAGE
                 cp -r ./$example/*/* $STORAGE
-                
+
                 make test
                 rm -rf ./*
             done
@@ -129,11 +129,11 @@ cmake .. && make && make test
                     writeFile(file: "run_tests.sh", text: TestScript)
                 }
                 sh "mkdir ./cache"
-                
+
                 script {
                     // define test arch. for testing
                     //  if the user specifies ARCH as parameter it is going to be used for testing
-                    //  if not, we will try to get ARCH from the Jenkins env. variables 
+                    //  if not, we will try to get ARCH from the Jenkins env. variables
                     //  if the user didn't set env.HOST_ARCH in his/her Jenkins settings, then 'noarch' will be used
                     env.TEST_ARCH="noarch"
                     if (!env.ARCH.allWhitespace) {
@@ -147,7 +147,7 @@ cmake .. && make && make test
             }
         }
     }
-    post { 
+    post {
         always {
             sh "docker image rm yateto:latest"
         }

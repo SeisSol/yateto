@@ -63,7 +63,7 @@ class Kernel(object):
       ast2cf.visit(ast)
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
-  
+
   def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool):
     self.nonZeroFlops = 0
     for a in self.ast:
@@ -117,34 +117,34 @@ class KernelFamily(object):
       self.namespace = namespace
     else:
       self.namespace = ''
-  
+
   def items(self):
     return self._kernels.items()
-  
+
   def __len__(self):
     return max(self._kernels.keys()) + 1
-  
-  @classmethod  
+
+  @classmethod
   def baseName(self, name):
     return re.match(Kernel.BASE_NAME, name).group(0)
-  
+
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
-  
+
   @classmethod
   def group(cls, name):
     m = re.search(cls.GROUP_INDEX, name)
     return int(m.group(1))
-  
+
   def setStride(self, stride):
     self._stride = stride
-  
+
   def stride(self):
     if self._stride is not None:
       return self._stride
     return (1,)
-    
+
   @classmethod
   def linear(cls, stride, group):
     assert len(stride) == len(group)
@@ -158,7 +158,7 @@ class KernelFamily(object):
     if not self.name:
       self.name = baseName
     assert baseName == self.name
-    
+
     group = self.group(name)
     internalName = '_{}_{}'.format(baseName, group)
     self._kernels[group] = Kernel(internalName, ast, prefetch, namespace, target)
@@ -174,7 +174,7 @@ class KernelFamily(object):
   def prepareUntilUnitTest(self):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest()
-  
+
   def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
       kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
@@ -189,10 +189,10 @@ class GlobalRoutineCache:
   def __init__(self):
     self.cache = RoutineCache()
     self.dirs = []
-  
+
   def register(self, outputDir):
     self.dirs += [outputDir]
-  
+
   def generate(self, outputDir, namespace='yateto'):
     print('Calling external code generators...')
     fRoutines = Generator.FileNames(outputDir, Generator.ROUTINES_FILE_NAME)
@@ -200,7 +200,7 @@ class GlobalRoutineCache:
     with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(Generator._headerGuardName(namespace, Generator.ROUTINES_FILE_NAME)):
         self.cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
-    
+
     for subdir in self.dirs:
       relpath = os.path.relpath(outputDir, subdir)
       rfRoutines = Generator.FileNames(subdir, Generator.ROUTINES_FILE_NAME)
@@ -217,7 +217,7 @@ class Generator(object):
   DOCTEST_FILE_NAME = 'test-kernel'
   HEADER_GUARD_SUFFIX = 'H_'
   SUPPORT_LIBRARY_HEADER = 'yateto.h'
-  
+
   class FileNames(object):
     HEADER = 'h'
     CPP = 'cpp'
@@ -227,7 +227,7 @@ class Generator(object):
       self.cppName = '{}.{}'.format(name, self.CPP)
       self.h = os.path.join(outputDir, self.hName)
       self.cpp = os.path.join(outputDir, self.cppName)
-  
+
   def __init__(self, arch):
     self._kernels = list()
     self._kernelFamilies = dict()
@@ -242,7 +242,7 @@ class Generator(object):
       if baseName not in self._kernelFamilies:
         self._kernelFamilies[baseName] = KernelFamily()
       self._kernelFamilies[baseName].add(name, ast, prefetch, namespace, target)
-    else:      
+    else:
       if not Kernel.isValidName(name):
         raise ValueError(f'Kernel name invalid (must match regexp {Kernel.VALID_NAME}): {name}')
       kernel = Kernel(name, ast, prefetch, namespace=namespace, target=target)
@@ -273,7 +273,7 @@ class Generator(object):
       ast = astGenerator(*p)
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
       family.add(indexedName, ast, prefetch, namespace, target=target)
-  
+
   @classmethod
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
@@ -310,7 +310,7 @@ class Generator(object):
     fTensors = self.FileNames(outputDir, self.TENSORS_FILE_NAME)
     fInit = self.FileNames(outputDir, self.INIT_FILE_NAME)
     fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
-    fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)  
+    fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
 
     print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):

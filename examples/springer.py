@@ -14,7 +14,7 @@ _bench_no = 0
 def add_tensor(name, ind, size):
   shape = tuple(size[k] for k in ind)
   return Tensor(name + str(_bench_no), shape)
-  
+
 def add_bench(g, descr, sizes):
   global _bench_no
 

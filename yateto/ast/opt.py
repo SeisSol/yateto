@@ -3,11 +3,11 @@ from .node import IndexSum, Product
 
 def strengthReduction(terms, target_indices, cost_estimator, split = 0):
   n = len(terms)
-  
+
   indexList = [index for term in terms for index in term.indices]
   uniqueIndices = set(indexList)
   summationIndices = set(index for index in uniqueIndices if indexList.count(index) == 1) - set(target_indices)
-  
+
   while len(summationIndices) != 0:
     i = split
     while i < n:

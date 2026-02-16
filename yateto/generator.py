@@ -455,7 +455,13 @@ class Generator(object):
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
-
+    
+    prefixnsp = lambda a: a.name if a.namespace == '' else f'{a.namespace}::{a.name}'
+    return {
+      'namespace': namespace,
+      'tensors': set(tensor.baseNameWithNamespace() for tensor in tensors.values()) | set(scalar.baseNameWithNamespace() for scalar in scalars),
+      'kernels': set(prefixnsp(kernel) for kernel in self._kernels) | set(prefixnsp(family) for family in self._kernelFamilies.values())
+    }
 
 class NamespacedGenerator(object):
   def __init__(self, generator, namespace):

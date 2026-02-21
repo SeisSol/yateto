@@ -30,7 +30,7 @@ class TensorDescription(object):
     self.values = values
     self.datatype = datatype
     self.addressing = addressing
-  
+
   @classmethod
   def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())
@@ -86,7 +86,7 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo
       flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, indexNo-1)
     flops = flops * rng.size()
   return flops
-  
+
 def loopRanges(term: IndexedTensorDescription, loopIndices):
   overlap = set(loopIndices) & set(term.indices)
   bbox = BoundingBox.fromSpp(term.eqspp)
@@ -95,7 +95,7 @@ def loopRanges(term: IndexedTensorDescription, loopIndices):
 def testLoopRangesEqual(A, B):
   overlap = A.keys() & B.keys()
   return all([A[index] == B[index] for index in overlap])
-  
+
 def testLoopRangesAContainedInB(A, B):
   overlap = A.keys() & B.keys()
   return all([A[index] in B[index] for index in overlap])
@@ -199,7 +199,7 @@ class TinytcWrapper:
       hasher = hashlib.sha512()
       hasher.update(self.source.encode('utf-8'))
       self.name = f'tinytc_wrapper_{hasher.hexdigest()}'
-    
+
     self.wrapper_args = [f'long {BatchedOperationsAux.NUM_ELEMENTS_NAME}', f'void* {BatchedOperationsAux.STREAM_PTR_NAME}']
     self.wrapper_call_args = []
     self.call_args = []
@@ -218,7 +218,7 @@ class TinytcWrapper:
           if not arg.constant:
             self.wrapper_call_args.append(BatchedOperationsAux.NUM_ELEMENTS_NAME)
           if not arg.temporary and not arg.constant:
-            offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{arg.name}' 
+            offset_name = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{arg.name}'
             self.wrapper_args.append(f'long {offset_name}')
             self.wrapper_call_args.append(offset_name)
             self.call_args.append(f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{arg.call_expr}')

@@ -5,12 +5,12 @@
 #include <cstddef>
 
 namespace yateto {
-template<typename T>
+template <typename T>
 struct LinearAllocatorT {
-public:
+  public:
   void initialize(T* ptr) {
-      isInit = true;
-      userSpaceMem = ptr;
+    isInit = true;
+    userSpaceMem = ptr;
   }
 
   template<typename S>
@@ -20,22 +20,22 @@ public:
   }
 
   T* allocate(size_t size) {
-      assert(isInit && "YATETO: Temporary-Memory manager hasn't been initialized");
-      int currentByteCount = byteCount;
-      byteCount += size;
-      return &userSpaceMem[currentByteCount];
+    assert(isInit && "YATETO: Temporary-Memory manager hasn't been initialized");
+    int currentByteCount = byteCount;
+    byteCount += size;
+    return &userSpaceMem[currentByteCount];
   }
 
   void free() {
-      isInit = false;
-      byteCount = 0;
-      userSpaceMem = nullptr;
+    isInit = false;
+    byteCount = 0;
+    userSpaceMem = nullptr;
   }
 
-private:
+  private:
   size_t byteCount{0};
   bool isInit{false};
-  T *userSpaceMem{nullptr};
+  T* userSpaceMem{nullptr};
 };
 } // namespace yateto
 #endif // YATETO_LINEAR_ALLOCATED_H_

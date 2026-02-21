@@ -10,7 +10,7 @@ from .cost import ShapeCostEstimator
 from .. import aspp
 
 # Similar as ast.NodeTransformer
-class Transformer(Visitor): 
+class Transformer(Visitor):
   def generic_visit(self, node, **kwargs):
     newChildren = [self.visit(child, **kwargs) for child in node]
     node.setChildren(newChildren)
@@ -20,7 +20,7 @@ class DeduceIndices(Transformer):
   def __init__(self, targetIndices: Union[str, Indices] = None):
     self._targetIndices = targetIndices
     self._indexSetVisitor = ComputeIndexSet()
-  
+
   def visit(self, node, bound=None):
     forceIndices = bound is None and self._targetIndices is not None
     if bound is None:
@@ -71,7 +71,7 @@ class DeduceIndices(Transformer):
     deduced = g - contractions
     node.indices = deduced.sorted()
     return node
-  
+
   def visit_Add(self, node, bound):
     for child in node:
       self.visit(child, bound)
@@ -117,7 +117,7 @@ class DeduceIndices(Transformer):
   def visit_Assign(self, node, bound):
     lhs = node[0]
     rhs = node[1]
-    
+
     lhsTensor = lhs.viewed()
     if not isinstance(lhsTensor, IndexedTensor):
       raise ValueError('Assign: Left-hand side must be of type IndexedTensor')
@@ -224,7 +224,7 @@ class EquivalentSparsityPattern(Transformer):
     self.generic_visit(node)
     node.setEqspp(node.term().eqspp())
     return node
-  
+
   def visit_Assign(self, node):
     self.generic_visit(node)
     node.setEqspp( node.computeSparsityPattern() )
@@ -251,19 +251,19 @@ class EquivalentSparsityPattern(Transformer):
     minTree.setIndexPermutation(targetIndices)
     minTree = FindContractions().visit(minTree)
     return ComputeSparsityPattern(True).visit(minTree)
-  
+
   def visit_Einsum(self, node):
     self.generic_visit(node)
     terms = list(node)
     node.setEqspp( self.getEqspp(terms, node.indices) )
-    
+
     for child in node:
       child.setEqspp( self.getEqspp(terms, child.indices) )
 
     # TODO: Backtracking of equivalent sparsity pattern to children?
 
     return node
-  
+
   def visit_SliceView(self, node):
     self.generic_visit(node)
     node.setEqspp(node.computeSparsityPattern())
@@ -284,7 +284,7 @@ class ComputeMemoryLayout(Transformer):
     node.setEqspp( node.computeSparsityPattern() )
     node.computeMemoryLayout()
     return node
-  
+
   def visit_IndexedTensor(self, node):
     return node
 

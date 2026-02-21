@@ -193,7 +193,7 @@ def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_back
 
   if device_arch.startswith('sm_'):
     alignment = 64
-  elif device_arch.startswith('gfx'): 
+  elif device_arch.startswith('gfx'):
     alignment = 128
   elif re.match(r"\d+_\d+_\d+", device_arch):
     alignment = 32
@@ -229,10 +229,10 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
     alignment = host_def.alignment
   if host_def.prefetch is not None:
     prefetch = host_def.prefetch
-  
+
   if alignment is None:
     raise NotImplementedError(f'The architecture {host_def.archname} is unknown to Yateto, and no custom alignment was given')
-  
+
   if prefetch is None:
     raise NotImplementedError(f'The architecture {host_def.archname} is unknown to Yateto, and no custom prefetching info was given')
 

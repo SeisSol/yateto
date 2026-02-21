@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2021 SeisSol Group
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# apply clang-format/basic pre-commit
+511bc1513e3a6d5ceb4b338750f57253ec429e9b
+# update clang-format config
+fb0b99c3454b5dad40ae0cff13099e4e8a5bf894

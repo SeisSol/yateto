@@ -14,12 +14,12 @@ class KernelFactory(object):
     self._arch = arch
     self._freeList = list()
     self._target = target
-    
+
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
     factory = getattr(self, method, self.generic_create)
     return factory(node, *args)
-  
+
   def generic_create(self, node, *args):
     raise NotImplementedError
 
@@ -58,7 +58,7 @@ class KernelFactory(object):
 
   def allocateTemporary(self):
     return True
-  
+
   def post_generate(self, routine_cache):
     pass
 
@@ -220,15 +220,15 @@ class UnitTestFactory(KernelFactory):
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
-    
+
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
-    
+
     resultTerm = self._formatTerm(result, node.indices)
     terms = [self._formatTerm(arguments[i], child.indices) for i,child in enumerate(node)]
-    
+
     if scalar and scalar != 1.0:
       terms.insert(0, str(scalar))
-    
+
     if not add:
       self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
     
@@ -358,10 +358,10 @@ class ExportGenerator:
 
   def __init__(self, arch):
     self.arch = arch
-  
+
   def generate(self, cpp, cache):
     pass
-  
+
   def add_linear_operation(self, dest, ops, target, permute, add):
     pass
   
@@ -598,7 +598,7 @@ class ExportFactory(KernelFactory):
     # convert indices to loop numbers
 
     target, permute = self.getIndices(dest, ops)
-    
+
     if not (scalar == 1 or scalar == 1.0):
       ops += [self._scalarTensor(scalar)]
       target += [[]]

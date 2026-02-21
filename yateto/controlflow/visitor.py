@@ -6,7 +6,7 @@ from ..ast.node import Permute, Node, Broadcast
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
-  
+
   def __init__(self, simpleMemoryLayout=False):
     self._tmp = 0
     self._cfg = []
@@ -19,7 +19,7 @@ class AST2ControlFlow(Visitor):
 
   def _ml(self, node):
     return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()
-  
+
   def _addTransformOp(self, permute, variable):
     if not self._simpleMemoryLayout:
       permute.setEqspp( permute.computeSparsityPattern() )
@@ -46,7 +46,7 @@ class AST2ControlFlow(Visitor):
         # permute needed, run before broadcast
         inode = Permute.subPermute(term, indices)
         intermediate = self._addTransformOp(inode, variable)
-      
+
       result = intermediate
       if len(term.indices) != len(indices):
         # broadcast needed, more output than input indices
@@ -56,13 +56,13 @@ class AST2ControlFlow(Visitor):
 
   def generic_visit(self, node):
     variables = [self.visit(child) for child in node]
-    
+
     result = self._nextTemporary(node)
     action = ProgramAction(result, Expression(node, self._ml(node), variables), False, condition=self._condition[-1])
     self._addAction(action)
-    
+
     return result
-  
+
   def visit_SliceView(self, node):
     var = self.visit(node.term())
     ml = node.getMemoryLayout(var.memoryLayout())
@@ -81,18 +81,18 @@ class AST2ControlFlow(Visitor):
       action = ProgramAction(tmp, rhs, add, condition=self._condition[-1])
       self._addAction(action)
       add = True
-    
+
     return tmp
-  
+
   def visit_ScalarMultiplication(self, node):
     variable = self.visit(node.term())
 
     result = self._nextTemporary(node)
     action = ProgramAction(result, variable, False, node.scalar(), condition=self._condition[-1])
     self._addAction(action)
-    
+
     return result
-  
+
   def visit_Assign(self, node):
     condition = self._condition[-1]
     if isinstance(node.condition(), Node):

@@ -41,7 +41,7 @@ class ASpp(ABC):
   @abstractmethod
   def transposed(self, shape):
     pass
-  
+
   @abstractmethod
   def broadcast(self, shape):
     pass
@@ -77,7 +77,7 @@ class dense(ASpp):
 
   def transposed(self, perm):
     return type(self)(tuple(self.shape[p] for p in perm))
-  
+
   def broadcast(self, bcst):
     return type(self)(tuple(shp * bc for shp, bc in zip(self.shape, bcst)))
 
@@ -99,7 +99,7 @@ class dense(ASpp):
       sz1 = {i: a1.shape[A.find(i)] for i in A}
       sz2 = {i: a2.shape[B.find(i)] for i in B}
       intersect = filter(lambda x: x in sz1, sz2.keys())
-      assert all([sz1[i] == sz2[i] for i in intersect])    
+      assert all([sz1[i] == sz2[i] for i in intersect])
       sz1.update(sz2)
       return dense(tuple(sz1[i] for i in C))
     else:
@@ -166,7 +166,7 @@ class general(ASpp):
 
   def transposed(self, perm):
     return type(self)(self.pattern.transpose(perm).copy(order=self.NUMPY_DEFAULT_ORDER))
-  
+
   def broadcast(self, bcst):
     return type(self)(np.tile(self.pattern, bcst).copy(order=self.NUMPY_DEFAULT_ORDER))
 

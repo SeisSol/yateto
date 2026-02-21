@@ -132,7 +132,7 @@ class AbstractType(Symbol):
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
-  
+
   def name(self):
     return self._name
 
@@ -147,7 +147,10 @@ class IdentifiedType(AbstractType):
     if not self.isValidName(name):
       raise ValueError(f'Invalid name (must match regexp {self.VALID_NAME}): {name}')
 
+    self._name = name
     self.namespace = namespace
+
+    self.datatype = datatype
 
   def __str__(self):
     return self._name
@@ -161,14 +164,14 @@ class IdentifiedType(AbstractType):
 
   def group(self):
     return self.getGroup(self._name)
-  
+
   @classmethod
   def getBaseName(cls, name):
     return re.match(cls.BASE_NAME, name).group(0)
-  
+
   def baseName(self):
     return self.getBaseName(self._name)
-  
+
   @classmethod
   def splitBasename(cls, base_name_with_namespace):
     name_parts = base_name_with_namespace.rsplit('::', 1)
@@ -178,16 +181,16 @@ class IdentifiedType(AbstractType):
       prefix = ''
     base_name = name_parts[-1]
     return prefix, base_name
-  
+
   def prefix(self):
     return '{}::'.format(self.namespace) if self.namespace else ''
-  
+
   def baseNameWithNamespace(self):
     return '{}{}'.format(self.prefix(), self.baseName())
 
   def nameWithNamespace(self):
     return '{}{}'.format(self.prefix(), self.name())
-  
+
   def __hash__(self):
     return hash(self._name)
 
@@ -212,10 +215,10 @@ class Tensor(IdentifiedType):
     super().__init__(name, namespace=namespace, datatype=datatype)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
-    
+
     if any(x < 1 for x in shape):
       raise ValueError('shape must not contain entries smaller than 1')
-    
+
     if not self.isValidName(name):
       raise ValueError(f'Tensor name invalid (must match regexp {self.VALID_NAME}): {name}')
 
@@ -252,7 +255,7 @@ class Tensor(IdentifiedType):
     else:
       self._spp = aspp.dense(shape)
     self._groupSpp = self._spp
-    
+
     self.setMemoryLayout(memoryLayoutClass, alignStride)
 
   def __hash__(self):
@@ -276,16 +279,16 @@ class Tensor(IdentifiedType):
   def __getitem__(self, indexNames):
     from .ast.node import IndexedTensor
     return IndexedTensor(self, indexNames)
-  
+
   def shape(self):
     return self._shape
-  
+
   def memoryLayout(self):
     return self._memoryLayout
-  
+
   def spp(self, groupSpp=True):
     return self._groupSpp if groupSpp else self._spp
-  
+
   def values(self):
     return self._values
 
@@ -314,7 +317,7 @@ class Tensor(IdentifiedType):
     if equal:
       assert self._shape == other._shape and aspp.array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
     return equal
-  
+
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)
 
@@ -324,13 +327,13 @@ class Collection(object):
 
   def __getitem__(self, key):
     return self.__dict__[key]
-  
+
   def __setitem__(self, key, value):
     self.__dict__[key] = value
 
   def __contains__(self, key):
     return key in self.__dict__
-  
+
   @classmethod
   def group(cls, name):
     group = Tensor.getGroup(name)

@@ -83,9 +83,9 @@ def openMaybeCompressed(basefilename):
 def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
   with openMaybeCompressed(xmlFile) as file:
     root = etree.fromstring(file.read())
-  
+
   matrices = dict()
-  
+
   for node in root:
     if node.tag == 'matrix':
       name = node.get('name')
@@ -131,7 +131,7 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
 def memoryLayoutFromFile(xmlFile, db, clones, strict=False):
   with openMaybeCompressed(xmlFile) as file:
     root = etree.fromstring(file.read())
-  
+
   strtobool = ['yes', 'true', '1']
   groups = dict()
 

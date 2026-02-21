@@ -14,7 +14,7 @@ class GemmTool(ABC):
   def __init__(self, operation_name: str, includes: List[str] = []):
     self.operation_name = operation_name
     self.includes = includes
-  
+
   def archSupported(self):
     return True
 

@@ -47,7 +47,7 @@ class SubstituteForward(object):
         maySubs = all([cfg[j].action.maySubstitute(when, by) for j in range(i, n)])
         if maySubs:
           for j in range(i, n):
-            cfg[j].action = cfg[j].action.substituted(when, by)
+            cfg[j].action = cfg[j].action.substituted(when, by, ua.condition)
           cfg = LivenessAnalysis().visit(cfg)
   
     return cfg
@@ -69,9 +69,9 @@ class SubstituteBackward(object):
           when = u.action.result
           maySubs = cfg[found].action.maySubstitute(when, by, term=False) and all([cfg[j].action.maySubstitute(when, by) for j in range(found+1,i+1)])
           if maySubs:
-            cfg[found].action = cfg[found].action.substituted(when, by, term=False)
+            cfg[found].action = cfg[found].action.substituted(when, by, va.condition, term=False)
             for j in range(found+1,i+1):
-              cfg[j].action = cfg[j].action.substituted(when, by)
+              cfg[j].action = cfg[j].action.substituted(when, by, va.condition)
             cfg = LivenessAnalysis().visit(cfg)
     return cfg
 
@@ -109,7 +109,7 @@ class MergeActions(object):
         if found >= 0:
           va = cfg[found].action
           if ua.maySubstitute(ua.result, va.result, term=False):
-            cfg[i].action = ua.substituted(ua.result, va.result, term=False)
+            cfg[i].action = ua.substituted(ua.result, va.result, va.condition, term=False)
             cfg[i].action.add = va.add
             if not va.hasTrivialScalar():
               cfg[i].action.scalar = va.scalar

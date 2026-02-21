@@ -196,10 +196,11 @@ class ProgramAction(object):
 
     return (not term or maySubsTerm) and (not result or maySubsResult) and compatible
 
-  def substituted(self, when, by, result = True, term = True):
+  def substituted(self, when, by, cond, result = True, term = True):
     rsubs = self.result.substituted(when, by) if result else self.result
     tsubs = self.term.substituted(when, by, rsubs.memoryLayout()) if term else self.term
-    return ProgramAction(rsubs, tsubs, self.add, self.scalar, self.condition)
+    csubs = self.condition & cond
+    return ProgramAction(rsubs, tsubs, self.add, self.scalar, csubs)
 
   def setVariablesWritable(self, name):
     self.result.setWritable(name)
@@ -344,6 +345,9 @@ class CNFCondition:
 
       result = result | clauseInv
     return result
+  
+  def __and__(self, other):
+    return self.__rand__(other)
 
   def __rand__(self, other):
     if not isinstance(other, CNFCondition):
@@ -356,6 +360,9 @@ class CNFCondition:
     condition._prune()
 
     return condition
+  
+  def __or__(self, other):
+    return self.__ror__(other)
 
   def __ror__(self, other):
     if not isinstance(other, CNFCondition):

@@ -3,7 +3,7 @@ from .. import aspp
 from ..type import AddressingMode
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
-from .tiny_tensor_language import Dump, Function, IntegerType, MemrefType, GroupType, IntImmValue, DYNAMIC, SubviewInst, LoadInst
+from .tiny_tensor_language import Dump, Function, IntegerType, FloatingType, MemrefType, GroupType, IntImmValue, DYNAMIC, SubviewInst, LoadInst
 import hashlib
 
 class TensorDescription(object):
@@ -18,6 +18,9 @@ class TensorDescription(object):
           elements are known at compile time
       is_temporary (bool): if true then the description is for a temporary tensor which
           usually results from a result of an intermediate computation
+      values (Union[np.ndarray, None]): the values of the compute_constant tensor, if they are known at compile time
+      datatype (Datatype): the datatype of the tensor elements
+      addressing (AddressingMode): the addressing mode for the tensor
     """
     self.name = name
     self.memoryLayout = memoryLayout
@@ -301,8 +304,8 @@ def toTinyTCType(datatype: Datatype):
     Datatype.I16: ScalarType(IntegerType.i16),
     Datatype.I32: ScalarType(IntegerType.i32),
     Datatype.I64: ScalarType(IntegerType.i64),
-    Datatype.F32: ScalarType(IntegerType.f32),
-    Datatype.F64: ScalarType(IntegerType.f64)
+    Datatype.F32: ScalarType(FloatingType.f32),
+    Datatype.F64: ScalarType(FloatingType.f64)
   }[datatype]
 
 def toTinyTCImmediate(datatype: Datatype, value):
@@ -312,6 +315,6 @@ def toTinyTCImmediate(datatype: Datatype, value):
     Datatype.I16: lambda value: IntImmValue(IntegerType.i16, value),
     Datatype.I32: lambda value: IntImmValue(IntegerType.i32, value),
     Datatype.I64: lambda value: IntImmValue(IntegerType.i64, value),
-    Datatype.F32: lambda value: FloatImmValue(IntegerType.f32, value),
-    Datatype.F64: lambda value: FloatImmValue(IntegerType.f64, value),
+    Datatype.F32: lambda value: FloatImmValue(FloatingType.f32, value),
+    Datatype.F64: lambda value: FloatImmValue(FloatingType.f64, value),
   }[datatype](value)

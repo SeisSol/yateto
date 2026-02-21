@@ -155,7 +155,7 @@ class FindIndexPermutations(Visitor):
 
   def visit_Product(self, node):
     return self.allPermutationsNoCostNAryOp(node)
-  
+
   def visit_Elementwise(self, node):
     return self.allPermutationsNoCostNAryOp(node)
 
@@ -173,7 +173,7 @@ class FindIndexPermutations(Visitor):
     iterator = itertools.permutations(node.indices)
     permutationVariants[node] = {''.join(Cs): self.Variant(minCost, [minTind]) for Cs in iterator}
     return permutationVariants
-  
+
   def visit_Reduction(self, node):
     return self.visit_IndexSum(node)
 
@@ -327,12 +327,12 @@ class ComputeConstantExpression(Visitor):
     term = node.tensor.values_as_ndarray(self._dtype)
     assert term is not None, f'{self.__class__.__name__} may only be used when all involved tensors are constant.'
     return term
-  
+
   def visit_Elementwise(self, node):
     terms = self.generic_visit(node)
     fullTerms = node.fillTerms(terms)
     return node.optype.call(*fullTerms)
-  
+
   def visit_Reduction(self, node):
     terms = self.generic_visit(node)
     assert len(terms) == 1

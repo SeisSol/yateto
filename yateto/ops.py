@@ -4,16 +4,16 @@ from .type import Datatype
 class Operation:
     #def callstr(self, *args) -> str:
     #    raise NotImplementedError()
-    
+
     def call(self, *args):
         raise NotImplementedError()
-    
+
     def datatypeResult(self, argtypes):
         raise NotImplementedError() # TODO
-    
+
     def __str__(self):
         return type(self).__name__
-    
+
     def __eq__(self, other):
         # we're more or less using "dummy" types here
         return type(self).__name__ == type(other).__name__
@@ -35,21 +35,21 @@ class BinaryArgsMixin:
 class CFunctionMixin:
     def cppname(self) -> str:
         raise NotImplementedError()
-    
+
     def callstr(self, *args) -> str:
         return f'{self.cppname()}({", ".join(str(arg) for arg in args)})'
 
 class CUnaryOperatorMixin:
     def cppname(self) -> str:
         raise NotImplementedError()
-    
+
     def callstr(self, *args) -> str:
         return f'{self.cppname()}({args[0]})'
 
 class CBinaryOperatorMixin:
     def cppname(self) -> str:
         raise NotImplementedError()
-    
+
     def callstr(self, *args) -> str:
         return f'({args[0]}) {self.cppname()} ({args[1]})'
 

@@ -26,7 +26,7 @@ class GemmTool(ABC):
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     pass
-  
+
   # shortcut for legacy reasons
   @classmethod
   def _equalType(cls, datatypeA, datatypeB, datatypeC, types=(Datatype.F32, Datatype.F64)):
@@ -67,7 +67,7 @@ class MKL(BLASlike):
   def __init__(self, arch):
     self._arch = arch
     super().__init__('cblas', ['mkl_cblas.h'])
-  
+
   def archSupported(self):
     return self._arch.host_name.lower() in {'snb', 'hsw', 'skx', 'knl'} or self._arch.host_name.lower().startswith('avx')
 

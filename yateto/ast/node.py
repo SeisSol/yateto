@@ -124,10 +124,10 @@ class Node(ABC):
 
   def __le__(self, other):
     return Assign(self, other)
-  
+
   def __truediv__(self, other):
     return Elementwise(ops.Div(), self, other)
-  
+
   def __rtruediv__(self, other):
     return Elementwise(ops.Div(), other, self)
 
@@ -355,18 +355,18 @@ class Assign(Op):
       super().__init__(lTerm, rTerm, condition)
     else:
       super().__init__(lTerm, rTerm)
-    
+
     self._condition = condition
-  
+
   def leftTerm(self):
     return self._children[0]
-  
+
   def rightTerm(self):
     return self._children[1]
-  
+
   def condition(self):
     return self._condition
-  
+
   def setChildren(self, children):
     if not isinstance(children[0].viewed(), IndexedTensor):
       raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0].viewed()))
@@ -378,7 +378,7 @@ class Assign(Op):
   def computeSparsityPattern(self, *spps):
     spp = spps[1] if len(spps) >= 2 else self.rightTerm().eqspp()
     return self.broadcast(self.rightTerm().indices, self.permute(self.rightTerm().indices, spp, False))
-  
+
   def __str__(self):
     selfname = type(self).__name__
     indices = self.indices if self.indices != None else '<not deduced>'
@@ -614,20 +614,20 @@ class IfThenElse(Op):
       super().__init__(yesTerm, noTerm, condition)
     else:
       super().__init__(yesTerm, noTerm)
-    
+
     self._condition = condition
-    
+
   def condition(self):
     return condition
-  
+
   def nonZeroFlops(self):
     return 0
-  
+
   def computeSparsityPattern(self, *spps):
     # TODO: yesTerm OR noTerm
     spp = spps[0] if len(spps) >= 2 else self.term().eqspp()
     return spp
-  
+
   def __str__(self):
     indices = self.indices if self.indices != None else '<not deduced>'
     return f'{type(self).__name__}[{indices}]'
@@ -660,17 +660,17 @@ class Elementwise(Op):
 
   def nonZeroFlops(self):
     return self.eqspp().count_nonzero()
-  
+
   def fillTerms(self, terms):
     assert len(terms) == len(self)
     return [terms[index] if template is None else template for template, index in zip(self.termTemplate, self.nodeTermIndices)]
-  
+
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       spps = [node.eqspp() for node in self]
     xspp = spps[0]
     return spps[0]
-  
+
   def __str__(self):
     indices = self.indices if self.indices != None else '<not deduced>'
     return f'{type(self).__name__}({self.optype})[{indices}]'
@@ -682,21 +682,21 @@ class Reduction(UnaryOp):
     self.indices = term.indices - set([sumIndex])
     self._reductionIndex = term.indices.extract(sumIndex)
     self.optype = optype
-  
+
   def nonZeroFlops(self):
     return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
-  
+
   def reductionIndex(self):
     return self._reductionIndex
-  
+
   def reductionIndices(self):
     return [self._reductionIndex]
-  
+
   def computeSparsityPattern(self, *spps):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
     return spp.indexSum(self.term().indices, self.indices)
-  
+
   def __str__(self):
     indices = self.indices if self.indices != None else '<not deduced>'
     return f'{type(self).__name__}({self.optype})[{indices}]'

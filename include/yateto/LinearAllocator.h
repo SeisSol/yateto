@@ -13,10 +13,10 @@ struct LinearAllocatorT {
     userSpaceMem = ptr;
   }
 
-  template<typename S>
+  template <typename S>
   void initialize(S* ptr) {
-      isInit = true;
-      userSpaceMem = reinterpret_cast<T*>(ptr);
+    isInit = true;
+    userSpaceMem = reinterpret_cast<T*>(ptr);
   }
 
   T* allocate(size_t size) {

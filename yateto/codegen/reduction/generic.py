@@ -7,11 +7,11 @@ class Generic(object):
 
   def generate(self, cpp, routineCache):
     d = self._descr
-        
+
     if not d.add:
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
       initializeWithZero(cpp, d.result, writeBB)
-    
+
     sumIndex = d.term.indices - d.result.indices
     assert len(sumIndex) == 1
     class IndexSumBody(object):
@@ -24,7 +24,7 @@ class Generic(object):
           cpp( f'acc = {d.optype.callstr('acc', argstr)};' )
         mult = f'{d.alpha} * ' if d.alpha != 1.0 else ''
         cpp( f'{target} = {mult}acc;' )
-        
+
         flop = 1 if d.alpha != 1.0 else 0
         return d.sumLoopRange.size() + flop
 

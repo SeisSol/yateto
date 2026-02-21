@@ -97,7 +97,7 @@ class Generic(object):
       lr.update( self._defuse(n, d.rightTerm, In) )
       writeBB = boundingBoxFromLoopRanges(d.result.indices, lr)
       initializeWithZero(cpp, d.result, writeBB)
-    
+
     class LoGBody(object):
       def __call__(s):
         if hasInnerLoops:

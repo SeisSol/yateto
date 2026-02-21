@@ -205,7 +205,7 @@ class ProgramAction(object):
   def setVariablesWritable(self, name):
     self.result.setWritable(name)
     self.term.setWritable(name)
-  
+
   def getCondition(self):
     if isinstance(self.condition, CNFCondition):
       return self.condition
@@ -274,7 +274,7 @@ class CNFClause:
     else:
       self.variables = variables
     self.fulfilled = False
-  
+
   def negateVariables(self):
     return {var: ~self.variables[var] for var in self.variables}
 
@@ -286,11 +286,11 @@ class CNFClause:
     if not output.fulfilled:
       output.variables = {**self.variables, **clause.variables}
     return output
-  
+
   def __repr__(self):
     formatvar = lambda name: f'{name}' if self.variables[name] else f'~{name}'
     return f'[{", ".join(formatvar(var) for var in self.variables)}]'
-  
+
   def ccode(self):
     if not self.fulfilled and len(self.variables) == 0:
       return 'false'
@@ -298,7 +298,7 @@ class CNFClause:
     printvar = lambda var: f'{var}' if isinstance(var, Scalar) else f'{var}[{var.memoryLayout().addressString(Indices())}]'
     formatvar = lambda name: f'{printvar(name)}' if self.variables[name] else f'!{printvar(name)}'
     return f'({" || ".join(formatvar(var) for var in self.variables)})'
-  
+
   def variableIterator(self):
     return (var for var in self.variables if isinstance(var, Variable))
 
@@ -311,7 +311,7 @@ class CNFCondition:
         self.clauses = [CNFClause([])]
     else:
       self.clauses = [CNFClause([data])]
-  
+
   def _prune(self):
     newclauses = []
     for clause in self.clauses:
@@ -328,14 +328,14 @@ class CNFCondition:
 
   def tautology(self):
     return len(self.clauses) == 0
-  
+
   def unfulfillable(self):
     return any(not clause.fulfilled and len(clause.variables) == 0 for clause in self.clauses)
 
   def __not__(self):
     if self.tautology():
       return CNFCondition(False)
-    
+
     # this is the actually painful step (as it's also pretty inefficient right now)
     result = CNFCondition(True)
     for clause in self.clauses:
@@ -345,14 +345,14 @@ class CNFCondition:
 
       result = result | clauseInv
     return result
-  
+
   def __and__(self, other):
     return self.__rand__(other)
 
   def __rand__(self, other):
     if not isinstance(other, CNFCondition):
       other = CNFCondition(other)
-    
+
     clauses = self.clauses + other.clauses
 
     condition = CNFCondition(True)
@@ -360,42 +360,42 @@ class CNFCondition:
     condition._prune()
 
     return condition
-  
+
   def __or__(self, other):
     return self.__ror__(other)
 
   def __ror__(self, other):
     if not isinstance(other, CNFCondition):
       other = CNFCondition(other)
-    
+
     clauses = [clause.unite(oclause) for clause in self.clauses for oclause in other.clauses]
     condition = CNFCondition(True)
     condition.clauses = clauses
     condition._prune()
 
     return condition
-  
+
   def __repr__(self):
     return f'{self.clauses}'
-  
+
   def ccode(self):
     if self.tautology():
       return 'true'
     elif self.unfulfillable():
       return 'false'
     return f'({" && ".join(clause.ccode() for clause in self.clauses)})'
-  
+
   def variables(self):
     return {var for clause in self.clauses for var in clause.variableIterator()}
 
 class LiveSet:
   def __init__(self, data: dict):
     self.data = data
-  
+
   def __sub__(self, other):
     if isinstance(other, dict):
       other = LiveSet(other)
-    
+
     result = {k:self.data[k] for k in self.data}
 
     for var in other.data:
@@ -405,11 +405,11 @@ class LiveSet:
           result.remove(var)
 
     return LiveSet(result)
-  
+
   def __or__(self, other):
     if isinstance(other, dict):
       other = LiveSet(other)
-    
+
     result = {k:self.data[k] for k in self.data}
 
     for var in other.data:
@@ -417,13 +417,13 @@ class LiveSet:
         result[var] |= other.data[var]
 
     return LiveSet(result)
-  
+
   def __contains__(self, element):
     if isinstance(element, tuple):
       return element[0] in self.data and (~self.data[element[0]] & element[1]).unfulfillable()
     else:
       return element in self.data
-  
+
   def variables(self):
     return set(k for k in self.data)
 

@@ -305,7 +305,7 @@ class OptimizedKernelGenerator(KernelGenerator):
             header(f'{class_name}::{container_type} {base_name};')
           else:
             header(f'{typ}{ptr_type} {base_name}{"{"}nullptr{"}"};')
-        
+
         def scalarArgs(base_name_with_namespace, datatype, groups):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           typ = datatype.ctype()
@@ -542,11 +542,11 @@ class UnitTestGenerator(KernelGenerator):
 
       for i,scalar in enumerate(scalars):
         cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
-        
+
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
-        
+
         shape = var.memoryLayout().shape()
         cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
@@ -652,13 +652,14 @@ class InitializerGenerator(object):
     def __init__(self, datatype):
       self._datatype = datatype
 
-    def typename(self, dim, arch):
+    def typename(self, dim, arch, const):
+      constStr = 'true' if const else 'false'
       return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim},{self._datatype.ctype()},{arch.uintTypename},{constStr}>'
-    
+
     def arguments(self, const):
       conststr = ' const*' if const else '*'
       return f'{self._datatype.ctype()}{conststr} {self.ARGUMENT_NAME}'
-    
+
     def generate(cpp, group, memLayout):
       raise NotImplementedError
 
@@ -670,7 +671,7 @@ class InitializerGenerator(object):
       if declarationOnly:
         return ''
       return f'{MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
-  
+
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
     STOP_NAME = 'Stop'
@@ -748,7 +749,7 @@ class InitializerGenerator(object):
     self._groupSize = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndex.items()}
     maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}
     self._groupSizeScalar = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndexScalar.items()}
-  
+
   def _tensorViewGenerator(self, tensor):
     memoryLayout = tensor.memoryLayout()
     memLayoutMap = {
@@ -756,7 +757,7 @@ class InitializerGenerator(object):
       'CSCMemoryLayout': self.CSCMatrixView
     }
     return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch))
-  
+
   def iterate_collect(self):
     cur_namespace = ''
     cur_dict = collections.OrderedDict()
@@ -923,13 +924,12 @@ class InitializerGenerator(object):
           cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')
 
         cpp.emptyline()
-        viewArgs = self.TensorView.arguments(False)
-        viewArgsConst = self.TensorView.arguments(True)
         if len(groupSize) == 0:
           prototensor = next(iter(tensors.values()))
           ml = prototensor.memoryLayout()
           tv = self._tensorViewGenerator(prototensor)
-          viewArgs = tv.arguments()
+          viewArgs = tv.arguments(False)
+          viewArgsConst = tv.arguments(True)
           with cpp.Struct(self.VIEW_STRUCT_NAME):
             cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch, False)};')
             cpp(f'using {self.VIEW_TYPE_NAME_CONST} = {tv.typename(len(ml.shape()), self._arch, True)};')
@@ -945,7 +945,8 @@ class InitializerGenerator(object):
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
           tv = self._tensorViewGenerator(tensor)
-          viewArgs = tv.arguments()
+          viewArgs = tv.arguments(False)
+          viewArgsConst = tv.arguments(True)
           typename = tv.typename(len(ml.shape()), self._arch, False)
           typenameConst = tv.typename(len(ml.shape()), self._arch, True)
           special = ','.join(str(g) for g in group)

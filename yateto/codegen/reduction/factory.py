@@ -10,18 +10,18 @@ class Description(object):
     self.result = result
     self.term = term
     self.optype = optype
-    
+
     rA = loopRanges(self.term, self.result.indices)
     rB = loopRanges(self.result, self.result.indices)
     assert testLoopRangesAContainedInB(rA, rB)
-    
+
     self.loopRanges = rA
-    
+
     self.sumIndex = self.term.indices - self.result.indices
     assert len(self.sumIndex) == 1
 
     self.sumLoopRange = loopRanges(self.term, self.sumIndex)[str(self.sumIndex)]
-    
+
 
 def generator(arch, descr, target):
   if target == 'cpu':

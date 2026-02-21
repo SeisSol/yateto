@@ -45,7 +45,7 @@ class Datatype(Enum):
       Datatype.BF16: 'yateto::bf16_ty',
       Datatype.F128: 'yateto::f128_ty',
     }[self]
-  
+
   def nptype(self):
     return {
       Datatype.BOOL: np.bool,
@@ -59,7 +59,7 @@ class Datatype(Enum):
       Datatype.BF16: np.float32, # NYI
       Datatype.F128: np.float128,
     }[self]
-  
+
   def size(self):
     # unpacked size
     return {
@@ -74,7 +74,7 @@ class Datatype(Enum):
       Datatype.BF16: 2,
       Datatype.F128: 16,
     }[self]
-  
+
   def safeint(self, value):
     # allow inf/-inf to be treated as int
     return int(max(-2**64, min(2**64, value)))
@@ -112,7 +112,7 @@ class Symbol(object):
   def __init__(self, datatype):
     # datatype == None is treated as datatype == arch.datatype
     self.datatype = datatype
-  
+
   def getDatatype(self, arch):
     return arch.datatype if self.datatype is None else self.datatype
 
@@ -128,7 +128,7 @@ class AbstractType(Symbol):
   def __init__(self, name, datatype):
     super().__init__(datatype)
     self._name = name
-  
+
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
@@ -194,10 +194,10 @@ class IdentifiedType(AbstractType):
   def __hash__(self):
     return hash(self._name)
 
-class Scalar(IdentifiedType, ScalarMixin):  
+class Scalar(IdentifiedType, ScalarMixin):
   def __init__(self, name, namespace=None, datatype=None):
     super().__init__(name, namespace=namespace, datatype=datatype)
-  
+
   def __hash__(self):
     return hash(self._name)
 

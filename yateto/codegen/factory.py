@@ -92,7 +92,7 @@ class KernelFactory(object):
   def _indices(self, var):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
-  
+
   def _conditional(self, condition, generate):
     if isinstance(condition, bool):
       if condition:
@@ -132,7 +132,7 @@ class OptimizedKernelFactory(KernelFactory):
     description = fused_gemms.Description(node, result, arguments, condition, add, scalar)
     generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
-  
+
   def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
     description = indexsum.Description(
@@ -143,7 +143,7 @@ class OptimizedKernelFactory(KernelFactory):
     )
     generator = indexsum.generator(self._arch, description, self._target)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
-  
+
   def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = product.Description(
@@ -168,7 +168,7 @@ class OptimizedKernelFactory(KernelFactory):
     )
     generator = elementwise.generator(self._arch, description, self._target)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
-  
+
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = reduction.Description(
       alpha = scalar,
@@ -184,17 +184,17 @@ class OptimizedKernelFactory(KernelFactory):
     result = IndexedTensorDescription.fromNode(result, node)
     term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     return self._csa(result, term, add, condition, scalar, routineCache, gemm_cfg)
-  
+
   def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromNode(result, node)
     term = IndexedTensorDescription.fromNode(arguments[0], node.term())
     return self._csa(result, term, add, condition, scalar, routineCache, gemm_cfg)
-  
+
   def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromVar(result, self._indices(result))
     term = IndexedTensorDescription.fromVar(term, self._indices(term))
     return self._csa(result, term, condition, add, scalar, routineCache, gemm_cfg)
-  
+
   def _csa(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
       alpha = scalar,
@@ -215,7 +215,7 @@ class UnitTestFactory(KernelFactory):
   def _formatTerm(self, var, indices):
     address = var.memoryLayout().addressString(indices)
     return f'{self._name(var)}[{address}]'
-  
+
   def create_Einsum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = node.indices
     for child in node:
@@ -231,14 +231,14 @@ class UnitTestFactory(KernelFactory):
 
     if not add:
       self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
-    
+
     class EinsumBody(object):
       def __call__(s):
         self._cpp(f"{resultTerm} += {' * '.join(terms)};")
         return len(terms)
 
     return self._conditional(condition, lambda: forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False))
-  
+
   def create_ScalarMultiplication(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     return self._conditional(condition, lambda: self.simple(result, arguments[0], add, scalar, routineCache))
 
@@ -247,13 +247,13 @@ class UnitTestFactory(KernelFactory):
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
-  
+
   def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
-  
+
   def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
@@ -271,7 +271,7 @@ class UnitTestFactory(KernelFactory):
     termTerm = node.optype.callstr(*node.fillTerms(argTerms))
 
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
-  
+
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
@@ -364,7 +364,7 @@ class ExportGenerator:
 
   def add_linear_operation(self, dest, ops, target, permute, add):
     pass
-  
+
   def add_operation(self, description):
     pass
 
@@ -381,19 +381,19 @@ class ExportFactory(KernelFactory):
     self.generator = generator
     self.tensors = {}
     self.scalarcounter = 0
-  
+
   def post_generate(self, routine_cache):
     self.generator.generate(self._cpp, routine_cache)
 
   def allocateTemporary(self):
     return False
-  
+
   def _nodeTensor(self, tensor, node):
     return self._handleTensorDesc(IndexedTensorDescription.fromNode(tensor, node))
 
   def _varTensor(self, var, indices):
     return self._handleTensorDesc(IndexedTensorDescription.fromVar(var, indices))
-  
+
   def _handleAddressing(self, desc):
     if desc.addressing is None:
       addressing = BatchedOperationsAux.deduce_addresing(desc)
@@ -429,7 +429,7 @@ class ExportFactory(KernelFactory):
       }
     else:
       assert False
-    
+
     eqsppnz = tensorIndexed.eqspp.nonzero()
     spp = [elem for elem in zip(*eqsppnz)]
 
@@ -499,13 +499,13 @@ class ExportFactory(KernelFactory):
       self.generator.add_tensor(tensor)
     else:
       assert tensor == self.tensors[tensor['name']]
-    
+
     return {
       'name': tensor['name'],
       'spp': eqspp,
       'indices': indices
     }
-  
+
   def _handleCondition(self, condition):
     out = []
     for clause in condition.clauses:
@@ -556,21 +556,21 @@ class ExportFactory(KernelFactory):
     assert len(arguments) == 2
     argnodes = [self._nodeTensor(arguments[0], node.leftTerm()), self._nodeTensor(arguments[1], node.rightTerm())]
     return self.handleLinear(self._nodeTensor(result, node), argnodes, condition, add, scalar, node.transA(), node.transB())
-  
+
   def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     return create_Reduction(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
-  
+
   def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     return create_Elementwise(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
     return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar, False, False)
-  
+
   def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
     return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar, False, False)
-  
+
   def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     return self.handleLinear(self._varTensor(result, self._indices(result)), [self._varTensor(term, self._indices(term))], condition, add, scalar, False, False)
 
@@ -603,7 +603,7 @@ class ExportFactory(KernelFactory):
       ops += [self._scalarTensor(scalar)]
       target += [[]]
       permute += [[]]
-    
+
     description = {
       'type': 'multilinear',
       'result': dest,

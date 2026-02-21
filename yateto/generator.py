@@ -178,7 +178,7 @@ class KernelFamily(object):
   def prepareUntilUnitTest(self, arch):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest(arch)
-  
+
   def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
       kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
@@ -460,7 +460,7 @@ class Generator(object):
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
-    
+
     prefixnsp = lambda a: a.name if a.namespace == '' else f'{a.namespace}::{a.name}'
     return {
       'namespace': namespace,

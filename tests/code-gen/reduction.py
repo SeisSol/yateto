@@ -39,4 +39,3 @@ def add(g):
 
   _(AB0[''] <= yf.all(AB2['ij'], 'ij'))
   _(AB0[''] <= yf.any(AB2['ij'], 'ij'))
-

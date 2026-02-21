@@ -55,7 +55,7 @@ class IndexedTensorDescription(TensorDescription):
         values = baseNode.tensor.values()
       addressing = baseNode.tensor.addressing
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
-  
+
   @classmethod
   def fromVar(cls, var, indices):
     datatype = var.datatype
@@ -134,7 +134,7 @@ class BatchedOperationsAux:
   def deduce_addresing(cls, term):
     if term.addressing is not None:
       return term.addressing
-    
+
     # default deduction
     if term.is_compute_constant:
       return AddressingMode.DIRECT

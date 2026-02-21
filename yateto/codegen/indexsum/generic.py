@@ -11,7 +11,7 @@ class Generic(object):
     if not d.add:
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
       initializeWithZero(cpp, d.result, writeBB)
-    
+
     sumIndex = d.term.indices - d.result.indices
     assert len(sumIndex) == 1
     class IndexSumBody(object):
@@ -23,7 +23,7 @@ class Generic(object):
           cpp( f'sum += {d.term.name}[{d.term.memoryLayout.addressString(d.term.indices)}];' )
         mult = f'{d.alpha} * ' if d.alpha != 1.0 else ''
         cpp( f'{target} = {mult}sum;' )
-        
+
         flop = 1 if d.alpha != 1.0 else 0
         return d.sumLoopRange.size() + flop
 

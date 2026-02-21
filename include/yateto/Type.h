@@ -34,6 +34,6 @@ using bf16_ty = std::bfloat16_t;
 using bf16_ty = __bf16;
 #endif
 
-} // yateto
+} // namespace yateto
 
 #endif // YATETO_TYPE_H_

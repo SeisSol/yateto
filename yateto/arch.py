@@ -70,11 +70,14 @@ class Architecture(object):
     self.host_name = host_name
 
     self.precision = precision.upper()
-    if self.precision == 'D':
-      self.epsilon = 2.22e-16
+    if self.precision == 'Q':
+      self.epsilon = 2**-112
+      self.datatype = Datatype.F128
+    elif self.precision == 'D':
+      self.epsilon = 2**-52
       self.datatype = Datatype.F64
     elif self.precision == 'S':
-      self.epsilon = 1.19e-7
+      self.epsilon = 2**-23
       self.datatype = Datatype.F32
     else:
       raise ValueError(f'Unknown precision type {self.precision}')
@@ -113,7 +116,7 @@ class Architecture(object):
 
   def onHeap(self, byteCount):
     return byteCount > self._tmpStackLimit
-  
+
   def __eq__(self, other):
     return self.name == other.name
 

@@ -13,7 +13,7 @@ class AST2ControlFlow(Visitor):
     self._writable = set()
     self._simpleMemoryLayout = simpleMemoryLayout
     self._condition = [True]
-  
+
   def cfg(self):
     return self._cfg + [ProgramPoint(None)]
 
@@ -105,19 +105,19 @@ class AST2ControlFlow(Visitor):
     newCondition = condition & CNFCondition(myCondition)
     self._condition.append(newCondition)
     self._condition = self._condition[:-1]
-  
+
     rVar = self.visit(node[1])
     rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), rVar)
 
     lVar = self.visit(node[0])
     action = ProgramAction(lVar, rhs, False, condition=newCondition)
     self._addAction(action)
-    
+
     return lVar
-  
+
   def visit_IndexedTensor(self, node):
     return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype, is_temporary=node.tensor.temporary)
-  
+
   def visit_IfThenElse(self, node):
     if len(self._condition) > 0:
       condition = self._condition.top()
@@ -130,7 +130,7 @@ class AST2ControlFlow(Visitor):
     self._condition.pop()
     self._addAction(ProgramAction())
     return self.visit(node.term())
-  
+
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
 

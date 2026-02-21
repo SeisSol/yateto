@@ -95,7 +95,7 @@ class MetaGenerator:
                         for entry in data:
                             self.template(header, entry, data[entry], f'{name}')
 
-        
+
         headerForward('tensor', tensors)
         headerForward('init', tensors)
         headerForward('kernel', kernels)
@@ -105,7 +105,7 @@ class MetaGenerator:
                 for gendata in self.generators:
                     outdirname = f'metagen_{gendata["name"]}'
                     header.include(f'{outdirname}/{name}.cpp')
-        
+
         cppForward('tensor')
         cppForward('init')
         cppForward('kernel')
@@ -131,12 +131,12 @@ class MetaGenerator:
 
             templatetypes = ', '.join(f'{typ} Arg{i}' for i, typ in enumerate(self.templateType))
             templateargs = ', '.join(f'Arg{i}' for i, _ in enumerate(self.templateType))
-            
+
             with header.Namespace('internal'):
                 header(f'template<{templatetypes}> struct {internalName} {"{"} using Type = void; {"}"};')
                 for gnsp, spec in foundin:
                     spectext = ', '.join(str(specpart) for specpart in spec)
                     header(f'template<> struct {internalName}<{spectext}> {"{"} using Type = ::{gnsp}::{fullname}; {"}"};')
             header(f'template<{templatetypes}> using {name} = typename internal::{internalName}<{templateargs}>::Type;')
-        
+
         self.namespacing(header, splitname[:-1] + [subnsp], inner)

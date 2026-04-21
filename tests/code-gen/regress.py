@@ -20,6 +20,8 @@ def add(g):
     counter.counter += 1
     g.add(f'kernel{counter.counter}', kernel)
 
+  # regression tests
+
   # list bugs with their PR solving them here
 
   # #103.1

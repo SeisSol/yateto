@@ -41,4 +41,3 @@ def add(g):
 
       stock = R['ijk'] <= S['xyz'] * XLTP['lx'] * XRTP['il'] * YL['ym'] * YR['mj'] * ZL['zn'] * ZR['nk']
       g.add('stock{}_trans_pad'.format(pqx), stock)
-

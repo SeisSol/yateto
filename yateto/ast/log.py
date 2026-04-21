@@ -19,14 +19,14 @@ def fusedVariants(memLayout, I, P, M, prune = False):
   D = set(s for g in groupStrings for s in allSubstrings(g))
   if prune:
     D = set(d for d in D if d[0] == M[0])
-  D = set(d for d in D if memLayout.mayFuse(sorted(P[i] for i in d)))  
+  D = set(d for d in D if memLayout.mayFuse(sorted(P[i] for i in d)))
   return D
 
 def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   L = contraction.leftTerm()
   R = contraction.rightTerm()
   I = contraction
-  
+
   if Aperm is not None:
     L = copy.copy(L)
     L.setIndexPermutation(Aperm, permuteEqspp=False)
@@ -53,7 +53,7 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   Im = (set(A) & set(C)) - Icommon
   In = (set(B) & set(C)) - Icommon
   Ik = (set(A) & set(B)) - Icommon
-  
+
   PA = {idx: pos for pos, idx in enumerate(A)}
   PB = {idx: pos for pos, idx in enumerate(B)}
   PC = {idx: pos for pos, idx in enumerate(C)}
@@ -64,7 +64,7 @@ def LoG(contraction, Aperm = None, Bperm = None, Cperm = None):
   AK = fusedVariants(L.memoryLayout(), Ik, PA, A)
   BK = fusedVariants(R.memoryLayout(), Ik, PB, B)
   BN = fusedVariants(R.memoryLayout(), In, PB, B)
-  
+
   MC = CM & AM
   NC = CN & BN
   KC = AK & BK

@@ -455,7 +455,7 @@ class Generator(object):
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
-    
+
     prefixnsp = lambda a: a.name if a.namespace == '' else f'{a.namespace}::{a.name}'
     return {
       'namespace': namespace,

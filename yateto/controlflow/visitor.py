@@ -68,7 +68,7 @@ class AST2ControlFlow(Visitor):
 
   def visit_Add(self, node):
     variables = [self.visit(child) for child in node]
-    assert len(variables) > 1
+    assert len(variables) >= 1
 
     variables.sort(key=lambda var: int(not var.writable) + int(not var.isGlobal()))
 

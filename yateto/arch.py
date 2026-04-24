@@ -69,11 +69,11 @@ class Architecture(object):
     self.host_name = host_name
 
     self.precision = precision.upper()
-    if self.precision == 'D':
+    if self.precision in ('D', 'F64'):
       self.bytesPerReal = 8
       self.typename = 'double'
       self.epsilon = 2.22e-16
-    elif self.precision == 'S':
+    elif self.precision in ('S', 'F32'):
       self.bytesPerReal = 4
       self.typename = 'float'
       self.epsilon = 1.19e-7

@@ -108,7 +108,7 @@ class Tensor(IdentifiedType):
 
     if spp is not None:
       if isinstance(spp, dict):
-        if not isinstance(next(iter(spp.values())), bool):
+        if not isinstance(next(iter(spp.values()), False), bool):
           self._values = spp
         npspp = zeros(shape, dtype=bool, order=aspp.general.NUMPY_DEFAULT_ORDER)
         for multiIndex, value in spp.items():

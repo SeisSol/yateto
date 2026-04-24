@@ -3,7 +3,7 @@ from .generic import Generic
 from ...gemm_configuration import tinytc
 from .tinytc import CopyScaleAddTinytc
 
-import importlib
+import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
 try:
   if gf_spec:

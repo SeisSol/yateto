@@ -45,13 +45,13 @@ class NoScope:
 
   def __exit__(self, type, value, traceback):
     pass
-  
+
 class Block:
   def __init__(self, writer, argument, foot = ''):
     self.writer = writer
     self.argument = argument
     self.foot = foot
-    
+
   def __enter__(self):
     space = ' ' if self.argument else ''
     self.writer(self.argument + space + '{')
@@ -69,36 +69,36 @@ class MultiBlock:
       self.foot = [''] * len(self.arguments)
     else:
       self.foot = foot
-  
+
   def __enter__(self):
     for arg in self.arguments:
       self.writer(arg + ' {')
       self.writer.indent += 1
-  
+
   def __exit__(self, type, value, traceback):
     # Blocks are closed in reverse order, thus reverse footer
     for arg, foot in zip(self.arguments, reversed(self.foot)):
       self.writer.indent -= 1
       self.writer('}' + foot)
-    
+
 class HeaderGuard:
   def __init__(self, writer, name):
     self.writer = writer
     self.name = name
-    
+
   def __enter__(self):
     self.writer('#ifndef ' + self.name)
     self.writer('#define ' + self.name)
 
   def __exit__(self, type, value, traceback):
     self.writer('#endif')
-    
+
 class PPIfBlock:
   def __init__(self, writer, name, typ):
     self.writer = writer
     self.name = name
     self.typ = typ
-    
+
   def __enter__(self):
     self.writer('#{} {}'.format(self.typ, self.name))
 
@@ -109,33 +109,33 @@ class Cpp:
   def __init__(self, streamOrFileName = sys.stdout):
     self.fileHandle = streamOrFileName
     self.indent = 0
-    
+
   def __enter__(self):
     self.out = open(self.fileHandle, 'w+') if isinstance(self.fileHandle, str) else self.fileHandle
     return self
-    
+
   def __exit__(self, type, value, traceback):
     if self.out is not sys.stdout:
       self.out.close()
     self.out = None
-    
+
   def __call__(self, code):
     indentSpace = self.indent * '  '
     for line in code.splitlines():
       self.out.write(indentSpace + line + '\n')
-  
+
   def emptyline(self):
     self.out.write('\n')
-      
+
   def If(self, argument):
     return Block(self, 'if ({})'.format(argument))
-      
+
   def For(self, argument):
     return Block(self, 'for ({})'.format(argument))
 
   def ForRange(self, variable, range):
     return self.For(f'int {variable} = {range.start}; {variable} < {range.end}; ++{variable}')
-    
+
   def Namespace(self, name):
     if len(name) == 0:
       return NoScope()
@@ -149,47 +149,47 @@ class Cpp:
 
   def AnonymousScope(self):
     return Block(self, '')
-    
+
   def Function(self, name, arguments = '', returnType = 'void', const = False):
     if returnType:
       returnType += ' '
     return Block(self, '{}{}({}){}'.format(returnType, name, arguments, ' const' if const else ''))
-    
+
   def functionDeclaration(self, name, arguments = '', returnType = 'void'):
     return self.__call__('{} {}({});'.format(returnType, name, arguments))
 
   def Class(self, name):
     return Block(self, 'class ' + name, foot=';')
-  
+
   def classDeclaration(self, name):
     return self.__call__('class {};'.format(name))
-  
+
   def forwardStruct(self, name):
     self.__call__('struct {};'.format(name))
 
   def Struct(self, name):
     return Block(self, 'struct ' + name, foot=';')
-    
+
   def HeaderGuard(self, name):
     return HeaderGuard(self, name)
-    
+
   def PPIfndef(self, name):
     return PPIfBlock(self, name, 'ifndef')
-    
+
   def PPIf(self, name):
     return PPIfBlock(self, name, 'if')
-    
+
   def label(self, name):
     self.indent -= 1
     self.__call__(name + ':')
     self.indent += 1
-    
+
   def includeSys(self, header):
     self.__call__('#include <{}>'.format(header))
 
   def include(self, header):
     self.__call__('#include "{}"'.format(header))
-    
+
   def includes(self, header_list):
     for header in header_list:
       self.include(header)

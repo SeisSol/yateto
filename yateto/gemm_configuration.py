@@ -13,7 +13,7 @@ class GemmTool(ABC):
   def __init__(self, operation_name: str, includes: List[str] = []):
     self.operation_name = operation_name
     self.includes = includes
-  
+
   def archSupported(self):
     return True
 
@@ -57,7 +57,7 @@ class MKL(BLASlike):
   def __init__(self, arch):
     self._arch = arch
     super().__init__('cblas_{}gemm'.format(arch.precision.lower()), ['mkl_cblas.h'])
-  
+
   def archSupported(self):
     return self._arch.host_name.lower() in {'snb', 'hsw', 'skx', 'knl'} or self._arch.host_name.lower().startswith('avx')
 

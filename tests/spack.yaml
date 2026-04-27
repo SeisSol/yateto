@@ -1,11 +1,11 @@
 spack:
   definitions:
-  - packages: 
+  - packages:
     - eigen@3.3.7
     - openblas@0.3.12
     - libxsmm+generator+shared@master
     - cmake@3.16.0
-  
+
   specs:
   - matrix:
     - [\$packages]

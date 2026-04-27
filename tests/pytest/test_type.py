@@ -186,7 +186,7 @@ class TestTensorSparsity:
 
     def test_bad_sparsity_shape_raises(self):
         wrong = np.ones((2, 2), dtype=bool)
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             Tensor("A", (3, 3), spp=wrong)
 
     def test_is_compute_constant_false_for_plain_tensor(self):

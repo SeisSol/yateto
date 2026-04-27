@@ -282,7 +282,7 @@ class Add(Op):
     for child in self:
       permuted = self.broadcast(child.indices, self.permute(child.indices, child.eqspp(), False))
       nzFlops += permuted.count_nonzero()
-    
+
     # ignore all first adds against zero (i.e. those in self.eqspp())
     return nzFlops - self.eqspp().count_nonzero()
 

@@ -58,7 +58,7 @@ class Architecture(object):
       name (str): name of the compute (main) architecture e.g., skx, thunderx2t99, power9
         sm_60, sm_61, etc.,
       backend (str): backend name e.g., cpp, cuda, hip, oneapi, hipsycl
-      precision (str): either 'd' or 's' character which stands for 'double' or 'single' precision
+      precision (str): either 'd' (or 'f64') or 's' (or 'f32') which stands for 'double'/FP64 or 'single'/FP32 precision, respectively
       alignment (int): length of a cache line in bytes
       enablePrefetch (bool): indicates whether the compute (main) architecture supports
           data prefetching
@@ -70,13 +70,13 @@ class Architecture(object):
     self.host_name = host_name
 
     self.precision = precision.upper()
-    if self.precision == 'Q':
+    if self.precision == ('Q', 'F128'):
       self.epsilon = 2**-112
       self.datatype = Datatype.F128
-    elif self.precision == 'D':
+    elif self.precision == ('D', 'F64'):
       self.epsilon = 2**-52
       self.datatype = Datatype.F64
-    elif self.precision == 'S':
+    elif self.precision == ('S', 'F32'):
       self.epsilon = 2**-23
       self.datatype = Datatype.F32
     else:

@@ -136,7 +136,7 @@ class Tensor(IdentifiedType):
 
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
-      raise ValueError(name, 'The given Matrix\'s shape must match the shape specification.')
+      raise ValueError(self._name, 'The given Matrix\'s shape must match the shape specification.')
     spp = aspp.general(spp) if not isinstance(spp, aspp.ASpp) else spp
     if setOnlyGroupSpp == False:
       self._spp = spp

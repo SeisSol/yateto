@@ -26,7 +26,7 @@ if 'CXX' in env['ENV']:
 
 # generate help text
 Help(vars.GenerateHelpText(env))
-  
+
 # handle unknown, maybe misspelled variables
 unknownVariables = vars.UnknownVariables()
 

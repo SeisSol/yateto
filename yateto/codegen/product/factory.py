@@ -11,21 +11,20 @@ class Description(object):
 
     self.isACsc = self.leftTerm.memoryLayout.isCSC()
     self.isBCsc = self.rightTerm.memoryLayout.isCSC()
-    
+
     rA = loopRanges(self.leftTerm, self.result.indices)
     rB = loopRanges(self.rightTerm, self.result.indices)
     rC = loopRanges(self.result, self.result.indices)
     assert testLoopRangesEqual(rA, rB)
     assert testLoopRangesAContainedInB(rA, rC)
     assert testLoopRangesAContainedInB(rB, rC)
-    
+
     rA.update(rB)
 
-    self.loopRanges = rA    
+    self.loopRanges = rA
 
 def generator(arch, descr, target):
   if target == 'cpu':
     return Generic(arch, descr)
   elif target == 'gpu':
     raise RuntimeError("Product operation has not been implemented for GPU-like architectures")
-

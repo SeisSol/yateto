@@ -8,7 +8,7 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
     self._target = target
-  
+
   def _pointer(self, cpp, targetName, baseName, term, loopIndices, const=True):
     indices = term.indices & loopIndices
     addressStr = term.memoryLayout.addressString(term.indices, indices) if len(indices) > 0 else ''
@@ -18,7 +18,7 @@ class Generic(object):
 
   def _alignedStart(self, term, loopIndices):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices)
-    
+
   def _memLayout(self, term, I, J):
     if len(I) == 0 and len(J) == 0:
       return DenseMemoryLayout((1,1))
@@ -34,7 +34,7 @@ class Generic(object):
 
   def _reduce(self, term, subset, memLayout):
     return reduceSpp(term.eqspp, term.indices, subset).reshape(memLayout.shape())
-  
+
   def _defuse(self, fusedRange, term, I):
     if len(I) == 1:
       return  {next(iter(I)): fusedRange}
@@ -42,14 +42,14 @@ class Generic(object):
 
   def generate(self, cpp, routineCache, gemm_cfg):
     d = self._descr
-    
+
     A = d.leftTerm.indices - d.loopIndices
     B = d.rightTerm.indices - d.loopIndices
     C = d.result.indices - d.loopIndices
     Im = set(A) & set(C)
     In = set(B) & set(C)
     Ik = set(A) & set(B)
-    
+
     hasOuterLoops = len(d.outerLoopIndices) > 0
 
     if hasOuterLoops and self._target == 'gpu':
@@ -60,13 +60,13 @@ class Generic(object):
     outerBname = '_B' if hasOuterLoops else d.rightTerm.name
     outerCname = '_C' if hasOuterLoops else d.result.name
     outerPrefetchName = '_Cprefetch' if hasOuterLoops and d.prefetchName is not None else d.prefetchName
-    
+
     hasInnerLoops = len(d.innerLoopIndices) > 0
     innerAname = '_Ain' if hasInnerLoops else outerAname
     innerBname = '_Bin' if hasInnerLoops else outerBname
     innerCname = '_Cin' if hasInnerLoops else outerCname
     innerPrefetchName = '_Cprefetchin' if hasInnerLoops and outerPrefetchName is not None else outerPrefetchName
-    
+
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In)
     CmemLayout = self._memLayout(d.result, Im, In)
@@ -88,7 +88,7 @@ class Generic(object):
       alignedStartC = self._alignedStart(d.result, d.outerLoopIndices) and self._alignedStart(d.result, d.innerLoopIndices),
       prefetchName = innerPrefetchName
     )
-    
+
     if not d.add:
       lr = dict()
       m, n, k = gemmDescr.mnk()
@@ -97,7 +97,7 @@ class Generic(object):
       lr.update( self._defuse(n, d.rightTerm, In) )
       writeBB = boundingBoxFromLoopRanges(d.result.indices, lr)
       initializeWithZero(cpp, self._arch, d.result, writeBB)
-    
+
     class LoGBody(object):
       def __call__(s):
         if hasInnerLoops:
@@ -127,4 +127,3 @@ class Generic(object):
         return flops
 
     return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody(), pragmaSimd=False)
-

@@ -4,7 +4,7 @@ from ..ast.node import LoopOverGEMM
 from .fused_gemm_automata import Context as FusedGemmsContext
 
 
-class MergeScalarMultiplications(object):   
+class MergeScalarMultiplications(object):
   def visit(self, cfg):
     n = len(cfg)-1
     i = 1
@@ -34,7 +34,7 @@ class SubstituteForward(object):
     for i in range(n):
       ua = cfg[i].action
       v = cfg[i+1]
-      
+
       if not ua.isCompound() \
           and ua.isRHSVariable() \
           and ua.term.writable \
@@ -49,7 +49,7 @@ class SubstituteForward(object):
           for j in range(i, n):
             cfg[j].action = cfg[j].action.substituted(when, by)
           cfg = LivenessAnalysis().visit(cfg)
-  
+
     return cfg
 
 class SubstituteBackward(object):
@@ -99,7 +99,11 @@ class MergeActions(object):
         V = ua.variables()
         for j in range(i+1,n):
           va = cfg[j].action
-          if va.isRHSVariable() and ua.result == va.term and va.result not in V and (ua.hasTrivialScalar() or va.hasTrivialScalar()):
+          if va.isRHSVariable() \
+              and ua.result == va.term \
+              and va.result not in V \
+              and (ua.hasTrivialScalar() or va.hasTrivialScalar()) \
+              and ua.result.isLocal():
             found = j
             break
           elif ua.result in va.variables() or ua.result == va.result:

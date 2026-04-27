@@ -136,15 +136,15 @@ class TestKernelPrefetch:
         A = Tensor("A", (4, 4))
         P = Tensor("P", (4, 4))
         kernel = Kernel("k", A["ij"] <= A["ij"], prefetch=P)
-        # _prefetch is stored as a list internally.
-        assert kernel._prefetch == [P]
+        # kernel.prefetch() is stored as a list internally.
+        assert kernel.prefetch() == [P]
 
     def test_accepts_list_of_tensors(self):
         A = Tensor("A", (4, 4))
         P1 = Tensor("P1", (4, 4))
         P2 = Tensor("P2", (4, 4))
         kernel = Kernel("k", A["ij"] <= A["ij"], prefetch=[P1, P2])
-        assert kernel._prefetch == [P1, P2]
+        assert kernel.prefetch() == [P1, P2]
 
     def test_rejects_invalid_prefetch(self):
         A = Tensor("A", (4, 4))

@@ -105,6 +105,9 @@ class Kernel(object):
       self.cfg = FindFusedGemms().visit(self.cfg)
       self.cfg = LivenessAnalysis().visit(self.cfg)
 
+  def prefetch(self):
+    return self._prefetch
+
 class KernelFamily(object):
   GROUP_INDEX = r'\((0|[1-9]\d*)\)'
   VALID_NAME = r'^{}({})$'.format(Kernel.BASE_NAME, GROUP_INDEX)

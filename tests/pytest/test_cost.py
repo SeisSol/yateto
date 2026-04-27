@@ -158,8 +158,8 @@ class TestExactCost:
         # A dense 4x4 matmul costs 112 in our accounting (2*N^3 - N^2 = 128-16=112).
         # Diagonal-of-diagonal must be much cheaper - exactly N products
         # (the contraction collapses to elementwise pairing).
-        # We expect something a lot less than 112 - let's require <= 16.
-        assert cost <= 16
+        # Thus, we obtain (FMA - add to zero): 2*N - N = 8 - 4 = 4.
+        assert cost == 4
 
 
 # ---------------------------------------------------------------------------

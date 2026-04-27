@@ -368,7 +368,7 @@ class TestLoopOverGEMM:
 
 
 # ---------------------------------------------------------------------------
-# FusedGEMMs - list-like container of LoGs
+# FusedGEMMs - list-like container of (pure GEMM) LoGs
 # ---------------------------------------------------------------------------
 
 

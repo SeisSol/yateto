@@ -81,7 +81,7 @@ class TestExampleScripts:
         # Every example must successfully run ``prepareUntilUnitTest``
         # on all its kernels.
         for kernel in g.kernels():
-            kernel.prepareUntilUnitTest()
+            kernel.prepareUntilUnitTest(arch)
             assert kernel.cfg is not None
 
     @pytest.mark.parametrize("script", BASIC_SCRIPTS)
@@ -122,7 +122,7 @@ class TestFlopRegression:
         # count for each.
         counts = []
         for kernel in g.kernels():
-            kernel.prepareUntilUnitTest()
+            kernel.prepareUntilUnitTest(arch)
             kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
             counts.append(kernel.nonZeroFlops)
 
@@ -135,7 +135,7 @@ class TestFlopRegression:
         g = Generator(arch)
         mod.add(g)
         kernel = g.kernels()[0]
-        kernel.prepareUntilUnitTest()
+        kernel.prepareUntilUnitTest(arch)
         kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
         # The ``minimal`` example's single kernel should come out with
         # a sensible (positive) flop count.
@@ -182,4 +182,4 @@ class TestKernelFamily:
         # We don't run ``generate`` here because on the nonlinearity
         # branch the Broadcast codegen is broken (see TestKnownBugs).
         for kernel in g.kernels():
-            kernel.prepareUntilUnitTest()
+            kernel.prepareUntilUnitTest(arch)

@@ -13,9 +13,6 @@ class FusedGemmsTinytc:
     def __init__(self, arch, descr):
         self._arch = arch
         self._descr = descr
-        self._ty = ScalarType(
-            FloatingType.f64) if self._arch.bytesPerReal == 8 else ScalarType(
-                FloatingType.f32)
 
     def generate(self, cpp, routineCache, cfg):
         args = dict()
@@ -39,7 +36,7 @@ class FusedGemmsTinytc:
                 is_constant[var] = node.tensor.is_compute_constant(
                 ) if isinstance(node, IndexedTensor) else False
                 arg = LocalValue(
-                    makeBatchType(self._ty, node.memoryLayout(),
+                    makeBatchType(toTinyTCType(var.datatype), node.memoryLayout(),
                                   is_constant[var], var.is_temporary), name)
                 args[var] = arg
                 vals[var] = makeLoad(bb, arg, gid, is_constant[var], var.is_temporary)
@@ -59,7 +56,7 @@ class FusedGemmsTinytc:
             if res.is_temporary:
                 res_val = bb.add(
                     AllocaInst(
-                        makeMemrefType(self._ty, res.memoryLayout(), False, True)))
+                        makeMemrefType(toTinyTCType(res.datatype), res.memoryLayout(), False, True)))
                 vals[res] = res_val
             else:
                 modified.add(res)
@@ -87,7 +84,7 @@ class FusedGemmsTinytc:
                 return ([IntImmValue(IntegerType.index, o) for o in offsets],
                         [IntImmValue(IntegerType.index, s) for s in sizes])
 
-            alpha = bb.add(ConstantInst(FloatImmValue(self._ty, scalar)))
+            alpha = bb.add(ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype), scalar)))
             op1_sub = bb.add(
                 SubviewInst(
                     op1_val,
@@ -96,7 +93,7 @@ class FusedGemmsTinytc:
                 SubviewInst(
                     op2_val,
                     *offsetSizeLists(node.rightTerm().memoryLayout(), k, n)))
-            beta = bb.add(ConstantInst(FloatImmValue(self._ty, 1.0 if add else 0.0)))
+            beta = bb.add(ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype), 1.0 if add else 0.0)))
             res_sub = bb.add(
                 SubviewInst(res_val,
                             *offsetSizeLists(node.memoryLayout(), m, n)))
@@ -119,7 +116,7 @@ class FusedGemmsTinytc:
             wrapper_args.append(
                 TinytcKernelArgument(name, str(key), is_constant[key],
                                      key.is_temporary, key in modified))
-        wrapper = TinytcWrapper(kernel, wrapper_args, self._arch.typename)
+        wrapper = TinytcWrapper(kernel, wrapper_args)
         cpp(wrapper.call())
         prototype = wrapper.prototype()
         routineCache.addRoutine(prototype,

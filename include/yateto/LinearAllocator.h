@@ -13,6 +13,12 @@ struct LinearAllocatorT {
     userSpaceMem = ptr;
   }
 
+  template <typename S>
+  void initialize(S* ptr) {
+    isInit = true;
+    userSpaceMem = reinterpret_cast<T*>(ptr);
+  }
+
   T* allocate(size_t size) {
     assert(isInit && "YATETO: Temporary-Memory manager hasn't been initialized");
     int currentByteCount = byteCount;

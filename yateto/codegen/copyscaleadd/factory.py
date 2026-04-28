@@ -3,7 +3,7 @@ from .generic import Generic
 from ...gemm_configuration import tinytc
 from .tinytc import CopyScaleAddTinytc
 
-import importlib
+import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
 try:
   if gf_spec:
@@ -21,7 +21,7 @@ class Description(object):
     self.beta = beta
     self.result = result
     self.term = term
-    
+
     assert self.alpha != 0.0, 'copyscaleadd does not support alpha=0.0 at the moment.'
     assert self.beta == 1.0 or self.beta == 0.0, 'copyscaleadd supports only beta=0.0 or beta=1.0 at the moment.'
 
@@ -37,7 +37,7 @@ class Description(object):
     for idx in rB:
       if idx not in rA:
         rAB[idx] = rB[idx]
-    
+
     self.loopRanges = rAB
 
 

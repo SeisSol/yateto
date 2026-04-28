@@ -26,17 +26,17 @@ class Description(object):
     self.alpha = alpha
     self.beta = beta
     self.prefetchName = prefetchName
-    
+
     self.isACsc = self.leftTerm.memoryLayout.isSparse()
     self.isBCsc = self.rightTerm.memoryLayout.isSparse()
-    
+
     bbA = BoundingBox.fromSpp(self.leftTerm.eqspp)
     bbB = BoundingBox.fromSpp(self.rightTerm.eqspp)
     bbC = BoundingBox.fromSpp(self.result.eqspp)
-    
+
     kA = 1 if not transA else 0
     kB = 0 if not transB else 1
-    
+
     k = bbA[kA] & bbB[kB]
     m = bbA[1-kA]
     n = bbB[1-kB]
@@ -46,19 +46,19 @@ class Description(object):
 
     self.alignedA = alignedStartA and not transA and self.leftTerm.memoryLayout.alignedStride()
     self.alignedC = alignedStartC and self.result.memoryLayout.alignedStride()
-    
+
     if self.alignedA and self.alignedC:
       m = m.aligned(arch)
     else:
       mStartAligned = arch.checkAlignment(m.start)
       self.alignedA = self.alignedA & mStartAligned
       self.alignedC = self.alignedC & mStartAligned
-    
+
     self._mnk = (m, n, k)
 
   def mnk(self):
     return self._mnk
-  
+
   def setBeta(self, beta):
     self.beta = beta
 

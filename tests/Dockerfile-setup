@@ -11,7 +11,7 @@ ARG GID=1000
 
 RUN addgroup --gid $GID tester
 RUN adduser --disabled-password --gecos '' --uid $UID --gid $GID tester
-RUN chown $UID:$GID /local_workspace /cache 
+RUN chown $UID:$GID /local_workspace /cache
 USER tester
 
 # copy repo from the local current directory (fetched with Jenkins) to the workdir of the image

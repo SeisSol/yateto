@@ -103,7 +103,7 @@ class Generic(object):
   def _generateSparseDense(self, cpp):
     d = self._descr
     m, n, k = d.mnk()
-    
+
     assert d.isACsc != d.isBCsc
 
     Aaccess = self._accessFun(d.leftTerm, (m.start, k.start), d.isACsc, d.transA)
@@ -153,11 +153,11 @@ class Generic(object):
   def _generateDenseDense(self, cpp):
     d = self._descr
     m, n, k = d.mnk()
-    
+
     Aaccess = self._accessFun(d.leftTerm, (m.start, k.start), False, d.transA)
     Baccess = self._accessFun(d.rightTerm, (k.start, n.start), False, d.transB)
     Caccess = self._accessFun(d.result, (m.start, n.start), False, False)
-    
+
     with cpp.For('int n = 0; n < {0}; ++n'.format(n.size())):
       if d.beta != 1.0:
         with cpp.For('int m = 0; m < {0}; ++m'.format(m.size())):

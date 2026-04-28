@@ -57,7 +57,7 @@ class Architecture(object):
       name (str): name of the compute (main) architecture e.g., skx, thunderx2t99, power9
         sm_60, sm_61, etc.,
       backend (str): backend name e.g., cpp, cuda, hip, oneapi, hipsycl
-      precision (str): either 'd' or 's' character which stands for 'double' or 'single' precision
+      precision (str): either 'd' (or 'f64') or 's' (or 'f32') which stands for 'double'/FP64 or 'single'/FP32 precision, respectively
       alignment (int): length of a cache line in bytes
       enablePrefetch (bool): indicates whether the compute (main) architecture supports
           data prefetching
@@ -69,11 +69,13 @@ class Architecture(object):
     self.host_name = host_name
 
     self.precision = precision.upper()
-    if self.precision == 'D':
+    if self.precision in ('D', 'F64'):
+      self.precision = 'D'
       self.bytesPerReal = 8
       self.typename = 'double'
       self.epsilon = 2.22e-16
-    elif self.precision == 'S':
+    elif self.precision in ('S', 'F32'):
+      self.precision = 'S'
       self.bytesPerReal = 4
       self.typename = 'float'
       self.epsilon = 1.19e-7
@@ -114,7 +116,7 @@ class Architecture(object):
 
   def onHeap(self, numReals):
     return (numReals * self.bytesPerReal) > self._tmpStackLimit
-  
+
   def __eq__(self, other):
     return self.name == other.name
 
@@ -194,7 +196,7 @@ def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_back
 
   if device_arch.startswith('sm_'):
     alignment = 64
-  elif device_arch.startswith('gfx'): 
+  elif device_arch.startswith('gfx'):
     alignment = 128
   elif re.match(r"\d+_\d+_\d+", device_arch):
     alignment = 32
@@ -230,10 +232,10 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
     alignment = host_def.alignment
   if host_def.prefetch is not None:
     prefetch = host_def.prefetch
-  
+
   if alignment is None:
     raise NotImplementedError(f'The architecture {host_def.archname} is unknown to Yateto, and no custom alignment was given')
-  
+
   if prefetch is None:
     raise NotImplementedError(f'The architecture {host_def.archname} is unknown to Yateto, and no custom prefetching info was given')
 

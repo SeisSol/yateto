@@ -8,7 +8,7 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
     self._target = target
-  
+
   def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True):
     indices = term.indices & loopIndices
     addressStr = term.memoryLayout.addressString(term.indices, indices, fixed) if len(indices) > 0 else ''
@@ -18,7 +18,7 @@ class Generic(object):
 
   def _alignedStart(self, term, loopIndices, fixed):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices, fixed)
-    
+
   def _memLayout(self, term, I, J, fixed):
     if len(I) == 0 and len(J) == 0:
       return DenseMemoryLayout((1,1))
@@ -34,7 +34,7 @@ class Generic(object):
 
   def _reduce(self, term, subset, memLayout, fixed):
     return reduceSpp(term.eqspp, term.indices, subset, fixed).reshape(memLayout.shape())
-  
+
   def _defuse(self, fusedRange, term, I):
     if len(I) == 1:
       return  {next(iter(I)): fusedRange}
@@ -42,14 +42,14 @@ class Generic(object):
 
   def _generateSingle(self, cpp, routineCache, gemm_cfg, fixed = {}):
     d = self._descr
-    
+
     A = d.leftTerm.indices - d.loopIndices
     B = d.rightTerm.indices - d.loopIndices
     C = d.result.indices - d.loopIndices
     Im = set(A) & set(C)
     In = set(B) & set(C)
     Ik = set(A) & set(B)
-    
+
     hasOuterLoops = len(d.outerLoopIndices) > 0
 
     if hasOuterLoops and self._target == 'gpu':
@@ -60,13 +60,13 @@ class Generic(object):
     outerBname = '_B' if hasOuterLoops else d.rightTerm.name
     outerCname = '_C' if hasOuterLoops else d.result.name
     outerPrefetchName = '_Cprefetch' if hasOuterLoops and d.prefetchName is not None else d.prefetchName
-    
+
     hasInnerLoops = len(d.innerLoopIndices) > 0
     innerAname = '_Ain' if hasInnerLoops else outerAname
     innerBname = '_Bin' if hasInnerLoops else outerBname
     innerCname = '_Cin' if hasInnerLoops else outerCname
     innerPrefetchName = '_Cprefetchin' if hasInnerLoops and outerPrefetchName is not None else outerPrefetchName
-    
+
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik, fixed)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In, fixed)
     CmemLayout = self._memLayout(d.result, Im, In, fixed)
@@ -88,7 +88,7 @@ class Generic(object):
       alignedStartC = self._alignedStart(d.result, d.outerLoopIndices, fixed) and self._alignedStart(d.result, d.innerLoopIndices, fixed),
       prefetchName = innerPrefetchName
     )
-    
+
     if not d.add:
       lr = dict()
       m, n, k = gemmDescr.mnk()
@@ -97,7 +97,7 @@ class Generic(object):
       lr.update( self._defuse(n, d.rightTerm, In) )
       writeBB = boundingBoxFromLoopRanges(d.result.indices, lr)
       initializeWithZero(cpp, self._arch, d.result, writeBB)
-    
+
     class LoGBody(object):
       def __call__(s):
         if hasInnerLoops:
@@ -134,7 +134,7 @@ class Generic(object):
 
     if len(unroll) == 0:
       return self._generateSingle(cpp, routineCache, gemm_cfg, fixed)
-    
+
     unrollNow = unroll[0]
 
     rngNow = d.loopRanges[unrollNow]
@@ -144,12 +144,12 @@ class Generic(object):
       fixedNow = dict(fixed)
       fixedNow[unrollNow] = i
       result += self._generateUnroll(cpp, routineCache, gemm_cfg, fixedNow, unroll[1:])
-    
+
     return result
 
   def generate(self, cpp, routineCache, gemm_cfg):
     d = self._descr
-    
+
     A = d.leftTerm.indices - d.loopIndices
     B = d.rightTerm.indices - d.loopIndices
     C = d.result.indices - d.loopIndices
@@ -166,7 +166,7 @@ class Generic(object):
       unrollNeeded |= set(d.rightTerm.indices)
     if d.result.memoryLayout.isSparse():
       unrollNeeded |= set(d.result.indices)
-    
+
     toBeUnrolled &= unrollNeeded
 
     return self._generateUnroll(cpp, routineCache, gemm_cfg, {}, list(toBeUnrolled))

@@ -4,7 +4,7 @@ class Generic(object):
   def __init__(self, arch, descr):
     self._arch = arch
     self._descr = descr
-  
+
   def _formatTerm(self, alpha, term, entry):
     prefix = ''
     if alpha == 0.0:
@@ -32,7 +32,7 @@ class Generic(object):
       else:
         writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
         initializeWithZero(cpp, self._arch, d.result, writeBB)
-    
+
 
     class CopyScaleAddBody(object):
       def __init__(self, resultEntry, termEntry):
@@ -67,7 +67,7 @@ class Generic(object):
       for entryR in sorted(zip(*nonzeros), key=lambda x: x[::-1]):
         entry = tuple(entryR[ pos ] for pos in indexmap)
         flops += CopyScaleAddBody(entryR, entry)()
-      
+
       return flops
 
     else:

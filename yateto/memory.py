@@ -13,11 +13,11 @@ class MemoryLayout(ABC):
 
   def shape(self):
     return self._shape
-  
+
   @abstractmethod
   def address(self, entry):
     pass
-  
+
   @abstractmethod
   def subtensorOffset(self, topLeftEntry):
     pass
@@ -32,7 +32,7 @@ class MemoryLayout(ABC):
 
   def mayFuse(self, positions):
     return len(positions) == 1
-  
+
   @classmethod
   @abstractmethod
   def fromSpp(cls, spp, **kwargs):
@@ -70,7 +70,7 @@ class MemoryLayout(ABC):
       start -= b*s
       stop -= B*s
     return ranges
-  
+
   def notWrittenAddresses(self, writeBB):
     if writeBB == self._bbox:
       return []
@@ -91,7 +91,7 @@ class DenseMemoryLayout(MemoryLayout):
   @classmethod
   def setAlignmentArch(cls, arch):
     cls.ALIGNMENT_ARCH = arch
-  
+
   def __init__(self, shape, boundingBox=None, stride=None, alignStride=False):
     super().__init__(shape)
 
@@ -108,13 +108,13 @@ class DenseMemoryLayout(MemoryLayout):
       self._stride = stride
     else:
       self._computeStride()
-  
+
   def _computeStride(self):
     stride = [1]
     for i in range(len(self._bbox)-1):
       stride.append(stride[i] * self._bbox[i].size())
     self._stride = tuple(stride)
-  
+
   def _alignBB(self):
     if self.ALIGNMENT_ARCH is not None:
       self._range0 = self._bbox[0]
@@ -122,7 +122,7 @@ class DenseMemoryLayout(MemoryLayout):
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
     else:
       warnings.warn('Set architecture with DenseMemoryLayout.setAlignmentArch(arch) if you want to use the align stride feature.', UserWarning)
-  
+
   def alignedStride(self):
     if self.ALIGNMENT_ARCH is None:
       return False
@@ -150,7 +150,7 @@ class DenseMemoryLayout(MemoryLayout):
 
   def permuted(self, permutation):
     newShape = tuple([self._shape[p] for p in permutation])
-    
+
     originalBB = BoundingBox([self._range0] + self._bbox[1:]) if self._range0 else self._bbox
     newBB = BoundingBox([copy.copy(originalBB[p]) for p in permutation])
     return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None)
@@ -161,7 +161,7 @@ class DenseMemoryLayout(MemoryLayout):
 
   def subtensorOffset(self, topLeftEntry):
     return self.address(topLeftEntry)
-  
+
   def notWrittenAddresses(self, writeBB):
     if writeBB == self._bbox:
       return []
@@ -173,10 +173,10 @@ class DenseMemoryLayout(MemoryLayout):
 
   def stride(self):
     return self._stride
-  
+
   def stridei(self, dim):
     return self._stride[dim]
-  
+
   def bbox(self):
     return self._bbox
 
@@ -188,7 +188,7 @@ class DenseMemoryLayout(MemoryLayout):
       return 1
     size = self._bbox[-1].size() * self._stride[-1]
     return size
-  
+
   def addressString(self, indices, I = None, Z = None, prefix='_', offsets=()):
     if len(self._bbox) == 0:
       return '0'
@@ -219,7 +219,7 @@ class DenseMemoryLayout(MemoryLayout):
 
   def mayFuse(self, positions):
     return all( [self._stride[j] == self._shape[i]*self._stride[i] for i,j in zip(positions[:-1], positions[1:])] )
-  
+
   def _subRange(self, positions):
     start = 0
     stop = 0
@@ -229,7 +229,7 @@ class DenseMemoryLayout(MemoryLayout):
       stop += s * (self._bbox[p].stop-1)
       s *= self._shape[p]
     return Range(start, stop+1)
-    
+
   def _firstStride(self, positions):
     return self._stride[ positions[0] ]
 
@@ -265,7 +265,7 @@ class DenseMemoryLayout(MemoryLayout):
 
   def isCompatible(self, spp):
     return BoundingBox.fromSpp(spp) in self.bbox()
-  
+
   def subslice(self, index, start, end):
     return MemoryLayoutView(self, index, start, end)
 
@@ -274,23 +274,23 @@ class DenseMemoryLayout(MemoryLayout):
 
   def __str__(self):
     return '{}(shape: {}, bounding box: {}, stride: {})'.format(type(self).__name__, self._shape, self._bbox, self._stride)
-  
+
   def isSparse(self):
     return False
-  
+
   def hasValue(self, entry):
     assert entry in self._bbox
     return True
-  
+
   def spp(self):
     raise NotImplementedError()
 
   def storage(self):
     return self
-  
+
   def alignmentOffset(self, dim):
     return 0
-  
+
   def equalStride(self, dim):
     return True
 
@@ -300,7 +300,7 @@ class CSCMemoryLayout(MemoryLayout):
 
     self.aligned = alignStride
     self._spp = spp
-    
+
     if len(self._shape) != 2:
       raise ValueError('CSCMemoryLayout may only be used for matrices.')
 
@@ -309,7 +309,7 @@ class CSCMemoryLayout(MemoryLayout):
       range0 = self._bbox[0]
       rnew = Range( DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(range0.start), DenseMemoryLayout.ALIGNMENT_ARCH.alignedUpper(range0.stop) )
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
-    
+
     nonzeros = spp.nonzero()
     nonzeros = sorted(zip(nonzeros[0], nonzeros[1]), key=lambda x: (x[1], x[0]))
 
@@ -322,13 +322,13 @@ class CSCMemoryLayout(MemoryLayout):
 
         for i in range(lower, upper):
           nonzeros_pre.add((np.int64(i), nonzero[1]))
-      
+
       nonzeros = list(nonzeros_pre)
       nonzeros = sorted(zip([nonzero[0] for nonzero in nonzeros], [nonzero[1] for nonzero in nonzeros]), key=lambda x: (x[1], x[0]))
-    
+
     self._rowIndex = np.ndarray(shape=(len(nonzeros),), dtype=int)
     self._colPtr = np.ndarray(shape=(self._shape[1]+1,), dtype=int)
-    
+
     lastCol = 0
     self._colPtr[0] = 0
     for i,entry in enumerate(nonzeros):
@@ -348,41 +348,41 @@ class CSCMemoryLayout(MemoryLayout):
 
   def bboxi(self, dim):
     return self._bbox[dim]
-  
+
   def rowIndex(self):
     return self._rowIndex
-  
+
   def colPointer(self):
     return self._colPtr
-  
+
   def isAlignedAddressString(self, indices, I = None, Z = None):
     if I is None:
       I = set(indices)
     positions = indices.positions(I)
     return len(positions) == 0 or (positions[0] == 0 and all(p != 0 for p in positions[1:]))
-  
+
   def address(self, entry):
     assert entry in self._bbox
 
     start = self._colPtr[ entry[1] ]
     stop = self._colPtr[ entry[1]+1 ]
     subRowInd = self._rowIndex[start:stop]
- 
+
     find = np.where(subRowInd == entry[0])[0]
     assert len(find) == 1
 
     return start + find[0]
-  
+
   def hasValue(self, entry):
     assert entry in self._bbox
 
     start = self._colPtr[ entry[1] ]
     stop = self._colPtr[ entry[1]+1 ]
     subRowInd = self._rowIndex[start:stop]
- 
+
     find = np.where(subRowInd == entry[0])[0]
     return len(find) == 1
-  
+
   def subtensorOffset(self, topLeftEntry):
     assert topLeftEntry in self._bbox
     assert topLeftEntry[0] <= self._bbox[0].start
@@ -394,7 +394,7 @@ class CSCMemoryLayout(MemoryLayout):
     for col in colRange:
       e.extend([(self._rowIndex[i]-rowRange.start, col-colRange.start) for i in range(self._colPtr[col], self._colPtr[col+1])])
     return e
-  
+
   def entriesRel(self, *rng):
     entries = self.entries(*rng)
     return list(enumerate(entries))
@@ -426,22 +426,22 @@ class CSCMemoryLayout(MemoryLayout):
 
   def __eq__(self, other):
     return self._bbox == other._bbox and np.array_equal(self._rowIndex, other._rowIndex) and np.array_equal(self._colPtr, other._colPtr)
-  
+
   def subslice(self, index, start, end):
     return MemoryLayoutView(self, index, start, end)
-  
+
   def spp(self):
     return self._spp
-  
+
   def storage(self):
     return self
-  
+
   def alignmentOffset(self, dim):
     return 0
 
   def isSparse(self):
     return True
-  
+
   def equalStride(self, dim):
     return False
 
@@ -460,7 +460,7 @@ class PatternMemoryLayout(MemoryLayout):
       range0 = self._bbox[0]
       rnew = Range( DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(range0.start), DenseMemoryLayout.ALIGNMENT_ARCH.alignedUpper(range0.stop) )
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
-    
+
     nonzeros = spp.nonzero()
     nonzeros = sorted(zip(*nonzeros), key=lambda x: x[::-1])
 
@@ -473,10 +473,10 @@ class PatternMemoryLayout(MemoryLayout):
 
         for i in range(lower, upper):
           nonzeros_pre.add(tuple([np.int64(i)] + list(nonzero[1:])))
-      
+
       nonzeros = list(nonzeros_pre)
       nonzeros = sorted(zip(*[[nonzero[i] for nonzero in nonzeros] for i in range(len(self._shape))]), key=lambda x: x[::-1])
-    
+
     # keep everything in F order
     self._pattern = np.zeros(self._shape, dtype=int, order='F')
 
@@ -487,7 +487,7 @@ class PatternMemoryLayout(MemoryLayout):
 
   def requiredReals(self):
     return len(self._nonzeros)
-  
+
   def isSparse(self):
     return True
 
@@ -496,23 +496,23 @@ class PatternMemoryLayout(MemoryLayout):
 
   def bboxi(self, dim):
     return self._bbox[dim]
-  
+
   def hasValue(self, entry):
     return self._pattern[tuple(entry)] > 0
-  
+
   def address(self, entry):
     assert entry in self._bbox
     assert self._pattern[tuple(entry)] > 0
 
     return self._pattern[tuple(entry)] - 1
-  
+
   def subtensorOffset(self, topLeftEntry):
     tle = topLeftEntry
     assert topLeftEntry in self._bbox
 
     subpat = [self._pattern[ex] for ex in self._nonzeros if
       all(e >= tle[i] for i,e in enumerate(ex))]
-    
+
     result = subpat[0] - 1 if len(subpat) > 0 else 0
 
     assert result >= 0
@@ -533,7 +533,7 @@ class PatternMemoryLayout(MemoryLayout):
 
   def mayVectorizeDim(self, dim):
     return dim == 0 and self.aligned
-  
+
   def pattern(self):
     return self._pattern
 
@@ -551,7 +551,7 @@ class PatternMemoryLayout(MemoryLayout):
     sppOk = set(comp.entries(*comp._bbox)).issubset(set(self.entries(*comp._bbox)))
 
     return bboxOk and sppOk
-  
+
   def vec(self, indices, I, Z):
     positionsI = indices.positions(I)
     positionsZ = indices.positionsIncomplete(Z)
@@ -565,7 +565,7 @@ class PatternMemoryLayout(MemoryLayout):
       selector[p] = z
     for p in positionsI:
       selector[p] = slice(None)
-    
+
     pattern = self._pattern[tuple(selector)].transpose(positionsI).flatten(order='F')
 
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
@@ -581,7 +581,7 @@ class PatternMemoryLayout(MemoryLayout):
 
     if positionsI[0] > positionsJ[0]:
       positionsJ, positionsI = positionsI, positionsJ
-    
+
     error = lambda: None
     selector = [error for _ in range(len(self._shape))]
     dimmap = [error for _ in range(len(self._shape))]
@@ -607,7 +607,7 @@ class PatternMemoryLayout(MemoryLayout):
     pattern = self._pattern.transpose(dimmap)[tuple(selector)].reshape((sizeI, sizeJ), order='F')
 
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
-  
+
   def addressString(self, indices, I = None, Z = None, prefix='_'):
     # handled differently; via unrolling
     return ''
@@ -615,7 +615,7 @@ class PatternMemoryLayout(MemoryLayout):
   def isAlignedAddressString(self, indices, I = None, Z = None):
     # TODO
     return self.aligned
-  
+
   def mayFuse(self, positions):
     # we can always generate a new pattern
     return True
@@ -627,7 +627,7 @@ class PatternMemoryLayout(MemoryLayout):
     # search for: all zeros
     nzp = (self._pattern != 0)
     return nzp.sum(axis=dim) == nzp.max(axis=dim) * nzp.shape[dim]
-  
+
   def alignmentOffset(self, dim):
     return 0
 
@@ -651,19 +651,19 @@ class MemoryLayoutView(MemoryLayout):
     self.index = index
     self.start = start
     self.end = end
-  
+
   def relidx(self, index):
     return tuple(index[i] if i != self.index else index[i] + self.start for i in range(len(self._shape)))
-  
+
   def relbox(self, bbox):
     return BoundingBox([Range(max(bbox[i].start + self.start, self.start), min(bbox[i].stop + self.start, self.end)) if i == self.index else bbox[i] for i in range(len(self._shape))])
-  
+
   def relspp(self, spp):
     subslice = tuple(slice(self.start, self.end) if i == self.index else slice(None) for i in range(spp.ndim))
     superarray = np.zeros(tuple(self.base.shape()), dtype=bool)
     superarray[subslice] = spp.as_ndarray()
     return aspp.general(superarray)
-  
+
   def relranges(self):
     starts, ends = self.base.relranges()
     starts[self.index] = max(starts[self.index], self.start)
@@ -672,23 +672,23 @@ class MemoryLayoutView(MemoryLayout):
 
   def __contains__(self, bbox):
     return self.base.__contains__(self.relbox(bbox))
-  
+
   def __eq__(self, other):
     return self.storage() == other.storage() and self.relranges() == other.relranges()
-  
+
   def address(self, entry):
     return self.base.address(self.relidx(entry))
-  
+
   def subtensorOffset(self, topLeftEntry):
     return self.base.subtensorOffset(self.relidx(topLeftEntry))
-  
+
   def alignedStride(self):
     return self.base.alignedStride() and (self.index != 0 or DenseMemoryLayout.ALIGNMENT_ARCH.checkAlignment(self.end - self.start))
-  
+
   def fromSpp(self):
     # cannot be implemented. Call should result in error.
     raise NotImplementedError()
-  
+
   def isCompatible(self, spp):
     # only a rough criterion. Can possibly be refined.
     if spp.as_ndarray().shape != tuple(self.shape()):
@@ -698,19 +698,19 @@ class MemoryLayoutView(MemoryLayout):
 
   def mayVectorizeDim(self, dim):
     return self.base.mayVectorizeDim(dim)
-  
+
   def isAlignedAddressString(self, indices, I = None, Z = None):
     return self.base.isAlignedAddressString(indices, I, Z)
-  
+
   def addressString(self, indices, I = None, Z = None, prefix='_', offsets=()):
     if len(offsets) == 0:
       offsets = [0] * len(self._shape)
     newOffsets = tuple(offsets[i] if self.index != i else offsets[i] + self.start for i in range(len(self._shape)))
     return self.base.addressString(indices, I, Z, prefix, newOffsets)
-  
+
   def subslice(self, index, start, end):
     return MemoryLayoutView(self, index, start, end)
-  
+
   def unfold(self, indices, I, J):
     positionsI = indices.positions(I)
     positionsJ = indices.positions(J)
@@ -728,7 +728,7 @@ class MemoryLayoutView(MemoryLayout):
       scale *= shape[p]
 
     return MemoryLayoutView(self.base.unfold(indices, I, J), newIndex, self.start * scale, self.end * scale)
-  
+
   def withDummyDimension(self):
     return MemoryLayoutView(self.base.withDummyDimension(), self.index, self.start, self.end)
 
@@ -744,11 +744,11 @@ class MemoryLayoutView(MemoryLayout):
       return self.base.defuse(newFusedRange, indices, I)
     else:
       return self.base.defuse(fusedRange, indices, I)
-  
+
   def stride(self):
     # pass through
     return self.base.stride()
-  
+
   def stridei(self, dim):
     # pass through
     return self.base.stridei(dim)
@@ -757,34 +757,34 @@ class MemoryLayoutView(MemoryLayout):
     # focus only on the subview
     outside = set(self.base.notWrittenAddresses(self.bbox()))
     return list(set(self.base.notWrittenAddresses(self.relbox(writeBB))) - outside)
-  
+
   def bbox(self):
     return self.relbox(self.base.bbox())
-  
+
   def storage(self):
     return self.base.storage()
-  
+
   def permuted(self, permutation):
     return MemoryLayoutView(self.base.permuted(permutation), permutation[self.index], self.start, self.end)
-  
+
   def entries(self, *rng):
     return self.base.entries([Range(r.start + self.start, r.stop + self.start) if self.index == i else r for i,r in enumerate(rng)])
-  
+
   def entriesRel(self, *rng):
     return self.base.entriesRel([Range(r.start + self.start, r.stop + self.start) if self.index == i else r for i,r in enumerate(rng)])
-  
+
   def mayFuse(self, positions):
     return (self.index not in positions or positions[-1] == self.index) and self.base.mayFuse(positions)
 
   def __repr__(self):
     return f'MemoryLayoutView(index: {self.index}; range: [{self.start},{self.end}); base: {self.base})'
-  
+
   def alignmentOffset(self, dim):
     val = self.base.alignmentOffset(dim)
     if self.index == dim:
       newval = val + self.start
       val = newval - DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(newval)
     return val
-  
+
   def equalStride(self, dim):
     return self.base.equalStride(dim)

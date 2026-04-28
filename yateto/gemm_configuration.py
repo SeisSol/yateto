@@ -36,6 +36,7 @@ class BLASlike(GemmTool):
   def __init__(self, prefix, includes: List[str], c_code_init: str = ''):
     super().__init__(prefix, includes)
     self.c_code_init = c_code_init
+    self.prefix = prefix
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     return Preference.MODERATE

@@ -107,7 +107,7 @@ class TestKernelPreparation:
         C = Tensor("C", (4, 4))
         kernel = Kernel("k", C["ij"] <= A["ik"] * B["kj"])
         assert kernel.cfg is None
-        kernel.prepareUntilUnitTest()
+        kernel.prepareUntilUnitTest(arch)
         # After prepare, cfg is populated and each ProgramPoint has a
         # live set (LivenessAnalysis has run).
         assert kernel.cfg is not None
@@ -119,7 +119,7 @@ class TestKernelPreparation:
         B = Tensor("B", (8, 8))
         C = Tensor("C", (8, 8))
         kernel = Kernel("k", C["ij"] <= A["ik"] * B["kj"])
-        kernel.prepareUntilUnitTest()
+        kernel.prepareUntilUnitTest(arch)
         kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
         # The exact flop count for a dense 8x8 matmul is 960 - same
         # value we pinned down in test_ast_visitor.

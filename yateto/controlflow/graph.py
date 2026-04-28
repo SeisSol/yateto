@@ -276,7 +276,7 @@ class CNFClause:
     self.fulfilled = False
 
   def negateVariables(self):
-    return {var: ~self.variables[var] for var in self.variables}
+    return {var: not self.variables[var] for var in self.variables}
 
   def unite(self, clause):
     output = CNFClause([])
@@ -390,7 +390,8 @@ class CNFCondition:
 
 class LiveSet:
   def __init__(self, data: dict):
-    self.data = data
+    makeCNF = lambda x: x if isinstance(x, CNFCondition) else CNFCondition(x)
+    self.data = {k:makeCNF(data[k]) for k in data}
 
   def __sub__(self, other):
     if isinstance(other, dict):
@@ -400,9 +401,9 @@ class LiveSet:
 
     for var in other.data:
       if var in result:
-        result[var] &= ~other.data[var]
-        if not result[var]:
-          result.remove(var)
+        result[var] &= not other.data[var]
+        if result[var].unfulfillable():
+          del result[var]
 
     return LiveSet(result)
 
@@ -415,14 +416,16 @@ class LiveSet:
     for var in other.data:
       if var in result:
         result[var] |= other.data[var]
+      else:
+        result[var] = other.data[var]
 
     return LiveSet(result)
 
   def __contains__(self, element):
     if isinstance(element, tuple):
-      return element[0] in self.data and (~self.data[element[0]] & element[1]).unfulfillable()
+      return element[0] in self.data and ((not self.data[element[0]]) & element[1]).unfulfillable()
     else:
-      return element in self.data
+      return element in self.data and (not self.data[element[0]]).unfulfillable()
 
   def variables(self):
     return set(k for k in self.data)

@@ -248,7 +248,7 @@ class UnitTestFactory(KernelFactory):
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
-  def create_Broadcast(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)

@@ -70,13 +70,13 @@ class Architecture(object):
     self.host_name = host_name
 
     self.precision = precision.upper()
-    if self.precision == ('Q', 'F128'):
+    if self.precision in ('Q', 'F128'):
       self.epsilon = 2**-112
       self.datatype = Datatype.F128
-    elif self.precision == ('D', 'F64'):
+    elif self.precision in ('D', 'F64'):
       self.epsilon = 2**-52
       self.datatype = Datatype.F64
-    elif self.precision == ('S', 'F32'):
+    elif self.precision in ('S', 'F32'):
       self.epsilon = 2**-23
       self.datatype = Datatype.F32
     else:

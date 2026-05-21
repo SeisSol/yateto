@@ -59,7 +59,7 @@ class TestDense:
         from yateto.ast.indices import Indices
         src = Indices("ijk", (2, 3, 4))
         tgt = Indices("ik", (2, 4))
-        d = aspp.dense((2, 3, 4)).indexSum(src, tgt)
+        d = aspp.dense((2, 3, 4)).indexSum(src, tgt, ())
         assert d.shape == (2, 4)
 
     def test_add_same_shape(self):

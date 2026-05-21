@@ -705,12 +705,13 @@ class InitializerGenerator(object):
   class PatternTensorView(TensorView):
     PATTERN_NAME = 'Pattern'
 
-    def typename(self, dim, arch):
-      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim}, {arch.typename},{arch.uintTypename}>'
+    def typename(self, dim, arch, const):
+      constStr = 'true' if const else 'false'
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim}, {arch.typename}, {arch.uintTypename}, {constStr}>'
 
-    def generate(self, cpp, memLayout, arch, index):
+    def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {});'.format(
-          self.typename(len(memLayout.shape()), arch),
+          self.typename(len(memLayout.shape()), arch, const),
           self.ARGUMENT_NAME,
           self.listToInitializerList(memLayout.shape()),
           self.PATTERN_NAME + (index if index is not None else '')

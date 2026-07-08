@@ -2,6 +2,7 @@ from ..common import *
 from .generic import Generic
 from ...gemm_configuration import tinytc
 from .tinytc import CopyScaleAddTinytc
+from .csa_gen import CopyScaleAddGenerator
 
 import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')

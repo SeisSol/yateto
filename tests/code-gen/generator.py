@@ -2,7 +2,7 @@
 
 import os, errno
 import argparse
-import importlib.util
+import importlib
 from yateto import *
 from yateto.ast.visitor import PrettyPrinter, FindTensors, PrintEquivalentSparsityPatterns
 from yateto.codegen.code import Cpp
@@ -14,9 +14,8 @@ cmdLineParser.add_argument('--output_dir', type=str, default='./', help='output 
 cmdLineParser.add_argument('example_script', type=str, help='A yateto example script from the examples folder (without file extension).')
 cmdLineArgs = cmdLineParser.parse_args()
 
-exampleSpec = importlib.util.find_spec(cmdLineArgs.example_script)
 try:
-  example = exampleSpec.loader.load_module()
+  example = importlib.import_module(cmdLineArgs.example_script)
 except:
   raise RuntimeError('Could not find example ' + cmdLineArgs.example_script)
 

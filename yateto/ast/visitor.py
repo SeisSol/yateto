@@ -213,12 +213,14 @@ class PrintEquivalentSparsityPatterns(Visitor):
       colorsSpec = importlib.util.find_spec('matplotlib.colors') if mplSpec else None
       try:
         if pltSpec:
-          cls.plt = pltSpec.loader.load_module()
+          cls.plt = importlib.util.module_from_spec(pltSpec)
+          pltSpec.loader.exec_module(cls.plt)
       except:
         print('An exception occured trying to load matplotlib. This can be ignored in most cases')
         cls.plt = None
       if colorsSpec:
-        cls.colors = colorsSpec.loader.load_module()
+        cls.colors = importlib.util.module_from_spec(colorsSpec)
+        colorsSpec.loader.exec_module(cls.colors)
       cls.mpl_load_attempt = True
 
   def __init__(self, directory):

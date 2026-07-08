@@ -11,10 +11,10 @@ import lzma
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')
 etreeSpec = importlib.util.find_spec('lxml.etree') if lxmlSpec else None
-if etreeSpec:
-  etree = etreeSpec.loader.load_module()
+if etreeSpec is not None:
+  import lxml.etree as etree
 else:
-  etree = importlib.util.find_spec('xml.etree.ElementTree').loader.load_module()
+  import xml.etree.ElementTree as etree
 
 def __transposeMatrix(matrix):
   matrixT = dict()

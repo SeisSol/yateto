@@ -6,12 +6,6 @@ from ..common import BatchedOperationsAux
 # Optional modules
 import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
-try:
-  if gf_spec:
-    gf = gf_spec.loader.load_module()
-except:
-  raise ('Cannot load gemmforge.')
-
 
 class CopyScaleAddGenerator(object):
   def __init__(self, arch, descr):
@@ -67,6 +61,8 @@ class CopyScaleAddGenerator(object):
 
     """
     if (gf_spec):
+      import gemmforge as gf
+
       d = self._descr  # type: copyscaleadd.Description
       m = d.loopRanges[d.result.indices[0]]
       n = d.loopRanges[d.result.indices[1]]

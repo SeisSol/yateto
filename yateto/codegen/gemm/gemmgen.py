@@ -80,14 +80,14 @@ class GemmGen(object):
     if o > 0:
       return '{} + {}'.format(term.name, o)
     return term.name
-    
+
   def generate(self, cpp, routineCache):
     d = self._descr
     m, n, k = d.mnk()
     ldA = 0 if d.isACsc else d.leftTerm.memoryLayout.stridei(1)
     ldB = 0 if d.isBCsc else d.rightTerm.memoryLayout.stridei(1)
     ldC = d.result.memoryLayout.stridei(1)
-    
+
     assert (d.transA and (k,m) in d.leftTerm.memoryLayout) or (not d.transA and (m,k) in d.leftTerm.memoryLayout)
     assert (d.transB and (n,k) in d.rightTerm.memoryLayout) or (not d.transB and (k,n) in d.rightTerm.memoryLayout)
     assert (m,n) in d.result.memoryLayout
@@ -103,7 +103,7 @@ class GemmGen(object):
     if d.isBCsc:
       sppB = d.rightTerm.memoryLayout.entries(k, n)
       sppBRows = d.rightTerm.memoryLayout.shape()[0]
-    
+
     if d.isACsc and d.isBCsc:
       # count the flops by splitting into outer products (i.e. partition by k)
       # for each outer product, we need to compute all-by-all nonzero entries for m and n
@@ -118,7 +118,7 @@ class GemmGen(object):
       flops = 2 * m.size() * len(sppB)
     else:
       flops = 2 * m.size() * n.size() * k.size()
-    
+
     if isinstance(self._gemm_cfg, BLASlike):
       ptr_a = self._pointer(term=d.leftTerm, offset2=(m.start, k.start), transpose=d.transA)
       ptr_b = self._pointer(term=d.rightTerm, offset2=(k.start, n.start), transpose=d.transB)
@@ -289,13 +289,13 @@ class ExecuteGemmGen(RoutineGenerator):
     self._mode = gemm_cfg.operation_name
     self._cmd = gemm_cfg.cmd
     self._blockSize = gemm_cfg.blockSize(gemmDescr['M'], gemmDescr['N'], gemmDescr['K']) if hasattr(gemm_cfg, 'blockSize') else dict()
-  
+
   def __eq__(self, other):
     return self._arch == other._arch and \
            self._gemmDescr == other._gemmDescr and \
            self._sppA == other._sppA and \
            self._sppB == other._sppB
-  
+
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):
       cpp('extern long long libxsmm_num_total_flops;')
@@ -315,7 +315,7 @@ class ExecuteGemmGen(RoutineGenerator):
 Given command: {' '.join(strcmd)}
 Stdout: {result.stdout}
 Stderr: {result.stderr}""")
-  
+
   def __call__(self, routineName, fileName):
     cpu_arch = self._arch.host_name
 
@@ -396,7 +396,7 @@ Stderr: {result.stderr}""")
         self._shape = shape
         self._spp = spp
         self._temp = None
-      
+
       def __enter__(self):
         if self._spp is not None:
           self._temp = tempfile.NamedTemporaryFile()
@@ -409,11 +409,11 @@ Stderr: {result.stderr}""")
           self._temp.flush()
           return self._temp.name
         return None
-      
+
       def __exit__(self, exc_type, exc_val, exc_tb):
         if self._spp is not None:
           self._temp.__exit__(exc_type, exc_val, exc_tb)
-    
+
     with SparsityWrapper((self._gemmDescr['M'], self._gemmDescr['K']), self._sppA) as afile:
       with SparsityWrapper((self._sppBRows if self._mode=='pspamm' else self._gemmDescr['K'], self._gemmDescr['N']), self._sppB) as bfile:
         if self._mode == 'libxsmm':
@@ -529,7 +529,7 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
   {alpha}, // alpha
   {beta}, // beta
   {prefetch_flag} // prefetch
-); 
+);
 """.format(kernel_var_name=kernel_var_name,
            prec=self._arch.typename, M=M, N=N, K=K,
            ldA=ldA, ldB=ldB, ldC=ldC,

@@ -5,14 +5,13 @@
 
 namespace yateto {
 
-template<typename KernelType>
+template <typename KernelType>
 auto getMaxTmpMemRequired(KernelType& krnl) {
   return KernelType::TmpMaxMemRequiredInBytes;
 }
 
-template<typename KernelType, typename... OtherKernelTypes>
-auto getMaxTmpMemRequired(KernelType& krnl,
-                          OtherKernelTypes&... otherKrnls) {
+template <typename KernelType, typename... OtherKernelTypes>
+auto getMaxTmpMemRequired(KernelType& krnl, OtherKernelTypes&... otherKrnls) {
   auto currentTmpMem = KernelType::TmpMaxMemRequiredInBytes;
   auto otherTmpMem = getMaxTmpMemRequired(otherKrnls...);
   return (currentTmpMem > otherTmpMem) ? currentTmpMem : otherTmpMem;
@@ -28,6 +27,6 @@ constexpr size_t leadDim() noexcept {
   return dimSize<Tensor, 0>();
 }
 
-} // yateto
+} // namespace yateto
 
 #endif // YATETO_MISC_H_

@@ -1,0 +1,43 @@
+name: yateto-pytest
+
+# Fast, dependency-free Python-level tests.  Runs on every push and
+# complements the heavier ``yateto-cpu`` workflow (which builds C++
+# and exercises each GEMM back-end).
+
+on: push
+
+jobs:
+  pytest:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install
+      run: |
+        pip install -e .
+        pip install pytest pytest-cov hypothesis numpy
+
+    - name: Run pytest suite
+      run: |
+        python -m pytest tests/pytest/ -v --tb=short \
+                 --cov=yateto \
+                 --cov-report=xml \
+                 --cov-report=term-missing \
+                 --cov-branch
+
+    - name: Upload coverage
+      if: matrix.python-version == '3.12'
+      uses: actions/upload-artifact@v7
+      with:
+        name: python-coverage
+        path: coverage.xml

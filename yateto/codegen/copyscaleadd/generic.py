@@ -4,7 +4,7 @@ class Generic(object):
   def __init__(self, arch, descr):
     self._arch = arch
     self._descr = descr
-  
+
   def _formatTerm(self, alpha, term):
     prefix = ''
     if alpha == 0.0:

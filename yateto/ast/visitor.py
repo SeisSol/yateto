@@ -15,7 +15,7 @@ class Visitor(object):
     method = 'visit_' + node.__class__.__name__
     visitor = getattr(self, method, self.generic_visit)
     return visitor(node, **kwargs)
-  
+
   def generic_visit(self, node, **kwargs):
     for child in node:
       self.visit(child, **kwargs)
@@ -37,7 +37,7 @@ def addIndent(string, indent):
 class PrettyPrinter(Visitor):
   def __init__(self):
     self._indent = 0
-    
+
   def generic_visit(self, node):
     print('  ' * self._indent + str(node))
     self._indent = self._indent + 1
@@ -54,7 +54,7 @@ class ComputeSparsityPattern(Visitor):
     else:
       spps = [self.visit(child) for child in node]
     return node.computeSparsityPattern(*spps)
-  
+
   def visit_IndexedTensor(self, node):
     return node.eqspp()
 
@@ -89,7 +89,7 @@ class FindIndexPermutations(Visitor):
     for child in node:
       permutationVariants.update( self.visit(child) )
     return permutationVariants
-  
+
   def variantsFixedRootPermutation(self, node, fixedPerm, permutationVariants):
     variants = dict()
     minCost = LoGCost.addIdentity()
@@ -150,10 +150,10 @@ class FindIndexPermutations(Visitor):
     permutationVariants = self.visit(node.term())
     permutationVariants[node] = {key: self.Variant(variant._cost, [key]) for key,variant in permutationVariants[node.term()].items()}
     return permutationVariants
-  
+
   def visit_Product(self, node):
     return self.allPermutationsNoCostBinaryOp(node)
-    
+
   def visit_IndexSum(self, node):
     permutationVariants = self.findVariants(node)
     tV = permutationVariants[node.term()]
@@ -171,7 +171,7 @@ class FindIndexPermutations(Visitor):
 
   def visit_Contraction(self, node):
     permutationVariants = self.findVariants(node)
-    
+
     variants = dict()
     iterator = itertools.permutations(node.indices)
     for Cs in iterator:
@@ -230,7 +230,7 @@ class PrintEquivalentSparsityPatterns(Visitor):
     self._directory = directory
     self._cmap = self.colors.ListedColormap(['white', 'black'])
     self._norm = self.colors.BoundaryNorm([0.0, 0.5, 1.0], 2, clip=True)
-  
+
   def generic_visit(self, node):
     nameFun = getattr(node, 'name', None)
     name = nameFun() if nameFun else '_result'

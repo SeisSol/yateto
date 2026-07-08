@@ -17,7 +17,7 @@ class Variable(object):
 
   def maySubstitute(self, when, by):
     return self.substituted(when, by).memoryLayout().isCompatible(self.eqspp())
-  
+
   def substituted(self, when, by, memoryLayout=None):
     return by if self == when else self
 
@@ -38,13 +38,13 @@ class Variable(object):
 
   def __hash__(self):
     return hash(self.name)
-  
+
   def __str__(self):
     return self.name
-  
+
   def __repr__(self):
     return str(self)
-  
+
   def __eq__(self, other):
     isEq = self.name == other.viewed().name # and self._memoryLayout == other._memoryLayout
     assert not isEq or (self.writable == other.viewed().writable and self._memoryLayout == other.viewed()._memoryLayout)
@@ -53,7 +53,7 @@ class Variable(object):
   def setWritable(self, name):
     if self.name == name:
       self.writable = True
-  
+
   def viewed(self):
     return self
 
@@ -66,18 +66,18 @@ class VariableView(object):
   @property
   def tensor(self):
     return self.variable.tensor
-  
+
   @property
   def writable(self):
     return self.variable.writable
-  
+
   @property
   def is_temporary(self):
     return self.variable.is_temporary
-  
+
   def maySubstitute(self, when, by):
     return self.substituted(when, by).memoryLayout().isCompatible(self.eqspp())
-  
+
   def substituted(self, when, by, memoryLayout=None):
     return by if self == when else self
 
@@ -104,13 +104,13 @@ class VariableView(object):
 
   def __hash__(self):
     return hash(self.variable.name)
-  
+
   def __str__(self):
     return f'{self.variable.name}'
-  
+
   def __repr__(self):
     return str(self)
-  
+
   def __eq__(self, other):
     isEq = self.variable == other.viewed() and self._memoryLayout == other._memoryLayout
     return isEq
@@ -170,10 +170,10 @@ class ProgramAction(object):
 
   def isRHSVariable(self):
     return not self.isRHSExpression()
-  
+
   def isCompound(self):
     return self.add
-  
+
   def hasTrivialScalar(self):
     return self.scalar is None or self.scalar == 1.0
 

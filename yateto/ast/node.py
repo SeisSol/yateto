@@ -11,38 +11,38 @@ class Node(ABC):
     self._children = []
     self._eqspp = None
     self.prefetch = None
-  
+
   def size(self):
     return self.indices.size()
-  
+
   def shape(self):
     return self.indices.shape()
-  
+
   @abstractmethod
   def nonZeroFlops(self):
     pass
 
   def __iter__(self):
     return iter(self._children)
-  
+
   def __getitem__(self, key):
     return self._children[key]
-  
+
   def __len__(self):
     return len(self._children)
-  
+
   def setChildren(self, children):
     self._children = children
 
   def eqspp(self):
     return self._eqspp
-  
+
   def setEqspp(self, spp):
     self._eqspp = spp
 
   def boundingBox(self):
     return BoundingBox.fromSpp(self._eqspp)
-  
+
   @abstractmethod
   def memoryLayout(self):
     pass
@@ -63,11 +63,11 @@ class Node(ABC):
   def permute(self, indices, spp, strict=True):
     perm = tuple(indices.find(idx) for idx in self.indices if idx in indices or strict)
     return spp.transposed(perm)
-  
+
   def reshape(self, indices, spp):
     rshp = [indices.indexSize(idx) if idx in indices else 1 for idx in self.indices]
     return spp.reshape(rshp)
-  
+
   def broadcast(self, indices, spp):
     reshaped = self.reshape(indices, spp)
     bcst = [1 if idx in indices else self.indices.indexSize(idx) for idx in self.indices]
@@ -102,34 +102,34 @@ class Node(ABC):
       other.setTerm(self * other.term())
       return other
     return self._binOp(other, Einsum)
-  
+
   def __rmul__(self, other):
     return self.__mul__(other)
-  
+
   def __add__(self, other):
     if not isinstance(other, Node):
       raise ValueError('Unsupported operation: Cannot add {} to {}.'.format(self, other))
     return self._binOp(other, Add)
-  
+
   def __radd__(self, other):
     return self.__add__(other)
-  
+
   def __neg__(self):
     self._checkMultipleScalarMults()
     return ScalarMultiplication(-1.0, self)
 
   def __sub__(self, other):
     return self._binOp(-other, Add)
-    
+
   def __le__(self, other):
     return Assign(self, other)
-  
+
   def subslice(self, index, start, end):
     return SliceView(self, index, start, end)
-  
+
   def subselect(self, index, position):
     return SliceView(self, index, position, position + 1)
-  
+
   def viewed(self):
     return self
 
@@ -140,35 +140,35 @@ class SliceView(Node):
     self.index = index
     self.start = start
     self.end = end
-  
+
   def name(self):
     return self.term().name()
-  
+
   def viewed(self):
     return self.term().viewed()
-  
+
   def term(self):
     return self[0]
-  
+
   def nonZeroFlops(self):
     return 0
-  
+
   def setIndexPermutation(self, indices, permuteEqspp=True):
     assert str(indices) == str(self.indices)
 
   def memoryLayout(self):
     return self._memoryLayout
-  
+
   def getMemoryLayout(self, memoryLayout):
     return memoryLayout.subslice(list(self.indices).index(self.index), self.start, self.end)
 
   def computeMemoryLayout(self):
     self._memoryLayout = self.getMemoryLayout(self.term().memoryLayout())
-  
+
   def computeSparsityPattern(self, *spps):
     assert len(spps) in (0, 1)
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
-    
+
     if isinstance(spp, aspp.dense):
       nowshape = spp.shape
       subshape = tuple(self.end - self.start if self.indices[i] == self.index else nowshape[i] for i in range(spp.ndim))
@@ -177,7 +177,7 @@ class SliceView(Node):
       subslice = tuple(slice(self.start, self.end) if self.indices[i] == self.index else slice(None) for i in range(spp.ndim))
       subarray = spp.as_ndarray()[subslice]
       return aspp.general(subarray)
-  
+
   def __str__(self):
     return f'{type(self).__name__}[{self.index}: {self.start}..{self.end}]'
 
@@ -186,19 +186,19 @@ class IndexedTensor(Node):
     super().__init__()
     self.tensor = tensor
     self.indices = Indices(indexNames, self.tensor.shape())
-  
+
   def nonZeroFlops(self):
     return 0
-  
+
   def setIndexPermutation(self, indices, permuteEqspp=True):
     assert str(indices) == str(self.indices)
-  
+
   def spp(self, groupSpp=True):
     return self.tensor.spp(groupSpp)
-  
+
   def name(self):
     return self.tensor.name()
-  
+
   def memoryLayout(self):
     return self.tensor.memoryLayout()
 
@@ -216,7 +216,7 @@ class Op(Node):
     super().__init__()
     self._children = list(args)
     self._memoryLayout = None
-  
+
   def memoryLayout(self):
     return self._memoryLayout
 
@@ -255,17 +255,17 @@ class Op(Node):
     if self._memoryLayout is not None:
       self._memoryLayout = self._memoryLayout.permuted(p)
     self.indices = self.indices.permuted(indices)
-  
+
   def __str__(self):
     return '{}[{}]'.format(type(self).__name__, self.indices if self.indices != None else '<not deduced>')
-  
+
   def computeSparsityPattern(self, *spps):
     raise NotImplementedError
 
 class Einsum(Op):
   def nonZeroFlops(self):
     raise NotImplementedError
-    
+
 class Add(Op):
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
@@ -276,11 +276,14 @@ class Add(Op):
       add_spp = permute_summand(i)
       spp = aspp.add(spp, add_spp)
     return spp
-  
+
   def nonZeroFlops(self):
     nzFlops = 0
     for child in self:
-      nzFlops += child.eqspp().count_nonzero()
+      permuted = self.broadcast(child.indices, self.permute(child.indices, child.eqspp(), False))
+      nzFlops += permuted.count_nonzero()
+
+    # ignore all first adds against zero (i.e. those in self.eqspp())
     return nzFlops - self.eqspp().count_nonzero()
 
 class UnaryOp(Op):
@@ -296,7 +299,7 @@ class ScalarMultiplication(UnaryOp):
 
   def fixedIndexPermutation(self):
     return self.term().fixedIndexPermutation()
-  
+
   def setTerm(self, term):
     self._children[0] = term
     if self.fixedIndexPermutation():
@@ -312,7 +315,7 @@ class ScalarMultiplication(UnaryOp):
 
   def scalar(self):
     return self._scalar
-  
+
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       return self.term().eqspp()
@@ -323,20 +326,20 @@ class ScalarMultiplication(UnaryOp):
     if self._isConstant and self._scalar in [-1.0, 1.0]:
       return 0
     return self.eqspp().count_nonzero()
-  
+
   def __str__(self):
     return '{}: {}'.format(super().__str__(), str(self._scalar))
 
 class BinOp(Op):
   def __init__(self, lTerm, rTerm):
     super().__init__(lTerm, rTerm)
-  
+
   def leftTerm(self):
     return self._children[0]
-  
+
   def rightTerm(self):
     return self._children[1]
-  
+
   def setChildren(self, children):
     if len(children) != 2:
       raise ValueError('BinOp node must have exactly 2 children.')
@@ -347,10 +350,10 @@ class Assign(BinOp):
     if not isinstance(children[0].viewed(), IndexedTensor):
       raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0].viewed()))
     super().setChildren(children)
-    
+
   def nonZeroFlops(self):
     return 0
-  
+
   def computeSparsityPattern(self, *spps):
     spp = spps[1] if len(spps) == 2 else self.rightTerm().eqspp()
     return self.broadcast(self.rightTerm().indices, self.permute(self.rightTerm().indices, spp, False))
@@ -370,7 +373,7 @@ class Permute(UnaryOp):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
     return self.permute(self.term().indices, spp)
-  
+
   @classmethod
   def subPermute(cls, term, indices):
     subIndexNames = [idx for idx in indices if idx in term.indices]
@@ -408,10 +411,10 @@ class Product(BinOp):
     assert lTerm.indices.subShape(K) == rTerm.indices.subShape(K)
 
     self.indices = lTerm.indices.merged(rTerm.indices - K)
-  
+
   def nonZeroFlops(self):
     return self.eqspp().count_nonzero()
-  
+
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       spps = [node.eqspp() for node in self]
@@ -423,13 +426,13 @@ class IndexSum(UnaryOp):
     super().__init__(term)
     self.indices = term.indices - set([sumIndex])
     self._sumIndex = term.indices.extract(sumIndex)
-  
+
   def nonZeroFlops(self):
     return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
-  
+
   def sumIndex(self):
     return self._sumIndex
-  
+
   def computeSparsityPattern(self, *spps):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
@@ -446,7 +449,7 @@ class Contraction(BinOp):
 
   def nonZeroFlops(self):
     raise NotImplementedError
-  
+
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       spps = [node.eqspp() for node in self]
@@ -486,13 +489,13 @@ class LoopOverGEMM(BinOp):
     p = Product(self.leftTerm(), self.rightTerm())
     p.setEqspp( p.computeSparsityPattern() )
     return 2*p.nonZeroFlops() - self.eqspp().count_nonzero()
-  
+
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
       spps = [node.eqspp() for node in self]
     assert len(spps) == 2
     return _productContractionLoGSparsityPattern(self, *spps)
-  
+
   def cost(self):
     A = self.leftTerm().indices
     B = self.rightTerm().indices
@@ -500,13 +503,13 @@ class LoopOverGEMM(BinOp):
     BstrideOne = (B.find(self._k[0]) == 0) if not self._transB else (B.find(self._n[0]) == 0)
     cost = LoGCost(int(not AstrideOne) + int(not BstrideOne), int(self._transA), int(self._transB), len(self._m) + len(self._n) + len(self._k))
     return cost
-  
+
   def loopIndices(self):
     i1 = self.indices - (self._m + self._n)
     i2 = (self.leftTerm().indices - (self._m + self._k)) - i1
     i3 = ((self.rightTerm().indices - (self._k + self._n)) - i1) - i2
     return i1.merged(i2).merged(i3)
-  
+
   def transA(self):
     return self._transA
 
@@ -538,7 +541,7 @@ class LoopOverGEMM(BinOp):
     if batchedIndices:
       indexStr = re.sub(r'([{}])'.format(''.join(batchedIndices)), r'[\1]', indexStr)
     return '{}{}_{{{}}}'.format(name, '^T' if transpose else '', indexStr)
-  
+
   def __str__(self):
     Astr = self.indexString('A', [self._m, self._k], self.leftTerm().indices, self._transA)
     Bstr = self.indexString('B', [self._k, self._n], self.rightTerm().indices, self._transB)

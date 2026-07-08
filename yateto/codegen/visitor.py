@@ -105,11 +105,14 @@ class OptimizedKernelGenerator(KernelGenerator):
   EXECUTE_ARRAY_NAME = 'ExecutePtrs'
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
+  OUTBYTES_NAME = 'OutboundBytes'
+  INCONSTBYTES_NAME = 'InboundConstBytes'
+  INBYTES_NAME = 'InboundBytes'
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
 
-  
+
   def __init__(self, arch, routineCache, routine_exporters):
     super().__init__(arch)
     self._routineCache = routineCache
@@ -122,11 +125,14 @@ class OptimizedKernelGenerator(KernelGenerator):
 
     for entry in routine_exporters:
       self._routine_factories[entry] = ExportFactory.makeFactory(routine_exporters[entry])
-  
+
   class KernelOutline(object):
     def __init__(self,
                  nonZeroFlops,
                  hwFlops,
+                 inConstBytes,
+                 inBytes,
+                 outBytes,
                  tensors,
                  writable,
                  prefetch,
@@ -138,6 +144,9 @@ class OptimizedKernelGenerator(KernelGenerator):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
+      self.inConstBytes = inConstBytes
+      self.inBytes = inBytes
+      self.outBytes = outBytes
       self.tensors = tensors
       self.writable = writable
       self.prefetch = prefetch
@@ -158,7 +167,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         tensors[base_name] = tensors[base_name] | {group}
       else:
         tensors[base_name] = {group}
-  
+
   def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target):
     scalarsP = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
@@ -166,6 +175,11 @@ class OptimizedKernelGenerator(KernelGenerator):
     writable = dict()
     is_compute_constant_tensors = dict()
     scalars = collections.OrderedDict()
+
+    inConstTensors = {}
+    inTensors = {}
+    outTensors = {}
+
     for scalar in scalarsP:
       self.KernelOutline._addTensor(scalar, scalars)
     for var in variables:
@@ -179,6 +193,19 @@ class OptimizedKernelGenerator(KernelGenerator):
         writable[bn] = var.writable
 
       is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
+
+      size = var.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
+      if var.tensor.is_compute_constant():
+        inConstTensors[bn] = size
+      else:
+        if var.writable:
+          outTensors[bn] = size
+        else:
+          inTensors[bn] = size
+
+    inConstBytes = sum(size for size in inConstTensors.values())
+    inBytes = sum(size for size in inTensors.values())
+    outBytes = sum(size for size in outTensors.values())
 
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()
@@ -194,9 +221,12 @@ class OptimizedKernelGenerator(KernelGenerator):
       factory.freeTmp()
       factory.reset_stream()
       factory.reset_flags()
-      function = functionIO.getvalue()    
+      function = functionIO.getvalue()
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
+                              inConstBytes,
+                              inBytes,
+                              outBytes,
                               tensors,
                               writable,
                               prefetch,
@@ -213,7 +243,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         entries[key] = value
       else:
         entries[key] = entries[key] | value
-    
+
 
   def generate(self, cpp, header, name, kernelOutlines, familyStride=None):
     tensors = collections.OrderedDict()
@@ -249,20 +279,20 @@ class OptimizedKernelGenerator(KernelGenerator):
 
     with header.Namespace(self.NAMESPACE):
       with header.Struct(name):
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.NONZEROFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.HARDWAREFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
+        def addConst(name, attrcall):
+          header('{} {} const {}{} = {};'.format(
+            MODIFIERS,
+            self._arch.ulongTypename,
+            name,
+            brackets,
+            formatArray([attrcall(kernelOutline) if kernelOutline else 0 for kernelOutline in kernelOutlines])
+          ))
+
+        addConst(self.NONZEROFLOPS_NAME, lambda ko: ko.nonZeroFlops)
+        addConst(self.HARDWAREFLOPS_NAME, lambda ko: ko.hwFlops)
+        addConst(self.INCONSTBYTES_NAME, lambda ko: ko.inConstBytes)
+        addConst(self.INBYTES_NAME, lambda ko: ko.inBytes)
+        addConst(self.OUTBYTES_NAME, lambda ko: ko.outBytes)
 
         # tmp mem required by a kernel(s)
         tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
@@ -295,7 +325,7 @@ class OptimizedKernelGenerator(KernelGenerator):
             header(f'{class_name}::{container_type} {base_name};')
           else:
             header(f'{typ}{ptr_type} {base_name}{{}};')
-        
+
         def scalarArgs(base_name_with_namespace, groups):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           typ = self._arch.typename
@@ -370,16 +400,6 @@ class OptimizedKernelGenerator(KernelGenerator):
             with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
               header('return {}[{}];'.format(function, indexF))
 
-    flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
-    for fc in flopCounters:
-      cpp('{} {} const {}::{}::{}{};'.format(
-        CONSTEXPR,
-        self._arch.ulongTypename,
-        self.NAMESPACE,
-        name,
-        fc,
-        brackets
-      ))
     if familyStride is not None:
       cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
         CONSTEXPR,
@@ -419,7 +439,7 @@ class UnitTestGenerator(KernelGenerator):
   STREAM = '_stream'
   TMP_MEM = '_tmpMem'
   TMP_SIZE = 128 * 8
-  
+
   def __init__(self, arch):
     super().__init__(arch)
 
@@ -475,7 +495,7 @@ class UnitTestGenerator(KernelGenerator):
 
   def _viewName(self, var):
     return '_view_' + self._name(var)
-  
+
   def _groupStr(self, var):
     group = var.group()
     return ','.join([str(g) for g in group])
@@ -487,7 +507,7 @@ class UnitTestGenerator(KernelGenerator):
   def _groupIndex(self, var):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
-  
+
   def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
     if target == 'gpu':
       if self._arch.backend in ['oneapi', 'acpp', 'hipsycl']:
@@ -534,7 +554,7 @@ class UnitTestGenerator(KernelGenerator):
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
-        
+
         shape = var.memoryLayout().shape()
         cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
             supportNS = SUPPORT_LIBRARY_NAMESPACE,
@@ -632,33 +652,33 @@ class InitializerGenerator(object):
   VIEW_FUN_NAME = 'create'
   VIEW_TYPE_NAME = 'type'
   VIEW_TYPE_NAME_CONST = 'type_const'
-  
+
   class TensorView(object):
     ARGUMENT_NAME = 'values'
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
       return '::{}::{}<{},{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename, constStr)
-    
+
     @classmethod
     def arguments(cls, arch, const):
       if const:
         return '{} const* {}'.format(arch.typename, cls.ARGUMENT_NAME)
       else:
         return '{} * {}'.format(arch.typename, cls.ARGUMENT_NAME)
-    
+
     def generate(cpp, group, memLayout, arch, index, const):
       raise NotImplementedError
-    
+
     def listToInitializerList(self, lst):
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
-    
+
     def formatArray(self, numberType, name, values, declarationOnly):
       lhs = '{} {}[]'.format(numberType, name)
       if declarationOnly:
         return ''
       return '{} {} = {};'.format(MODIFIERS, lhs, self.listToInitializerList(values))
-  
+
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
     STOP_NAME = 'Stop'
@@ -680,7 +700,7 @@ class InitializerGenerator(object):
   class CSCMatrixView(TensorView):
     ROWIND_NAME = 'RowInd'
     COLPTR_NAME = 'ColPtr'
-    
+
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
       return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename, constStr)
@@ -736,14 +756,14 @@ class InitializerGenerator(object):
     self._groupSize = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndex.items()}
     maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}
     self._groupSizeScalar = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndexScalar.items()}
-  
+
   def _tensorViewGenerator(self, memoryLayout):
     memLayoutMap = {
       'DenseMemoryLayout': self.DenseTensorView,
       'CSCMemoryLayout': self.CSCMatrixView
     }
     return memLayoutMap[type(memoryLayout).__name__]()
-  
+
   def iterate_collect(self):
     cur_namespace = ''
     cur_dict = collections.OrderedDict()
@@ -783,7 +803,7 @@ class InitializerGenerator(object):
   def generateTensorsH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
       with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
-        for (baseName, baseNameWithoutNamespace), tensors in tensor_dict.items():        
+        for (baseName, baseNameWithoutNamespace), tensors in tensor_dict.items():
           with header.Struct(baseNameWithoutNamespace):
             groupSize = self._groupSize[baseName]
             self._tensor(header, '', tensors, groupSize, False)
@@ -809,7 +829,7 @@ class InitializerGenerator(object):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
     for namespace, scalar_dict in self.iterate_collect_scalar():
       with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
-        for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():        
+        for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
           with header.Struct(baseNameWithoutNamespace):
             groupSize = self._groupSizeScalar[baseName]
             args = ndargs(len(groupSize))
@@ -827,18 +847,24 @@ class InitializerGenerator(object):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
                 with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-  
+
   def generateTensorsCpp(self, cpp):
     for namespace, tensor_dict in self.iterate_collect():
       with cpp.Namespace(namespace):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
-  
+
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._init(header, base_name, base_name_without_namespace, '', tensors, False)
+    for namespace, scalar_dict in self.iterate_collect_scalar():
+      with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
+        for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
+          with header.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):
+            # empty forward declaration
+            pass
 
   def generateInitCpp(self, cpp):
     for namespace, tensor_dict in self.iterate_collect():
@@ -931,7 +957,7 @@ class InitializerGenerator(object):
               tv.generate(cpp, ml, self._arch, index(group), False)
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME_CONST)):
               tv.generate(cpp, ml, self._arch, index(group), True)
-  
+
   def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True, constexpr=True, static=True):
     cexpr = CONSTEXPR + ' ' if constexpr else ''
     stat = STATIC + ' ' if static else ''
@@ -964,7 +990,5 @@ class InitializerGenerator(object):
       initStr = ', '.join(init)
       if isGroup:
         initStr = '{{{}}}'.format(initStr)
-      
+
       cpp('{}{}{} {}{}{} = {};'.format(cexpr, stat, typ, name, groupIndices, arrayIndices, initStr))
-
-

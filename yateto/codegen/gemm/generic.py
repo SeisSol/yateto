@@ -61,10 +61,10 @@ class Generic(object):
     Caccess = self._accessFun(d.result, (m.start, n.start), False, False)
 
     rows, cols = (k, m) if d.transA else (m, k)
-    sppA = d.leftTerm.memoryLayout.entries(rows, cols)
+    sppA = d.leftTerm.memoryLayout.entriesRel(rows, cols)
 
     rows, cols = (n, k) if d.transB else (k, n)
-    sppB = d.rightTerm.memoryLayout.entries(rows, cols)
+    sppB = d.rightTerm.memoryLayout.entriesRel(rows, cols)
 
     if d.beta != 1.0:
       with cpp.For(f'int n = 0; n < {n.size()}; ++n'):
@@ -80,9 +80,9 @@ class Generic(object):
     # note that we explicitly count all nonzero operations
 
     nzcount = 0
-    for idxA, entry in enumerate(sppA):
+    for idxA, entry in sppA:
       eA = entry[::-1] if d.transA else entry
-      for idxB, entry in enumerate(sppB):
+      for idxB, entry in sppB:
         eB = entry[::-1] if d.transB else entry
 
         if eA[1] == eB[0]:
@@ -112,7 +112,7 @@ class Generic(object):
 
     if d.isACsc:
       rows, cols = (k, m) if d.transA else (m, k)
-      spp = d.leftTerm.memoryLayout.entries(rows, cols)
+      spp = d.leftTerm.memoryLayout.entriesRel(rows, cols)
       sparse = Aaccess
       result = lambda e: Caccess(e[0], self.OUTER_INDEX)
       dense = lambda e: Baccess(e[1], self.OUTER_INDEX)
@@ -120,7 +120,7 @@ class Generic(object):
       trans = d.transA
     elif d.isBCsc:
       rows, cols = (n, k) if d.transB else (k, n)
-      spp = d.rightTerm.memoryLayout.entries(rows, cols)
+      spp = d.rightTerm.memoryLayout.entriesRel(rows, cols)
       sparse = Baccess
       result = lambda e: Caccess(self.OUTER_INDEX, e[1])
       dense = lambda e: Aaccess(self.OUTER_INDEX, e[0])
@@ -137,7 +137,7 @@ class Generic(object):
               ' * ' + CAddr if d.beta != 0.0 else ''
             )
           )
-      for idx, entry in enumerate(spp):
+      for idx, entry in spp:
         e = entry[::-1] if trans else entry
         if e[0] < sizes[0] and e[1] < sizes[1]:
           cpp( '{result} += {alpha} * {dense} * {sparse};'.format(

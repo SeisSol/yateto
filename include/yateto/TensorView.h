@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <type_traits>
@@ -45,7 +46,7 @@ class TensorView {
   uint_t shape(uint_t dim) const { return m_shape[dim]; }
 
   protected:
-  uint_t m_shape[Dim];
+  uint_t m_shape[Dim]{};
 };
 
 template <typename real_t, typename uint_t>
@@ -111,6 +112,52 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
   }
 
   uint_t size() const { return (m_stop[Dim - 1] - m_start[Dim - 1]) * m_stride[Dim - 1]; }
+
+  template <typename F>
+  void forall(F&& function) {
+    uint_t entry[Dim]{};
+    std::copy(m_start, m_start + Dim, entry);
+    while (entry[Dim - 1] != m_stop[Dim - 1]) {
+      auto values = &operator[](entry);
+      for (uint_t i = 0; i < m_stop[0] - m_start[0]; ++i) {
+        entry[0] = i + m_start[0];
+        std::invoke(std::forward<F>(function), entry, values[i * m_stride[0]]);
+      }
+      if (Dim == 1) {
+        break;
+      }
+
+      uint_t d = 0;
+      do {
+        entry[d] = m_start[d];
+        d++;
+        ++entry[d];
+      } while (entry[d] == m_stop[d] && d < Dim - 1);
+    }
+  }
+
+  template <typename F>
+  void forall(F&& function) const {
+    uint_t entry[Dim]{};
+    std::copy(m_start, m_start + Dim, entry);
+    while (entry[Dim - 1] != m_stop[Dim - 1]) {
+      auto values = &operator[](entry);
+      for (uint_t i = 0; i < m_stop[0] - m_start[0]; ++i) {
+        entry[0] = i + m_start[0];
+        std::invoke(std::forward<F>(function), entry, values[i * m_stride[0]]);
+      }
+      if (Dim == 1) {
+        break;
+      }
+
+      uint_t d = 0;
+      do {
+        entry[d] = m_start[d];
+        d++;
+        ++entry[d];
+      } while (entry[d] == m_stop[d] && d < Dim - 1);
+    }
+  }
 
   void setZero() {
     uint_t entry[Dim];
@@ -227,9 +274,9 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
     static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to subtensor() does not match tensor dimension.");
     constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
-    uint_t begin[Dim];
-    uint_t size[nSlices];
-    uint_t stride[nSlices];
+    uint_t begin[Dim]{};
+    uint_t size[nSlices]{};
+    uint_t stride[nSlices]{};
     extractSubtensor(begin, size, stride, entry...);
     DenseTensorView<nSlices, real_t, uint_t, Const> subtensor(&operator[](begin), size, stride);
     return subtensor;
@@ -304,9 +351,9 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
   }
 
   data_t m_values;
-  uint_t m_start[Dim];
-  uint_t m_stop[Dim];
-  uint_t m_stride[Dim];
+  uint_t m_start[Dim]{};
+  uint_t m_stop[Dim]{};
+  uint_t m_stride[Dim]{};
 };
 
 template <typename real_t, typename uint_t, bool Const>
@@ -422,10 +469,176 @@ class CSCMatrixView : public TensorView<2, real_t, uint_t> {
     }
   }
 
+  template <typename F>
+  void forall(F&& function) {
+    uint_t entry[2];
+    uint_t ncols = this->shape(1);
+    for (uint_t col = 0; col < ncols; ++col) {
+      entry[1] = col;
+      for (uint_t i = m_colPtr[col]; i < m_colPtr[col + 1]; ++i) {
+        entry[0] = m_rowInd[i];
+        std::invoke(std::forward<F>(function), entry, m_values[i]);
+      }
+    }
+  }
+
+  template <typename F>
+  void forall(F&& function) const {
+    uint_t entry[2];
+    uint_t ncols = this->shape(1);
+    for (uint_t col = 0; col < ncols; ++col) {
+      entry[1] = col;
+      for (uint_t i = m_colPtr[col]; i < m_colPtr[col + 1]; ++i) {
+        entry[0] = m_rowInd[i];
+        std::invoke(std::forward<F>(function), entry, m_values[i]);
+      }
+    }
+  }
+
   protected:
   data_t m_values;
   const uint_t* m_rowInd;
   const uint_t* m_colPtr;
+};
+
+template <unsigned Dim, typename real_t, typename uint_t, bool Const = false>
+class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
+  public:
+  using data_t = std::conditional_t<Const, const real_t*, real_t*>;
+  using dataref_t = std::conditional_t<Const, const real_t&, real_t&>;
+
+  explicit PatternTensorView(data_t values,
+                             std::initializer_list<uint_t> shape,
+                             const uint_t* pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(pattern, shape) {
+
+    computeSize();
+  }
+
+  explicit PatternTensorView(data_t values, const uint_t shape[], const uint_t* pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(pattern, shape) {
+
+    computeSize();
+  }
+
+  explicit PatternTensorView(data_t values,
+                             std::initializer_list<uint_t> shape,
+                             DenseTensorView<Dim, uint_t, uint_t, true> pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(std::move(pattern)) {
+
+    computeSize();
+  }
+
+  explicit PatternTensorView(data_t values,
+                             const uint_t shape[],
+                             DenseTensorView<Dim, uint_t, uint_t, true> pattern)
+      : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_pattern(std::move(pattern)) {
+
+    computeSize();
+  }
+
+  void computeSize() {
+    m_pattern.forall([&](const auto& /*index*/, const auto& idxval) {
+      if (idxval > 0) {
+        ++m_size;
+      }
+    });
+  }
+
+  uint_t size() const { return m_size; }
+
+  void setZero() {
+    m_pattern.forall([&](const auto& /*index*/, const auto& idxval) {
+      if (idxval > 0) {
+        m_values[idxval - 1] = 0;
+      }
+    });
+  }
+
+  template <typename... Args>
+  const real_t& operator()(Args... index) const {
+    static_assert((std::is_integral_v<Args> && ...));
+    const auto idx = m_pattern(index...);
+    return m_values[idx - 1];
+  }
+
+  template <typename... Args>
+  dataref_t operator()(Args... index) {
+    static_assert((std::is_integral_v<Args> && ...));
+    const auto idx = m_pattern(index...);
+    return m_values[idx - 1];
+  }
+
+  template <typename... Args>
+  bool isInRange(Args... index) const {
+    static_assert((std::is_integral_v<Args> && ...));
+    const auto idx = m_pattern(index...);
+    return idx > 0;
+  }
+
+  dataref_t operator[](const uint_t entry[Dim]) {
+    const auto idx = m_pattern[entry];
+    return m_values[idx - 1];
+  }
+
+  const real_t& operator[](const uint_t entry[Dim]) const {
+    const auto idx = m_pattern[entry];
+    return m_values[idx - 1];
+  }
+
+  template <typename F>
+  void forall(F&& function) {
+    m_pattern.forall(
+        [&, function = std::forward<F>(function)](const auto& index, const auto& idxval) {
+          if (idxval > 0) {
+            std::invoke(function, index, m_values[idxval - 1]);
+          }
+        });
+  }
+
+  template <typename F>
+  void forall(F&& function) const {
+    m_pattern.forall(
+        [&, function = std::forward<F>(function)](const auto& index, const auto& idxval) {
+          if (idxval > 0) {
+            std::invoke(function, index, m_values[idxval - 1]);
+          }
+        });
+  }
+
+  template <class view_t>
+  void copyToView(view_t& other) const {
+    m_pattern.forall([&](const auto& index, const auto& idxval) {
+      if (idxval > 0) {
+        other[index] = m_values[idxval - 1];
+      } else {
+        other[index] = 0;
+      }
+    });
+  }
+
+  template <typename... Entry>
+  auto subtensor(Entry... entry) {
+    static_assert(sizeof...(entry) == Dim,
+                  "Number of arguments to subtensor() does not match tensor dimension.");
+    const auto patternSubtensor = m_pattern.subtensor(entry...);
+    return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, Const>(
+        m_values, this->m_shape, patternSubtensor);
+  }
+
+  template <typename... Entry>
+  auto subtensor(Entry... entry) const {
+    static_assert(sizeof...(entry) == Dim,
+                  "Number of arguments to subtensor() does not match tensor dimension.");
+    const auto patternSubtensor = m_pattern.subtensor(entry...);
+    return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, true>(
+        m_values, this->m_shape, patternSubtensor);
+  }
+
+  protected:
+  data_t m_values{nullptr};
+  DenseTensorView<Dim, uint_t, uint_t, true> m_pattern;
+  std::size_t m_size{0};
 };
 } // namespace yateto
 

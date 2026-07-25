@@ -394,11 +394,23 @@ class OptimizedKernelGenerator(KernelGenerator):
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
             header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
-          aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
-          for function in aux_functions:
-            funName = function[:1].lower() + function[1:]
-            with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(function, indexF))
+          indexer = f'[{indexF}]'
+        else:
+          args = ''
+          indexer = ''
+
+        aux_functions = [self.NONZEROFLOPS_NAME,
+                          self.HARDWAREFLOPS_NAME,
+                          self.INCONSTBYTES_NAME,
+                          self.INBYTES_NAME,
+                          self.OUTBYTES_NAME,
+                          self.TEMP_MEM_REQUIRED_NAME,
+                          self.TEMP_MAX_MEM_REQUIRED_NAME]
+
+        for function in aux_functions:
+          funName = function[:1].lower() + function[1:]
+          with header.Function(funName, args, f'{MODIFIERS} {self._arch.ulongTypename}'):
+            header(f'return {function}{indexer};')
 
     if familyStride is not None:
       cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(

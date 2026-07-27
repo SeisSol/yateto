@@ -105,9 +105,9 @@ class OptimizedKernelGenerator(KernelGenerator):
   EXECUTE_ARRAY_NAME = 'ExecutePtrs'
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
-  OUTBYTES_NAME = 'OutboundBytes'
-  INCONSTBYTES_NAME = 'InboundConstBytes'
-  INBYTES_NAME = 'InboundBytes'
+  OUTBOUND_BYTES_NAME = 'OutboundBytes'
+  INBOUND_CONST_BYTES_NAME = 'InboundConstBytes'
+  INBOUND_BYTES_NAME = 'InboundBytes'
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
@@ -290,9 +290,9 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         addConst(self.NONZEROFLOPS_NAME, lambda ko: ko.nonZeroFlops)
         addConst(self.HARDWAREFLOPS_NAME, lambda ko: ko.hwFlops)
-        addConst(self.INCONSTBYTES_NAME, lambda ko: ko.inConstBytes)
-        addConst(self.INBYTES_NAME, lambda ko: ko.inBytes)
-        addConst(self.OUTBYTES_NAME, lambda ko: ko.outBytes)
+        addConst(self.INBOUND_CONST_BYTES_NAME, lambda ko: ko.inConstBytes)
+        addConst(self.INBOUND_BYTES_NAME, lambda ko: ko.inBytes)
+        addConst(self.OUTBOUND_BYTES_NAME, lambda ko: ko.outBytes)
 
         # tmp mem required by a kernel(s)
         tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
@@ -394,11 +394,23 @@ class OptimizedKernelGenerator(KernelGenerator):
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
             header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
-          aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
-          for function in aux_functions:
-            funName = function[:1].lower() + function[1:]
-            with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(function, indexF))
+          indexer = f'[{indexF}]'
+        else:
+          args = ''
+          indexer = ''
+
+        aux_functions = [self.NONZEROFLOPS_NAME,
+                          self.HARDWAREFLOPS_NAME,
+                          self.INBOUND_CONST_BYTES_NAME,
+                          self.INBOUND_BYTES_NAME,
+                          self.OUTBOUND_BYTES_NAME,
+                          self.TEMP_MEM_REQUIRED_NAME,
+                          self.TEMP_MAX_MEM_REQUIRED_NAME]
+
+        for function in aux_functions:
+          funName = function[:1].lower() + function[1:]
+          with header.Function(funName, args, f'{MODIFIERS} {self._arch.ulongTypename}'):
+            header(f'return {function}{indexer};')
 
     if familyStride is not None:
       cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(

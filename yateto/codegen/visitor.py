@@ -404,8 +404,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                           self.INBOUND_CONST_BYTES_NAME,
                           self.INBOUND_BYTES_NAME,
                           self.OUTBOUND_BYTES_NAME,
-                          self.TEMP_MEM_REQUIRED_NAME,
-                          self.TEMP_MAX_MEM_REQUIRED_NAME]
+                          self.TEMP_MEM_REQUIRED_NAME]
 
         for function in aux_functions:
           funName = function[:1].lower() + function[1:]

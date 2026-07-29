@@ -194,14 +194,16 @@ class OptimizedKernelGenerator(KernelGenerator):
 
       is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
 
+      nm = var.tensor.nameWithNamespace()
+
       size = var.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
       if var.tensor.is_compute_constant():
-        inConstTensors[bn] = size
+        inConstTensors[nm] = size
       else:
         if var.writable:
-          outTensors[bn] = size
+          outTensors[nm] = size
         else:
-          inTensors[bn] = size
+          inTensors[nm] = size
 
     inConstBytes = sum(size for size in inConstTensors.values())
     inBytes = sum(size for size in inTensors.values())

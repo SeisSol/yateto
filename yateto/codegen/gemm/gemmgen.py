@@ -9,17 +9,11 @@ from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
 from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
 from ..tiny_tensor_language import *
-import importlib.util
 
 
 # Optional modules
+import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
-try:
-  if gf_spec:
-    gf = gf_spec.loader.load_module()
-except:
-  raise ('Cannot load gemmforge.')
-
 
 class GemmGen(object):
   def __init__(self, arch, descr, gemm_cfg):
@@ -143,6 +137,8 @@ class GemmGen(object):
     elif isinstance(self._gemm_cfg, GemmForge):
 
       if gf_spec:
+        import gemmforge as gf
+
         aux = BatchedOperationsAux(self._arch.typename)
 
         matrix_a = gf.YatetoInterface.produce_dense_matrix((m, k),

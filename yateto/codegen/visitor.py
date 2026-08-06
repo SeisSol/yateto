@@ -107,6 +107,9 @@ class OptimizedKernelGenerator(KernelGenerator):
   EXECUTE_ARRAY_NAME = 'ExecutePtrs'
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
+  OUTBOUND_BYTES_NAME = 'OutboundBytes'
+  INBOUND_CONST_BYTES_NAME = 'InboundConstBytes'
+  INBOUND_BYTES_NAME = 'InboundBytes'
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
@@ -129,6 +132,9 @@ class OptimizedKernelGenerator(KernelGenerator):
     def __init__(self,
                  nonZeroFlops,
                  hwFlops,
+                 inConstBytes,
+                 inBytes,
+                 outBytes,
                  tensors,
                  writable,
                  prefetch,
@@ -140,6 +146,9 @@ class OptimizedKernelGenerator(KernelGenerator):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
+      self.inConstBytes = inConstBytes
+      self.inBytes = inBytes
+      self.outBytes = outBytes
       self.tensors = tensors
       self.writable = writable
       self.prefetch = prefetch
@@ -168,6 +177,11 @@ class OptimizedKernelGenerator(KernelGenerator):
     writable = dict()
     is_compute_constant_tensors = dict()
     scalars = collections.OrderedDict()
+
+    inConstTensors = {}
+    inTensors = {}
+    outTensors = {}
+
     for scalar in scalarsP:
       self.KernelOutline._addTensor(scalar, scalars)
     for var in variables:
@@ -181,6 +195,21 @@ class OptimizedKernelGenerator(KernelGenerator):
         writable[bn] = var.writable
 
       is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
+
+      nm = var.tensor.nameWithNamespace()
+
+      size = var.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
+      if var.tensor.is_compute_constant():
+        inConstTensors[nm] = size
+      else:
+        if var.writable:
+          outTensors[nm] = size
+        else:
+          inTensors[nm] = size
+
+    inConstBytes = sum(size for size in inConstTensors.values())
+    inBytes = sum(size for size in inTensors.values())
+    outBytes = sum(size for size in outTensors.values())
 
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()
@@ -199,6 +228,9 @@ class OptimizedKernelGenerator(KernelGenerator):
       function = functionIO.getvalue()
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
+                              inConstBytes,
+                              inBytes,
+                              outBytes,
                               tensors,
                               writable,
                               prefetch,
@@ -251,20 +283,20 @@ class OptimizedKernelGenerator(KernelGenerator):
 
     with header.Namespace(self.NAMESPACE):
       with header.Struct(name):
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.NONZEROFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.HARDWAREFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
+        def addConst(name, attrcall):
+          header('{} {} const {}{} = {};'.format(
+            MODIFIERS,
+            self._arch.ulongTypename,
+            name,
+            brackets,
+            formatArray([attrcall(kernelOutline) if kernelOutline else 0 for kernelOutline in kernelOutlines])
+          ))
+
+        addConst(self.NONZEROFLOPS_NAME, lambda ko: ko.nonZeroFlops)
+        addConst(self.HARDWAREFLOPS_NAME, lambda ko: ko.hwFlops)
+        addConst(self.INBOUND_CONST_BYTES_NAME, lambda ko: ko.inConstBytes)
+        addConst(self.INBOUND_BYTES_NAME, lambda ko: ko.inBytes)
+        addConst(self.OUTBOUND_BYTES_NAME, lambda ko: ko.outBytes)
 
         # tmp mem required by a kernel(s)
         tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
@@ -366,22 +398,23 @@ class OptimizedKernelGenerator(KernelGenerator):
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
             header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
-          aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
-          for function in aux_functions:
-            funName = function[:1].lower() + function[1:]
-            with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(function, indexF))
+          indexer = f'[{indexF}]'
+        else:
+          args = ''
+          indexer = ''
 
-    flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
-    for fc in flopCounters:
-      cpp('{} {} const {}::{}::{}{};'.format(
-        CONSTEXPR,
-        self._arch.ulongTypename,
-        self.NAMESPACE,
-        name,
-        fc,
-        brackets
-      ))
+        aux_functions = [self.NONZEROFLOPS_NAME,
+                          self.HARDWAREFLOPS_NAME,
+                          self.INBOUND_CONST_BYTES_NAME,
+                          self.INBOUND_BYTES_NAME,
+                          self.OUTBOUND_BYTES_NAME,
+                          self.TEMP_MEM_REQUIRED_NAME]
+
+        for function in aux_functions:
+          funName = function[:1].lower() + function[1:]
+          with header.Function(funName, args, f'{MODIFIERS} {self._arch.ulongTypename}'):
+            header(f'return {function}{indexer};')
+
     if familyStride is not None:
       cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
         CONSTEXPR,

@@ -633,6 +633,9 @@ class PatternMemoryLayout(MemoryLayout):
   def alignmentOffset(self, dim):
     return 0
 
+  def storage(self):
+    return self
+
 class AlignedCSCMemoryLayout:
   @classmethod
   def fromSpp(cls, spp, **kwargs):

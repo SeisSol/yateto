@@ -30,6 +30,11 @@ class Description(object):
     self.isACsc = self.leftTerm.memoryLayout.isSparse()
     self.isBCsc = self.rightTerm.memoryLayout.isSparse()
 
+    if self.result.memoryLayout.isSparse():
+      raise NotImplementedError(
+        'yateto: sparse memory layouts are not supported for GEMM results (yet); '
+        'tensor "{}" uses {}.'.format(self.result.name, type(self.result.memoryLayout).__name__))
+
     bbA = BoundingBox.fromSpp(self.leftTerm.eqspp)
     bbB = BoundingBox.fromSpp(self.rightTerm.eqspp)
     bbC = BoundingBox.fromSpp(self.result.eqspp)

@@ -124,7 +124,8 @@ class Generic(object):
           flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody(), pragmaSimd=False, fixed=fixed)
         if d.addLoopRanges is not None:
           gemmDescr.setBeta(1.0)
-          flops += forLoops(cpp, d.innerLoopIndices, d.addLoopRanges, LoGBody(), pragmaSimd=False, fixed=fixed)
+          for addLoopRanges in d.addLoopRanges:
+            flops += forLoops(cpp, d.innerLoopIndices, addLoopRanges, LoGBody(), pragmaSimd=False, fixed=fixed)
         return flops
 
     return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody(), pragmaSimd=False, fixed=fixed)

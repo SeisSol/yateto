@@ -74,6 +74,11 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', fixed={
   if indexNo == None:
     indexNo = len(indexNames)-1
     firstLoop = True
+    # bail out before emitting anything if any pinned index misses its range,
+    # otherwise we leave empty scopes with unused constexpr variables behind
+    for index in indexNames:
+      if index in fixed and not (ranges[index].start <= fixed[index] < ranges[index].stop):
+        return 0
   if indexNo < 0:
     if firstLoop:
       with cpp.AnonymousScope():
@@ -83,20 +88,17 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', fixed={
   else:
     index = indexNames[indexNo]
     rng = ranges[index]
-    if pragmaSimd:
-      cpp('#pragma omp simd')
     if index in fixed:
-      value = fixed[index]
-      if value >= rng.start and value < rng.stop:
-        with cpp.AnonymousScope():
-          cpp(f'constexpr int {prefix}{index} = {value};')
-          flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, fixed, indexNo-1)
-      else:
-        # out of range
-        flops = 0
+      with cpp.AnonymousScope():
+        cpp(f'[[maybe_unused]] constexpr int {prefix}{index} = {fixed[index]};')
+        flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, fixed, indexNo-1)
     else:
+      # the pragma belongs on the innermost *emitted* loop, i.e. the one over the
+      # fastest-running index that has not been pinned by unrolling
+      if pragmaSimd and all(indexNames[i] in fixed for i in range(indexNo)):
+        cpp('#pragma omp simd')
       with cpp.For('int {3}{0} = {1}; {3}{0} < {2}; ++{3}{0}'.format(index, rng.start, rng.stop, prefix)):
-        flops = forLoops(cpp, indexNames, ranges, body, False, prefix, fixed, indexNo-1)
+        flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, fixed, indexNo-1)
       flops = flops * rng.size()
   return flops
 

@@ -123,16 +123,17 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
         entry[0] = i + m_start[0];
         std::invoke(std::forward<F>(function), entry, values[i * m_stride[0]]);
       }
-      if (Dim == 1) {
+      if constexpr (Dim == 1) {
         break;
-      }
+      } else {
 
-      uint_t d = 0;
-      do {
-        entry[d] = m_start[d];
-        d++;
-        ++entry[d];
-      } while (entry[d] == m_stop[d] && d < Dim - 1);
+        uint_t d = 0;
+        do {
+          entry[d] = m_start[d];
+          d++;
+          ++entry[d];
+        } while (entry[d] == m_stop[d] && d < Dim - 1);
+      }
     }
   }
 
@@ -146,16 +147,17 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
         entry[0] = i + m_start[0];
         std::invoke(std::forward<F>(function), entry, values[i * m_stride[0]]);
       }
-      if (Dim == 1) {
+      if constexpr (Dim == 1) {
         break;
-      }
+      } else {
 
-      uint_t d = 0;
-      do {
-        entry[d] = m_start[d];
-        d++;
-        ++entry[d];
-      } while (entry[d] == m_stop[d] && d < Dim - 1);
+        uint_t d = 0;
+        do {
+          entry[d] = m_start[d];
+          d++;
+          ++entry[d];
+        } while (entry[d] == m_stop[d] && d < Dim - 1);
+      }
     }
   }
 
@@ -167,16 +169,17 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
       for (uint_t i = 0.0; i < m_stop[0] - m_start[0]; ++i) {
         values[i * m_stride[0]] = 0.0;
       }
-      if (Dim == 1) {
+      if constexpr (Dim == 1) {
         break;
-      }
+      } else {
 
-      uint_t d = 0;
-      do {
-        entry[d] = m_start[d];
-        d++;
-        ++entry[d];
-      } while (entry[d] == m_stop[d] && d < Dim - 1);
+        uint_t d = 0;
+        do {
+          entry[d] = m_start[d];
+          d++;
+          ++entry[d];
+        } while (entry[d] == m_stop[d] && d < Dim - 1);
+      }
     }
   }
 
@@ -255,16 +258,17 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
       }
       val += (m_stop[0] - stop0);
 
-      if (Dim == 1) {
+      if constexpr (Dim == 1) {
         break;
-      }
+      } else {
 
-      uint_t d = 0;
-      do {
-        entry[d] = m_start[d];
-        d++;
-        ++entry[d];
-      } while (entry[d] == m_stop[d] && d < Dim - 1);
+        uint_t d = 0;
+        do {
+          entry[d] = m_start[d];
+          d++;
+          ++entry[d];
+        } while (entry[d] == m_stop[d] && d < Dim - 1);
+      }
     }
   }
 
@@ -621,18 +625,26 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
   auto subtensor(Entry... entry) {
     static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to subtensor() does not match tensor dimension.");
+    constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
     const auto patternSubtensor = m_pattern.subtensor(entry...);
-    return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, Const>(
-        m_values, this->m_shape, patternSubtensor);
+    uint_t subShape[nSlices > 0 ? nSlices : 1]{};
+    for (uint_t d = 0; d < nSlices; ++d) {
+      subShape[d] = patternSubtensor.shape(d);
+    }
+    return PatternTensorView<nSlices, real_t, uint_t, Const>(m_values, subShape, patternSubtensor);
   }
 
   template <typename... Entry>
   auto subtensor(Entry... entry) const {
     static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to subtensor() does not match tensor dimension.");
+    constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
     const auto patternSubtensor = m_pattern.subtensor(entry...);
-    return PatternTensorView<count_slices<uint_t, Entry...>::value, real_t, uint_t, true>(
-        m_values, this->m_shape, patternSubtensor);
+    uint_t subShape[nSlices > 0 ? nSlices : 1]{};
+    for (uint_t d = 0; d < nSlices; ++d) {
+      subShape[d] = patternSubtensor.shape(d);
+    }
+    return PatternTensorView<nSlices, real_t, uint_t, true>(m_values, subShape, patternSubtensor);
   }
 
   protected:

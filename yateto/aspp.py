@@ -47,7 +47,7 @@ class ASpp(ABC):
     pass
 
   @abstractmethod
-  def indexSum(self, sourceIndices, targetIndices, fixedIndices):
+  def indexSum(self, sourceIndices, targetIndices, fixedIndices={}):
     pass
 
   @abstractmethod
@@ -81,7 +81,7 @@ class dense(ASpp):
   def broadcast(self, bcst):
     return type(self)(tuple(shp * bc for shp, bc in zip(self.shape, bcst)))
 
-  def indexSum(self, sourceIndices, targetIndices, fixedIndices):
+  def indexSum(self, sourceIndices, targetIndices, fixedIndices={}):
     # silently assume that targetIndices and fixedIndices don't overlap
     return type(self)(tuple(self.shape[sourceIndices.find(targetIndex)] for targetIndex in targetIndices))
 
@@ -171,7 +171,7 @@ class general(ASpp):
   def broadcast(self, bcst):
     return type(self)(np.tile(self.pattern, bcst).copy(order=self.NUMPY_DEFAULT_ORDER))
 
-  def indexSum(self, sourceIndices, targetIndices, fixedIndices):
+  def indexSum(self, sourceIndices, targetIndices, fixedIndices={}):
     # silently assume that targetIndices and fixedIndices don't overlap
     selector = tuple(fixedIndices[idx] if idx in fixedIndices else slice(None) for idx in sourceIndices)
     einsumsource = ''.join('' if idx in fixedIndices else idx for idx in sourceIndices)

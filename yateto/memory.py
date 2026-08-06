@@ -318,7 +318,7 @@ class CSCMemoryLayout(MemoryLayout):
       for nonzero in nonzeros:
         lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
-        upper = lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals
+        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._shape[0])
 
         for i in range(lower, upper):
           nonzeros_pre.add((np.int64(i), nonzero[1]))
@@ -469,7 +469,7 @@ class PatternMemoryLayout(MemoryLayout):
       for nonzero in nonzeros:
         lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
-        upper = lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals
+        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._shape[0])
 
         for i in range(lower, upper):
           nonzeros_pre.add(tuple([np.int64(i)] + list(nonzero[1:])))
@@ -554,19 +554,22 @@ class PatternMemoryLayout(MemoryLayout):
 
   def vec(self, indices, I, Z):
     positionsI = indices.positions(I)
-    positionsZ = indices.positionsIncomplete(Z)
 
     # I and Z need to partition perfectly
 
-    error = lambda: None
-    selector = [error for _ in range(len(self._shape))]
+    selector = [None for _ in range(len(self._shape))]
 
-    for p, z in zip(positionsZ, Z.values()):
-      selector[p] = z
+    for idx, z in Z.items():
+      if idx in indices:
+        selector[indices.find(idx)] = z
     for p in positionsI:
       selector[p] = slice(None)
 
-    pattern = self._pattern[tuple(selector)].transpose(positionsI).flatten(order='F')
+    assert all(s is not None for s in selector)
+
+    # positionsI is sorted ascending, hence the sliced array already has
+    # the I-axes in the correct relative order; no transpose needed.
+    pattern = self._pattern[tuple(selector)].flatten(order='F')
 
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
 
@@ -577,38 +580,32 @@ class PatternMemoryLayout(MemoryLayout):
   def unfold(self, indices, I, J, Z):
     positionsI = indices.positions(I)
     positionsJ = indices.positions(J)
-    positionsZ = indices.positionsIncomplete(Z)
+    # keep positions and values together; Z may contain indices that do
+    # not occur in this tensor at all
+    fixedZ = [(indices.find(idx), z) for idx, z in Z.items() if idx in indices]
 
     if positionsI[0] > positionsJ[0]:
       positionsJ, positionsI = positionsI, positionsJ
 
-    error = lambda: None
-    selector = [error for _ in range(len(self._shape))]
-    dimmap = [error for _ in range(len(self._shape))]
+    positionsZ = [p for p, _ in fixedZ]
+    assert sorted(positionsI + positionsJ + positionsZ) == list(range(len(self._shape)))
 
-    i = 0
+    # dimmap[destination] = source, which is what np.transpose expects
+    dimmap = positionsI + positionsJ + positionsZ
+    selector = [slice(None)] * (len(positionsI) + len(positionsJ)) + [z for _, z in fixedZ]
+
     sizeI = 1
     sizeJ = 1
     for p in positionsI:
-      selector[i] = slice(None)
-      dimmap[p] = i
       sizeI *= self._pattern.shape[p]
-      i += 1
     for p in positionsJ:
-      selector[i] = slice(None)
-      dimmap[p] = i
       sizeJ *= self._pattern.shape[p]
-      i += 1
-    for p, z in zip(positionsZ, Z.values()):
-      selector[i] = z
-      dimmap[p] = i
-      i += 1
 
     pattern = self._pattern.transpose(dimmap)[tuple(selector)].reshape((sizeI, sizeJ), order='F')
 
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
 
-  def addressString(self, indices, I = None, Z = None, prefix='_'):
+  def addressString(self, indices, I = None, Z = None, prefix='_', offsets=()):
     # handled differently; via unrolling
     return ''
 
@@ -621,12 +618,17 @@ class PatternMemoryLayout(MemoryLayout):
     return True
 
   def __eq__(self, other):
+    if not isinstance(other, PatternMemoryLayout):
+      return NotImplemented
     return self._bbox == other._bbox and np.array_equal(self._pattern, other._pattern)
 
+  __hash__ = object.__hash__
+
   def equalStride(self, dim):
-    # search for: all zeros
+    # every slice along `dim` holds the same number of non-zeros as the fullest one,
+    # i.e. the pattern is "rectangular" along that axis
     nzp = (self._pattern != 0)
-    return nzp.sum(axis=dim) == nzp.max(axis=dim) * nzp.shape[dim]
+    return bool(np.all(nzp.sum(axis=dim) == nzp.max(axis=dim) * nzp.shape[dim]))
 
   def alignmentOffset(self, dim):
     return 0
@@ -767,11 +769,15 @@ class MemoryLayoutView(MemoryLayout):
   def permuted(self, permutation):
     return MemoryLayoutView(self.base.permuted(permutation), permutation[self.index], self.start, self.end)
 
+  def _shiftedRanges(self, rng):
+    return [Range(r.start + self.start, r.stop + self.start) if self.index == i else r
+            for i, r in enumerate(rng)]
+
   def entries(self, *rng):
-    return self.base.entries([Range(r.start + self.start, r.stop + self.start) if self.index == i else r for i,r in enumerate(rng)])
+    return self.base.entries(*self._shiftedRanges(rng))
 
   def entriesRel(self, *rng):
-    return self.base.entriesRel([Range(r.start + self.start, r.stop + self.start) if self.index == i else r for i,r in enumerate(rng)])
+    return self.base.entriesRel(*self._shiftedRanges(rng))
 
   def mayFuse(self, positions):
     return (self.index not in positions or positions[-1] == self.index) and self.base.mayFuse(positions)

@@ -38,20 +38,31 @@ class Description(object):
     self.innerLoopIndices = self.loopIndices - self.result.indices
     self.outerLoopIndices = self.loopIndices - self.innerLoopIndices
 
-    self.assignLoopRanges = copy.deepcopy(self.loopRanges)
-    self.addLoopRanges = copy.deepcopy(self.loopRanges)
-
-    if len(self.innerLoopIndices) == 0:
-      if self.add:
-        self.assignLoopRanges = None
-      else:
-        self.addLoopRanges = None
-    elif not self.add:
-      peelOffIndex = str(self.innerLoopIndices.firstIndex())
-      self.assignLoopRanges[peelOffIndex].stop = self.loopRanges[peelOffIndex].start+1
-      self.addLoopRanges[peelOffIndex].start   = self.loopRanges[peelOffIndex].start+1
-    else:
+    if self.add:
       self.assignLoopRanges = None
+      self.addLoopRanges = [copy.deepcopy(self.loopRanges)]
+    elif len(self.innerLoopIndices) == 0:
+      self.assignLoopRanges = copy.deepcopy(self.loopRanges)
+      self.addLoopRanges = None
+    else:
+      # peel off the very first point of the inner iteration space (that one
+      # assigns), and cover the remainder with one box per inner index
+      peelOff = [str(i) for i in self.innerLoopIndices]
+
+      self.assignLoopRanges = copy.deepcopy(self.loopRanges)
+      for idx in peelOff:
+        self.assignLoopRanges[idx].stop = self.loopRanges[idx].start + 1
+
+      self.addLoopRanges = []
+      for n, idx in enumerate(peelOff):
+        box = copy.deepcopy(self.loopRanges)
+        box[idx].start = self.loopRanges[idx].start + 1
+        for pinned in peelOff[n+1:]:
+          box[pinned].stop = self.loopRanges[pinned].start + 1
+        if box[idx].size() > 0:
+          self.addLoopRanges.append(box)
+      if len(self.addLoopRanges) == 0:
+        self.addLoopRanges = None
 
 
 def generator(arch, descr, target):

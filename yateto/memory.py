@@ -243,10 +243,17 @@ class DenseMemoryLayout(MemoryLayout):
 
     return DenseMemoryLayout(shape, bbox, stride)
 
-  def withDummyDimension(self):
-    shape = self._shape + (1,)
-    bbox = BoundingBox(list(self._bbox) + [Range(0,1)])
-    stride = self._stride + (self._bbox[-1].size() * self._stride[-1],)
+  def withDummyDimension(self, front=False):
+    if front:
+      # A 1 x N matrix. The dummy row index never varies, so its stride is
+      # never evaluated; 1 keeps the layout well-formed.
+      shape = (1,) + self._shape
+      bbox = BoundingBox([Range(0,1)] + list(self._bbox))
+      stride = (1,) + self._stride
+    else:
+      shape = self._shape + (1,)
+      bbox = BoundingBox(list(self._bbox) + [Range(0,1)])
+      stride = self._stride + (self._bbox[-1].size() * self._stride[-1],)
     return DenseMemoryLayout(shape, bbox, stride)
 
   def unfold(self, indices, I, J, Z):
@@ -573,8 +580,8 @@ class PatternMemoryLayout(MemoryLayout):
 
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
 
-  def withDummyDimension(self):
-    pattern = np.expand_dims(self._pattern, -1)
+  def withDummyDimension(self, front=False):
+    pattern = np.expand_dims(self._pattern, 0 if front else -1)
     return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
 
   def unfold(self, indices, I, J, Z):
@@ -734,8 +741,9 @@ class MemoryLayoutView(MemoryLayout):
 
     return MemoryLayoutView(self.base.unfold(indices, I, J, Z), newIndex, self.start * scale, self.end * scale)
 
-  def withDummyDimension(self):
-    return MemoryLayoutView(self.base.withDummyDimension(), self.index, self.start, self.end)
+  def withDummyDimension(self, front=False):
+    index = self.index + 1 if front else self.index
+    return MemoryLayoutView(self.base.withDummyDimension(front), index, self.start, self.end)
 
   def defuse(self, fusedRange, indices, I):
     positions = indices.positions(I)

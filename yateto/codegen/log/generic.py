@@ -19,12 +19,17 @@ class Generic(object):
   def _alignedStart(self, term, loopIndices, fixed):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices, fixed)
 
-  def _memLayout(self, term, I, J, fixed):
+  def _memLayout(self, term, I, J, fixed, isResult=False):
     if len(I) == 0 and len(J) == 0:
       return DenseMemoryLayout((1,1))
     elif len(I) == 0:
       ml = term.memoryLayout.vec(term.indices, J, fixed)
-      return ml.withDummyDimension()
+      # A degenerate m dimension makes this a 1 x N GEMM. For the operands that
+      # is absorbed by transA/transB (see LoopOverGEMM in ast/node.py), so the
+      # dummy goes last. The result has no transC, so it needs the dummy in
+      # front -- otherwise the layout comes out as N x 1 and the bounding boxes
+      # disagree with (m, n).
+      return ml.withDummyDimension(front=isResult)
     elif len(J) == 0:
       ml = term.memoryLayout.vec(term.indices, I, fixed)
       return ml.withDummyDimension()
@@ -69,7 +74,7 @@ class Generic(object):
 
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik, fixed)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In, fixed)
-    CmemLayout = self._memLayout(d.result, Im, In, fixed)
+    CmemLayout = self._memLayout(d.result, Im, In, fixed, isResult=True)
 
     Aeqspp = self._reduce(d.leftTerm, A, AmemLayout, fixed)
     Beqspp = self._reduce(d.rightTerm, B, BmemLayout, fixed)

@@ -36,3 +36,14 @@ def add(g):
     V = Tensor('V', (S, N))
     W = Tensor('W', (S,))
     g.add('batchedDot', W['s'] <= V['si'] * V['si'])
+
+    # --- 5. batch index combined with slicing (MemoryLayoutView path) ---------
+    g.add('batchedGramSliced',
+          R['sIJ'].subselect('I', 0)
+          <= M['ij'] * Q['siI'].subselect('I', 0) * Q['sjJ'])
+
+    # --- 6. plain subselect, no batch index (regression guard for unfold) -----
+    A = Tensor('A', (N, N))
+    B = Tensor('B', (N, N))
+    C = Tensor('C', (N, N))
+    g.add('slicedGemm', C['ik'].subselect('i', 0) <= A['ij'].subselect('i', 0) * B['jk'])

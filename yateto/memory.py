@@ -723,6 +723,22 @@ class MemoryLayoutView(MemoryLayout):
   def subslice(self, index, start, end):
     return MemoryLayoutView(self, index, start, end)
 
+  def vec(self, indices, I, Z):
+    positions = indices.positions(I)
+
+    if self.index not in positions:
+      return self.base.vec(indices, I, Z)
+
+    assert positions[-1] == self.index
+
+    shape = self.base.shape()
+    scale = 1
+    for p in positions[:-1]:
+      scale *= shape[p]
+
+    # the fused result is one-dimensional, so the sliced axis becomes axis 0
+    return MemoryLayoutView(self.base.vec(indices, I, Z), 0, self.start * scale, self.end * scale)
+
   def unfold(self, indices, I, J, Z):
     positionsI = indices.positions(I)
     positionsJ = indices.positions(J)

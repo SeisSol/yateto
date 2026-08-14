@@ -716,12 +716,12 @@ class MemoryLayoutView(MemoryLayout):
   def subslice(self, index, start, end):
     return MemoryLayoutView(self, index, start, end)
 
-  def unfold(self, indices, I, J):
+  def unfold(self, indices, I, J, Z):
     positionsI = indices.positions(I)
     positionsJ = indices.positions(J)
 
     if self.index not in positionsI and self.index not in positionsJ:
-      return self.base.unfold(indices, I, J)
+      return self.base.unfold(indices, I, J, Z)
 
     newIndex = 0 if self.index in positionsI else 1
     positions = [positionsI, positionsJ][newIndex]
@@ -732,7 +732,7 @@ class MemoryLayoutView(MemoryLayout):
     for p in positions[:-1]:
       scale *= shape[p]
 
-    return MemoryLayoutView(self.base.unfold(indices, I, J), newIndex, self.start * scale, self.end * scale)
+    return MemoryLayoutView(self.base.unfold(indices, I, J, Z), newIndex, self.start * scale, self.end * scale)
 
   def withDummyDimension(self):
     return MemoryLayoutView(self.base.withDummyDimension(), self.index, self.start, self.end)

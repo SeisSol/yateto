@@ -98,14 +98,32 @@ class Eigen(BLASlike):
     return '.transpose()' if trans else ''
 
   def sizeTrans(self, rows, cols, trans):
-    return '{},{}'.format(cols,rows) if trans else '{},{}'.format(rows,cols)
+    return (cols,rows) if trans else (rows,cols)
 
-  def align(self, ld):
+  def align(self, ld, allow):
     aligned = 'Unaligned'
-    if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128]:
+    if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128] and allow:
       aligned = 'Aligned{}'.format(self._arch.alignment)
     return aligned
 
+  def matrixType(self, prec, dims, ld, aligned):
+    # write an Eigen matrix map
+
+    m, n = dims
+
+    # importent to note: the Eigen outer stride is correct, unless we're dealing with a vector.
+    # meaning: at least one matrix dim is 1. Then, we need the inner stride instead.
+    # cf. https://libeigen.gitlab.io/eigen/docs-5.0.1/classEigen_1_1Stride.html
+    # meaning: if m == 1, we need to take care of potential padding.
+
+    if m == 1:
+      stride = f"Stride<{ld}, {ld}>"
+    else:
+      stride = f"Stride<{ld}, 1>"
+
+    align = self.align(ld, aligned)
+
+    return f"Map<Matrix<{prec}, {m}, {n}>, Eigen::{align}, {stride}>"
 
   def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
            alignedA, alignedC, prefetchName):
@@ -120,21 +138,21 @@ class Eigen(BLASlike):
       code = '_mapC = {AxB};'.format(AxB=AxB)
     else:
       code = '_mapC *= {beta}; _mapC.noalias() += {AxB};'.format(AxB=AxB, beta=beta)
+
     code = """{{
   using Eigen::Matrix;
   using Eigen::Map;
   using Eigen::Stride;
-  Map<Matrix<{prec},{sizeA}>,Eigen::{alignA},Stride<{ldA},1>> _mapA(const_cast<{prec}*>({A}));
-  Map<Matrix<{prec},{sizeB}>,Eigen::Unaligned,Stride<{ldB},1>> _mapB(const_cast<{prec}*>({B}));
-  Map<Matrix<{prec},{M},{N}>,Eigen::{alignC},Stride<{ldC},1>> _mapC({C});
+  {matA} _mapA(const_cast<{prec}*>({A}));
+  {matB} _mapB(const_cast<{prec}*>({B}));
+  {matC} _mapC({C});
   {code}
 }}
     """.format(prec=self._arch.typename, M=M, N=N,
-               sizeA=self.sizeTrans(M,K,transA),
-               sizeB=self.sizeTrans(K,N,transB),
-               ldA=ldA, ldB=ldB, ldC=ldC, A=A, B=B, C=C,
-               alignA=self.align(ldA), alignC=self.align(ldC),
-               code=code)
+               matA=self.matrixType(self._arch.typename, self.sizeTrans(M,K,transA), ldA, alignedA),
+               matB=self.matrixType(self._arch.typename, self.sizeTrans(K,N,transB), ldB, False),
+               matC=self.matrixType(self._arch.typename, (M, N), ldC, alignedC),
+               A=A, B=B, C=C, code=code)
     return code
 
 

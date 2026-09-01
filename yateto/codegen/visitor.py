@@ -10,7 +10,7 @@ from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux
-from ..type import Scalar
+from ..type import Scalar, Datatype
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
@@ -78,16 +78,18 @@ class KernelGenerator(object):
       localPtrs = set()
       for pp in cfg:
         localPtrs.update(pp.bufferMap.keys())
-      for localPtr in localPtrs:
+      for localPtr in sorted(localPtrs, key=str):
         cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
     for pp in cfg:
       if factory.allocateTemporary():
         for buf, size in pp.initBuffer.items():
           required_tmp_mem += size
           bufname = self._bufferName(buf)
+          # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
           factory.temporary(bufname, size, None)
         for local, buf in pp.bufferMap.items():
-          cpp(f'{local} = reinterpret_cast<{localPtr.datatype.ctype()}*>({self._bufferName(buf)});')
+          # buffers are untyped storage; each pointer is cast to its own type
+          cpp(f'{local} = reinterpret_cast<{local.datatype.ctype()}*>({self._bufferName(buf)});')
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)
@@ -219,6 +221,11 @@ class OptimizedKernelGenerator(KernelGenerator):
       if key not in entries:
         entries[key] = value
       elif entries[key] != value:
+        if isinstance(value, Datatype) or isinstance(entries[key], Datatype):
+          # NOTE: Datatype is a plain Enum; `|` would raise an opaque TypeError
+          raise ValueError(
+            f'Conflicting datatypes for "{key}" across the kernels of a family: '
+            f'{entries[key]} vs. {value}.')
         entries[key] = entries[key] | value
 
 
@@ -288,8 +295,9 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         if target == 'gpu':
           # LinearAllocatorT controls external extra mem. allocated on gpu for tmp. variables
-          # back-casted to char for now
-          header(f'yateto::LinearAllocatorT<char> linearAllocator;')
+          # the buffers are declared as int8_t*, and char and int8_t are
+          # distinct types, so the allocator has to hand out int8_t* as well
+          header(f'yateto::LinearAllocatorT<{Datatype.I8.ctype()}> linearAllocator;')
 
         header.emptyline()
 
@@ -585,7 +593,7 @@ class UnitTestGenerator(KernelGenerator):
         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
 
         stream_new(self.STREAM)
-        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'char*', self.STREAM)
+        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{Datatype.I8.ctype()}*', self.STREAM)
         for var in variables:
           data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
           data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)
@@ -713,7 +721,7 @@ class InitializerGenerator(object):
 
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
-    self._numberType = f'{self._arch.uintTypename} const'.format(self._arch.uintTypename)
+    self._numberType = f'{self._arch.uintTypename} const'
     self._realType = lambda datatype: f'{datatype.ctype()} const'
     self._realPtrType = lambda datatype: self._realType(datatype) + '*'
     self._scalarCollect = collections.OrderedDict()

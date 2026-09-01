@@ -1,6 +1,6 @@
 from typing import List
 from abc import ABC, abstractmethod
-from .type import Datatype
+from .type import Datatype, TypeFlavor
 import operator
 
 class Preference(object):
@@ -107,7 +107,10 @@ class Eigen(BLASlike):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
-    return (not sparseA and not sparseB and target == 'cpu')
+    # Eigen::Map needs one scalar type across A, B and C
+    return (not sparseA and not sparseB and target == 'cpu'
+            and datatypeA == datatypeB == datatypeC
+            and datatypeC.isFloat())
 
   def bool2Trans(self, trans):
     return '.transpose()' if trans else ''

@@ -1,9 +1,9 @@
 from __future__ import annotations
 from .. import aspp
-from ..type import AddressingMode
+from ..type import AddressingMode, Datatype
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
-from .tiny_tensor_language import Dump, Function, IntegerType, FloatingType, MemrefType, GroupType, IntImmValue, DYNAMIC, SubviewInst, LoadInst
+from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, FloatingType, MemrefType, GroupType, IntImmValue, FloatImmValue, DYNAMIC, SubviewInst, LoadInst
 import hashlib
 
 class TensorDescription(object):
@@ -71,7 +71,11 @@ class IndexedTensorDescription(TensorDescription):
         addressing = var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
-def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):
+# The prefix forLoops() puts in front of its loop variables. Any generator that
+# emits its own loops into the same scope has to use it as well.
+INDEX_PREFIX = '_'
+
+def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, indexNo=None):
   flops = 0
   if indexNo == None:
     indexNo = len(indexNames)-1
@@ -309,7 +313,7 @@ def toTinyTCType(datatype: Datatype):
   }[datatype]
 
 def toTinyTCImmediate(datatype: Datatype, value):
-  immtype = {
+  return {
     Datatype.BOOL: lambda value: IntImmValue(IntegerType.i1, value),
     Datatype.I8: lambda value: IntImmValue(IntegerType.i8, value),
     Datatype.I16: lambda value: IntImmValue(IntegerType.i16, value),

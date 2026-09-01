@@ -4,10 +4,8 @@ from .generic import Generic
 
 from ...ops import Operation
 
-from typing import Union
-
 class Description(object):
-  def __init__(self, alpha, add: bool, optype: Operation, result: IndexedTensorDescription, terms: list[IndexedTensorDescription], termTemplate, nodeTermIndices):
+  def __init__(self, alpha, add: bool, optype: Operation, result: IndexedTensorDescription, terms, termTemplate, nodeTermIndices):
     self.alpha = alpha
     self.add = add
     self.result = result
@@ -20,18 +18,19 @@ class Description(object):
 
     rR = loopRanges(self.result, self.result.indices)
 
-    # TODO: shall we allow boundingboxing?
-    if len(terms) == 0:
-      self.loopRanges = rR
-    else:
-      self.loopRanges = loopRanges(self.terms[0], self.result.indices)
-      assert testLoopRangesAContainedInB(self.loopRanges, rR)
-      for term in self.terms[1:]:
-        newRange = loopRanges(term, self.result.indices)
-        assert testLoopRangesEqual(newRange, self.loopRanges)
-        assert testLoopRangesAContainedInB(newRange, rR)
-
-        self.loopRanges.update(newRange)
+    # NOTE: operands need not span all of the result's indices -- an operand
+    #       that lacks an index is simply broadcast along it. The loop ranges
+    #       are therefore driven by the result and only narrowed where an
+    #       operand actually has the index.
+    self.loopRanges = dict(rR)
+    for term in self.terms:
+      termRange = loopRanges(term, self.result.indices)
+      assert testLoopRangesAContainedInB(termRange, rR), \
+        f'Operand {term.name} exceeds the result\'s loop ranges.'
+      for index, rng in termRange.items():
+        assert self.loopRanges[index] == rng or index not in term.indices, \
+          f'Inconsistent loop range for index {index}.'
+        self.loopRanges[index] = rng
 
 def generator(arch, descr, target):
   if target == 'cpu':

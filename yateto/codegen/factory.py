@@ -2,7 +2,7 @@ import string
 from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
-from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
+from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar
 
@@ -27,13 +27,15 @@ class KernelFactory(object):
     raise NotImplementedError
 
   def temporary(self, bufname, size, datatype, iniZero=False, memory=list()):
+    """`size` is an element count of `datatype` (bytes when datatype is None)."""
     assert(iniZero == False or len(memory) == 0)
 
     if datatype is None:
       datatype = Datatype.I8
 
     if self._target == 'cpu':
-      if self._arch.onHeap(size):
+      # NOTE: onHeap() works on bytes, whereas size is an element count
+      if self._arch.onHeap(size * datatype.size()):
         if len(self._freeList) == 0:
           self._cpp(f'int {self.ERROR_NAME};')
         self._cpp(f'{datatype.ctype()}* {bufname};')
@@ -183,12 +185,12 @@ class OptimizedKernelFactory(KernelFactory):
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromNode(result, node)
     term = IndexedTensorDescription.fromNode(arguments[0], node.term())
-    return self._csa(result, term, add, condition, scalar, routineCache, gemm_cfg)
+    return self._csa(result, term, condition, add, scalar, routineCache, gemm_cfg)
 
   def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromNode(result, node)
     term = IndexedTensorDescription.fromNode(arguments[0], node.term())
-    return self._csa(result, term, add, condition, scalar, routineCache, gemm_cfg)
+    return self._csa(result, term, condition, add, scalar, routineCache, gemm_cfg)
 
   def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromVar(result, self._indices(result))
@@ -240,7 +242,7 @@ class UnitTestFactory(KernelFactory):
     return self._conditional(condition, lambda: forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False))
 
   def create_ScalarMultiplication(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return self._conditional(condition, lambda: self.simple(result, arguments[0], add, scalar, routineCache))
+    return self.simple(result, arguments[0], condition, add, scalar, routineCache, gemm_cfg)
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.indices <= node.term().indices and node.term().indices <= node.indices
@@ -255,32 +257,51 @@ class UnitTestFactory(KernelFactory):
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
   def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    g = self._indices(result)
+    # the loops below run over node.indices, so the address strings have to be
+    # built from those very indices
     resultTerm = self._formatTerm(result, node.indices)
 
     argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
     termTerm = f'({argTerms[0]}) * ({argTerms[1]})'
 
-    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
 
     argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
     termTerm = node.optype.callstr(*node.fillTerms(argTerms))
 
-    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
+
+  def create_Accumulate(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    resultTerm = self._formatTerm(result, node.indices)
+
+    argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
+    termTerm = argTerms[0]
+    for argTerm in argTerms[1:]:
+      termTerm = node.optype.callstr(termTerm, argTerm)
+
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
+    datatype = node.datatype
 
-    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
+    # the reference implementation folds the reduced index explicitly
+    def body():
+      sumIndex = node.sumIndexName()
+      size = node.term().indices.indexSize(sumIndex)
+      accumulator = '_acc'
+      init = f'{datatype.ctype()} {accumulator} = {node.optype.neutralLiteral(datatype)};'
+      inner = f'{accumulator} = {node.optype.callstr(accumulator, termTerm)};'
+      return self._simpleBody(resultTerm, accumulator, add, scalar, node.indices,
+                              reduceIdx=(sumIndex, size, init, inner))
+
+    return self._conditional(condition, body)
 
   def create_IfThenElse(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    g = self._indices(result)
     resultTerm = self._formatTerm(result, node.indices)
     yesTerm = self._formatTerm(arguments[0], node.yesTerm().indices)
     noTerm = self._formatTerm(arguments[1], node.noTerm().indices)
@@ -288,7 +309,7 @@ class UnitTestFactory(KernelFactory):
 
     termTerm = f'(({conditionTerm}) ? ({yesTerm}) : ({noTerm}))'
 
-    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g))
+    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
   def _simpleBody(self, resultTerm, termTerm, add, scalar, indices, reduceIdx = None):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
@@ -296,9 +317,21 @@ class UnitTestFactory(KernelFactory):
     if scalar and scalar != 1.0:
       termTerm = f'{scalar} * {termTerm}'
 
+    assign = '+=' if add else '='
+
     class AssignBody(object):
       def __call__(s):
-        self._cpp(f"{resultTerm} {'+=' if add else '='} {termTerm};")
+        if reduceIdx is not None:
+          # own scope for the accumulator, as several rank-0 reductions may
+          # share one enclosing scope
+          sumIndex, size, init, inner = reduceIdx
+          with self._cpp.AnonymousScope():
+            self._cpp(init)
+            with self._cpp.For(f'int {INDEX_PREFIX}{sumIndex} = 0; {INDEX_PREFIX}{sumIndex} < {size}; ++{INDEX_PREFIX}{sumIndex}'):
+              self._cpp(inner)
+            self._cpp(f'{resultTerm} {assign} {termTerm};')
+        else:
+          self._cpp(f'{resultTerm} {assign} {termTerm};')
         return 1 if add else 0
 
     return forLoops(self._cpp, indices, ranges, AssignBody(), pragmaSimd=False)
@@ -330,6 +363,9 @@ class UnitTestFactory(KernelFactory):
       self._cpp('double error = 0.0;')
       self._cpp('double refNorm = 0.0;')
       forLoops(self._cpp, g, ranges, CompareBody(), pragmaSimd=False)
+      # an all-zero reference (bool results, comparison kernels) would make the
+      # relative error 0/0 == NaN, and NaN compares false against any epsilon
+      self._cpp('if (refNorm == 0.0) { refNorm = 1.0; }')
       self._cpp(self._testFramework.assertLessThan('sqrt(error/refNorm)', epsMult*self._arch.epsilon))
 
   def tensor(self, node, resultName, maxValue = 512, scale = 1 / 512):
@@ -343,7 +379,12 @@ class UnitTestFactory(KernelFactory):
     if isDense:
       self.temporary(resultName, size, node.getDatatype(self._arch))
       with self._cpp.For(f'int i = 0; i < {size}; ++i'):
-        self._cpp(f'{resultName}[i] = static_cast<{datatype.ctype()}>((i + {self._rand}) % {maxValue} + 1);')
+        if datatype.isBool():
+          # alternate, so that both branches of a guard get exercised;
+          # `(i + r) % maxValue + 1` is never zero and would be all-true
+          self._cpp(f'{resultName}[i] = ((i + {self._rand}) % 2) == 0;')
+        else:
+          self._cpp(f'{resultName}[i] = static_cast<{datatype.ctype()}>((i + {self._rand}) % {maxValue} + 1);')
     else:
       memory = [datatype.literal(0)]*size
       nz = spp.nonzero()

@@ -3,8 +3,14 @@ from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
 from . import aspp
 from enum import Enum
+import math
 
 import numpy as np
+
+class TypeFlavor(Enum):
+  """Selects the spelling of a datatype for a given consumer."""
+  DEFAULT = 0
+  EIGEN = 1
 
 class Datatype(Enum):
   BOOL = 0
@@ -32,7 +38,15 @@ class Datatype(Enum):
       Datatype.BF16: 'bf16',
     }[self]
 
-  def ctype(self):
+  def ctype(self, flavor=TypeFlavor.DEFAULT):
+    if flavor == TypeFlavor.EIGEN:
+      # Eigen has its own scalar wrappers for the non-standard FP formats
+      eigen = {
+        Datatype.F16: 'Eigen::half',
+        Datatype.BF16: 'Eigen::bfloat16',
+      }
+      if self in eigen:
+        return eigen[self]
     return {
       Datatype.BOOL: 'bool',
       Datatype.I8: 'int8_t',
@@ -46,9 +60,31 @@ class Datatype(Enum):
       Datatype.F128: 'yateto::f128_ty',
     }[self]
 
+  def isFloat(self):
+    return self in (Datatype.F16, Datatype.BF16, Datatype.F32, Datatype.F64, Datatype.F128)
+
+  def isInteger(self):
+    return self in (Datatype.I8, Datatype.I16, Datatype.I32, Datatype.I64)
+
+  def isBool(self):
+    return self == Datatype.BOOL
+
+  def bits(self):
+    return 1 if self == Datatype.BOOL else 8 * self.size()
+
+  def limits(self):
+    """(lowest, max) representable value; None for the FP types (use infinity there)."""
+    if self == Datatype.BOOL:
+      return (False, True)
+    if self.isInteger():
+      return (-2**(self.bits() - 1), 2**(self.bits() - 1) - 1)
+    return (None, None)
+
   def nptype(self):
+    # NOTE: np.bool was removed in numpy 1.24, np.float128 does not exist on all
+    #       platforms (e.g. macOS/arm64, Windows). Hence the guarded lookups.
     return {
-      Datatype.BOOL: np.bool,
+      Datatype.BOOL: np.bool_,
       Datatype.I8: np.int8,
       Datatype.I16: np.int16,
       Datatype.I32: np.int32,
@@ -57,7 +93,7 @@ class Datatype(Enum):
       Datatype.F64: np.float64,
       Datatype.F16: np.float16,
       Datatype.BF16: np.float32, # NYI
-      Datatype.F128: np.float128,
+      Datatype.F128: getattr(np, 'float128', np.longdouble),
     }[self]
 
   def size(self):
@@ -76,10 +112,31 @@ class Datatype(Enum):
     }[self]
 
   def safeint(self, value):
-    # allow inf/-inf to be treated as int
-    return int(max(-2**64, min(2**64, value)))
+    # allow inf/-inf to be treated as int: saturate at the type's own limits
+    lo, hi = self.limits()
+    if lo is None:
+      lo, hi = -2**63, 2**63 - 1
+    if value != value: # NaN
+      return 0
+    return int(max(lo, min(hi, value)))
 
   def literal(self, value):
+    # Non-finite values have no literal spelling in C/C++; route them through
+    # <limits> instead. For the integer types they saturate.
+    if isinstance(value, float) and not math.isfinite(value):
+      ctype = self.ctype()
+      if math.isnan(value):
+        if self.isFloat():
+          return f'std::numeric_limits<{ctype}>::quiet_NaN()'
+        return self.literal(0)
+      if self.isFloat():
+        sign = '-' if value < 0 else ''
+        return f'{sign}std::numeric_limits<{ctype}>::infinity()'
+      if self.isBool():
+        return 'true' if value > 0 else 'false'
+      # integers: saturate
+      return f'std::numeric_limits<{ctype}>::{"max" if value > 0 else "lowest"}()'
+
     # (note: the extra lambda mapping is needed to prevent type errors)
     return {
       Datatype.BOOL: lambda value: 'true' if value else 'false',
@@ -91,7 +148,7 @@ class Datatype(Enum):
       Datatype.F64: lambda value: f'{float(value):.16}',
       Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
       Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
-      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({float(value):.32}q)',
+      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({value!r}q)',
     }[self](value)
 
 class AddressingMode(Enum):

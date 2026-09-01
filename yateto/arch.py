@@ -114,7 +114,17 @@ class Architecture(object):
   def formatConstant(self, constant):
     return self.datatype.literal(constant)
 
+  # Backwards-compatible aliases; the datatype is the source of truth now.
+  @property
+  def typename(self):
+    return self.datatype.ctype()
+
+  @property
+  def bytesPerReal(self):
+    return self.datatype.size()
+
   def onHeap(self, byteCount):
+    """`byteCount` is a size in bytes."""
     return byteCount > self._tmpStackLimit
 
   def __eq__(self, other):

@@ -141,7 +141,7 @@ class FusedGemms:
                                         alpha,
                                         beta,
                                         BatchedOperationsAux.NUM_ELEMENTS_NAME,
-                                        BatchedOperationsAux.FLAGS_NAME,
+                                        BatchedOperationsAux.flags_arg(self._attrs),
                                         BatchedOperationsAux.STREAM_PTR_NAME)
 
   @classmethod

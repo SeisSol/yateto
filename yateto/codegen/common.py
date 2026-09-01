@@ -168,6 +168,16 @@ class BatchedOperationsAux:
   FLAGS_NAME = 'flags'
   FORBIDDEN_STREAM_PTR = 'reinterpret_cast<void*>(std::numeric_limits<uintptr_t>::max())'
 
+  @classmethod
+  def flags_arg(cls, attrs):
+    """The batch-flags argument for a kernel that always takes one.
+
+    The external generators (GemmForge, ChainForge) put a flags parameter in
+    every kernel they emit, so the choice at the call site is between the
+    member and a literal null -- and the member only exists when the kernel
+    declares the attribute.
+    """
+    return cls.FLAGS_NAME if attrs.flags else 'nullptr'
 
   def __init__(self, underlying_data_type):
     self.underlying_data_type = underlying_data_type

@@ -366,7 +366,11 @@ class OptimizedKernelGenerator(KernelGenerator):
         if target == 'gpu':
           header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
           header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
-          header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+          # Only where the kernel asked for it: without the member, a caller
+          # that means to skip elements fails to compile instead of getting a
+          # kernel that computes all of them.
+          if attrs.flags:
+            header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)

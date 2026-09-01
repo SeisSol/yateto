@@ -91,7 +91,9 @@ class KernelFactory(object):
     if self._target == 'cpu':
       pass
     elif self._target == 'gpu':
-      self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+      # Nothing to reset where the kernel has no flags member.
+      if self._attrs.flags:
+        self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
     else:
       raise RuntimeError('unknown compute target')
 

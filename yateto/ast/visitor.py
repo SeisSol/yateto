@@ -1,3 +1,4 @@
+import numpy as np
 from numpy import ndindex, arange, float64, add, einsum, apply_along_axis
 import math
 import collections
@@ -157,6 +158,9 @@ class FindIndexPermutations(Visitor):
     return self.allPermutationsNoCostNAryOp(node)
 
   def visit_Elementwise(self, node):
+    return self.allPermutationsNoCostNAryOp(node)
+
+  def visit_Accumulate(self, node):
     return self.allPermutationsNoCostNAryOp(node)
 
   def visit_IndexSum(self, node):
@@ -328,16 +332,18 @@ class ComputeConstantExpression(Visitor):
     assert term is not None, f'{self.__class__.__name__} may only be used when all involved tensors are constant.'
     return term
 
-  def visit_Elementwise(self, node):
-    terms = self.generic_visit(node)
-    fullTerms = node.fillTerms(terms)
-    return node.optype.call(*fullTerms)
-
   def visit_Reduction(self, node):
     terms = self.generic_visit(node)
     assert len(terms) == 1
-    indexpos = node.term().indices.find(node.reductionIndex())
-    return np.apply_along_axis(lambda x: reduce(node.optype.call, x), indexpos, terms[0])
+    # find() wants a single index name, not the Indices object reductionIndex() returns
+    indexpos = node.term().indices.find(node.sumIndexName())
+    return apply_along_axis(lambda x: reduce(node.optype.call, x), indexpos, terms[0])
+
+  def visit_Elementwise(self, node):
+    terms = self.generic_visit(node)
+    permute = lambda indices, tensor: np.einsum(f'{indices.tostring()}->{node.indices.tostring()}', tensor)
+    aligned = [permute(child.indices, terms[i]) for i,child in enumerate(node)]
+    return node.optype.call(*node.fillTerms(aligned))
 
   def visit_Accumulate(self, node):
     terms = self.generic_visit(node)

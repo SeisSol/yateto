@@ -58,7 +58,7 @@ class Kernel(object):
 
   def prepareUntilUnitTest(self, arch):
     self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
-    dtd = SetDatatype1(arch)
+    dtd = SetDatatype(arch)
     for ast in self.ast:
       dtd.visit(ast)
     ast2cf = AST2ControlFlow(simpleMemoryLayout=True)
@@ -86,7 +86,7 @@ class Kernel(object):
       permutationVariants = FindIndexPermutations().visit(ast)
       ast = SelectIndexPermutations(permutationVariants).visit(ast)
       ast = ImplementContractions().visit(ast)
-      ast = SetDatatype2().visit(ast)
+      ast = SetDatatype().visit(ast)
       if self._prefetch is not None:
         prefetchCapabilities = FindPrefetchCapabilities().visit(ast)
         assignPf = AssignPrefetch(prefetchCapabilities, prefetch)

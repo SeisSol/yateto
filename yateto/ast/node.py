@@ -381,7 +381,7 @@ class Assign(Op):
 
   def __str__(self):
     selfname = type(self).__name__
-    indices = self.indices if self.indices != None else '<not deduced>'
+    indices = self.indices if self.indices is not None else '<not deduced>'
     condition = '' if isinstance(self.condition(), bool) and self.condition() else f' if {self.condition()}'
     return f'{selfname}[{indices}]: {self.leftTerm()} <- {self.rightTerm()}{condition}'
 
@@ -617,24 +617,36 @@ class IfThenElse(Op):
 
     self._condition = condition
 
+  def yesTerm(self):
+    return self._children[0]
+
+  def noTerm(self):
+    return self._children[1]
+
   def condition(self):
-    return condition
+    return self._condition
 
   def nonZeroFlops(self):
     return 0
 
   def computeSparsityPattern(self, *spps):
-    # TODO: yesTerm OR noTerm
-    spp = spps[0] if len(spps) >= 2 else self.term().eqspp()
-    return spp
+    if len(spps) == 0:
+      spps = [child.eqspp() for child in self]
+    # either branch may be taken, so over-approximate with their union
+    permuted = [self.permute(self[i].indices, spps[i]) for i in range(2)]
+    return aspp.add(permuted[0], permuted[1])
 
   def __str__(self):
-    indices = self.indices if self.indices != None else '<not deduced>'
+    indices = self.indices if self.indices is not None else '<not deduced>'
     return f'{type(self).__name__}[{indices}]'
 
 class Elementwise(Op):
   def __init__(self, optype: ops.Operation, *terms):
+    optype.checkArity(len(terms))
+
     nodeTerms = [term for term in terms if isinstance(term, Node)]
+    if len(nodeTerms) == 0:
+      raise ValueError('Elementwise needs at least one tensor-valued operand.')
     super().__init__(*nodeTerms)
 
     self.nodeTermIndices = [None] * len(terms)
@@ -651,12 +663,8 @@ class Elementwise(Op):
     self.optype = optype
     self.terms = terms
 
-    self.indices = Indices()
-    for nodeTerm in nodeTerms:
-      nodeIndices = nodeTerm.indices if nodeTerm.indices is not None else Indices()
-      K = self.indices & nodeIndices
-      # assert self.indices.subShape(K) == nodeTerm.subShape(K)
-      self.indices = self.indices.merged(nodeIndices - K)
+    # The indices are deduced by DeduceIndices, which is the first point at
+    # which the children's indices are guaranteed to be known.
 
   def nonZeroFlops(self):
     return self.eqspp().count_nonzero()
@@ -667,24 +675,40 @@ class Elementwise(Op):
 
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
-      spps = [node.eqspp() for node in self]
-    xspp = spps[0]
-    return spps[0]
+      spps = [child.eqspp() for child in self]
+    # bring every operand into this node's index order and shape first, so the
+    # operation only has to combine patterns of equal shape
+    aligned = [self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], strict=False))
+               for i in range(len(spps))]
+    return self.optype.sparsityResult(aligned)
 
   def __str__(self):
-    indices = self.indices if self.indices != None else '<not deduced>'
+    indices = self.indices if self.indices is not None else '<not deduced>'
     return f'{type(self).__name__}({self.optype})[{indices}]'
 
 class Reduction(UnaryOp):
   def __init__(self, optype, term, sumIndex):
-    # TODO: what if we datatype/field does not match the operation? (w.r.t. the sparsity patterns)
     super().__init__(term)
-    self.indices = term.indices - set([sumIndex])
-    self._reductionIndex = term.indices.extract(sumIndex)
+    # term.indices may still be None here (e.g. for an Add/Einsum child); in
+    # that case DeduceIndices.visit_Reduction computes them later.
+    self._sumIndexName = str(sumIndex)
+    self._reductionIndex = None
+    if term.indices is not None:
+      self.deduceIndices()
     self.optype = optype
+
+  def deduceIndices(self):
+    term = self.term()
+    self.indices = term.indices - set(self._sumIndexName)
+    self._reductionIndex = term.indices.extract(self._sumIndexName)
+    return self.indices
 
   def nonZeroFlops(self):
     return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
+
+  def sumIndexName(self):
+    """The reduced index, as a plain single-character name."""
+    return self._sumIndexName
 
   def reductionIndex(self):
     return self._reductionIndex
@@ -698,7 +722,7 @@ class Reduction(UnaryOp):
     return spp.indexSum(self.term().indices, self.indices)
 
   def __str__(self):
-    indices = self.indices if self.indices != None else '<not deduced>'
+    indices = self.indices if self.indices is not None else '<not deduced>'
     return f'{type(self).__name__}({self.optype})[{indices}]'
 
 class Accumulate(Op):
@@ -709,16 +733,17 @@ class Accumulate(Op):
 
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:
-      spps = [node.eqspp() for node in self]
-    permute_summand = lambda i: self.permute(self[i].indices, spps[i])
-    spp = permute_summand(0)
-    for i in range(1, len(spps)):
-      add_spp = permute_summand(i)
-      spp = aspp.add(spp, add_spp)
-    return spp
+      spps = [child.eqspp() for child in self]
+    aligned = [self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], strict=False))
+               for i in range(len(spps))]
+    return self.optype.sparsityResult(aligned)
 
   def nonZeroFlops(self):
     nzFlops = 0
     for child in self:
       nzFlops += child.eqspp().count_nonzero()
     return nzFlops - self.eqspp().count_nonzero()
+
+  def __str__(self):
+    indices = self.indices if self.indices is not None else '<not deduced>'
+    return f'{type(self).__name__}({self.optype})[{indices}]'

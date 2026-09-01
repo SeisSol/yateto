@@ -98,15 +98,34 @@ class DeduceIndices(Transformer):
     node.indices = deepcopy(node.term().indices)
     return node
 
+  def _mergeChildIndices(self, node, what):
+    # different operands may carry different index sets and different
+    # permutations of them, but the index sizes have to agree
+    indices = deepcopy(node[0].indices)
+    for i in range(1, len(node)):
+      indices = indices.mergeStrict(node[i].indices)
+    if not all(child.indices <= indices for child in node):
+      raise ValueError(f'{what}: Indices do not match: ', *[child.indices for child in node])
+    return indices
+
   def visit_Elementwise(self, node, bound):
     for child in node:
       self.visit(child, bound)
-    node.indices = deepcopy(node[0].indices)
+    node.indices = self._mergeChildIndices(node, 'Elementwise')
+    return node
+
+  def visit_Accumulate(self, node, bound):
+    for child in node:
+      self.visit(child, bound)
+    node.indices = self._mergeChildIndices(node, 'Accumulate')
     return node
 
   def visit_Reduction(self, node, bound):
-    subbound = bound | set(node.reductionIndices())
+    # `bound` holds plain index names; sumIndexName() is one of those, whereas
+    # reductionIndices() yields Indices objects
+    subbound = bound | set(node.sumIndexName())
     self.visit(node.term(), subbound)
+    node.deduceIndices()
     return node
 
   def visit_SliceView(self, node, bound):
@@ -240,6 +259,16 @@ class EquivalentSparsityPattern(Transformer):
     node.setEqspp( node.computeSparsityPattern() )
     return node
 
+  def visit_Accumulate(self, node):
+    self.generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+
+  def visit_IfThenElse(self, node):
+    self.generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+
   def getEqspp(self, terms, targetIndices):
     # Shortcut if all terms have dense eqspps
     if all(term.eqspp().is_dense() for term in terms):
@@ -288,25 +317,54 @@ class ComputeMemoryLayout(Transformer):
   def visit_IndexedTensor(self, node):
     return node
 
-class SetDatatype1(Transformer):
-  def __init__(self, arch):
+class SetDatatype(Transformer):
+  """Propagates datatypes bottom-up through the AST.
+
+  `arch` is only needed on the first pass (before the tensors' datatypes have
+  been resolved); afterwards the IndexedTensor nodes already carry their type.
+  """
+
+  def __init__(self, arch=None):
     self.arch = arch
 
+  def _childTypes(self, node):
+    return [child.datatype for child in node]
+
   def generic_visit(self, node):
     super().generic_visit(node)
-    assert(len(node) > 0)
-    assert(all(child.datatype == node[0].datatype for child in node))
-    node.datatype = node[0].datatype
+    assert len(node) > 0, f'Cannot deduce a datatype for the childless node {node}.'
+    types = self._childTypes(node)
+    assert all(t == types[0] for t in types), \
+      f'Mismatching operand datatypes in {node}: {[str(t) for t in types]}'
+    node.datatype = types[0]
     return node
 
   def visit_IndexedTensor(self, node):
     super().generic_visit(node)
-    node.datatype = node.tensor.getDatatype(self.arch)
+    if self.arch is not None:
+      node.datatype = node.tensor.getDatatype(self.arch)
     return node
 
   def visit_Elementwise(self, node):
     super().generic_visit(node)
-    node.datatype = node.optype.datatypeResult([c.datatype for c in node])
+    node.datatype = node.optype.datatypeResult(self._childTypes(node))
+    return node
+
+  def visit_Reduction(self, node):
+    super().generic_visit(node)
+    node.datatype = node.optype.datatypeResult(self._childTypes(node))
+    return node
+
+  def visit_Accumulate(self, node):
+    super().generic_visit(node)
+    node.datatype = node.optype.datatypeResult(self._childTypes(node))
+    return node
+
+  def visit_IfThenElse(self, node):
+    super().generic_visit(node)
+    assert node[0].datatype == node[1].datatype, \
+      f'Both branches of {node} must have the same datatype.'
+    node.datatype = node[0].datatype
     return node
 
   def visit_Assign(self, node):
@@ -314,24 +372,8 @@ class SetDatatype1(Transformer):
     node.datatype = node[0].datatype
     return node
 
-class SetDatatype2(Transformer):
-  def generic_visit(self, node):
-    super().generic_visit(node)
-    assert(len(node) > 0)
-    assert(all(child.datatype == node[0].datatype for child in node))
-    node.datatype = node[0].datatype
-    return node
+# backwards-compatible aliases (SetDatatype1/2 only differed in `arch`)
+SetDatatype1 = SetDatatype
 
-  def visit_IndexedTensor(self, node):
-    super().generic_visit(node)
-    return node
-
-  def visit_Elementwise(self, node):
-    super().generic_visit(node)
-    node.datatype = node.optype.datatypeResult([c.datatype for c in node])
-    return node
-
-  def visit_Assign(self, node):
-    super().generic_visit(node)
-    node.datatype = node[0].datatype
-    return node
+def SetDatatype2():
+  return SetDatatype()

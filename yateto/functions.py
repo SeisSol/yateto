@@ -4,9 +4,15 @@ from .type import Datatype
 
 def add(x, y): return node.Elementwise(ops.Add(), x, y)
 def mul(x, y): return node.Elementwise(ops.Mul(), x, y)
+def div(x, y): return node.Elementwise(ops.Div(), x, y)
 def bitwise_or(x, y): return node.Elementwise(ops.Or(), x, y)
 def bitwise_and(x, y): return node.Elementwise(ops.And(), x, y)
 def bitwise_xor(x, y): return node.Elementwise(ops.Xor(), x, y)
+def bitwise_not(x): return node.Elementwise(ops.Not(), x)
+
+def logical_and(x, y): return node.Elementwise(ops.And(), x, y)
+def logical_or(x, y): return node.Elementwise(ops.Or(), x, y)
+def logical_not(x): return node.Elementwise(ops.LogicalNot(), x)
 
 def sin(x): return node.Elementwise(ops.Sin(), x)
 def cos(x): return node.Elementwise(ops.Cos(), x)
@@ -61,5 +67,7 @@ def all(term, indices): return reduction(ops.And(), term, indices)
 def any(term, indices): return reduction(ops.Or(), term, indices)
 def min(term, indices): return reduction(ops.Min(), term, indices)
 def max(term, indices): return reduction(ops.Max(), term, indices)
+
+def accumulate(op, *terms): return node.Accumulate(op, *terms)
 
 def cast(x, dtype): return node.Elementwise(ops.Typecast(dtype), x)

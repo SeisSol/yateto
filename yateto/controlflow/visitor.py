@@ -1,3 +1,4 @@
+import collections
 from ..ast.visitor import Visitor
 from yateto import Scalar
 from .graph import *
@@ -12,7 +13,13 @@ class AST2ControlFlow(Visitor):
     self._cfg = []
     self._writable = set()
     self._simpleMemoryLayout = simpleMemoryLayout
-    self._condition = [True]
+    self._guard = [Guard.always()]
+    # a condition tensor may be rewritten inside the kernel, so every write
+    # starts a new version and guards refer to (variable, version)
+    self._version = collections.defaultdict(int)
+    # the guard a given version was produced under; reading it is only
+    # meaningful where that guard held, so it is conjoined at every use
+    self._definitionGuard = dict()
 
   def cfg(self):
     return self._cfg + [ProgramPoint(None)]
@@ -26,7 +33,7 @@ class AST2ControlFlow(Visitor):
       permute.computeMemoryLayout()
     permute.datatype = permute[0].datatype
     result = self._nextTemporary(permute)
-    action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False, condition=self._condition[-1])
+    action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False, condition=self._guard[-1])
     self._addAction(action)
     return result
 
@@ -58,7 +65,7 @@ class AST2ControlFlow(Visitor):
     variables = [self.visit(child) for child in node]
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, Expression(node, self._ml(node), variables), False, condition=self._condition[-1])
+    action = ProgramAction(result, Expression(node, self._ml(node), variables), False, condition=self._guard[-1])
     self._addAction(action)
 
     return result
@@ -78,7 +85,7 @@ class AST2ControlFlow(Visitor):
     add = False
     for i,var in enumerate(variables):
       rhs = self._addPermuteIfRequired(node.indices, node[i], var)
-      action = ProgramAction(tmp, rhs, add, condition=self._condition[-1])
+      action = ProgramAction(tmp, rhs, add, condition=self._guard[-1])
       self._addAction(action)
       add = True
 
@@ -88,30 +95,42 @@ class AST2ControlFlow(Visitor):
     variable = self.visit(node.term())
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, variable, False, node.scalar(), condition=self._condition[-1])
+    action = ProgramAction(result, variable, False, node.scalar(), condition=self._guard[-1])
     self._addAction(action)
 
     return result
 
   def visit_Assign(self, node):
-    condition = self._condition[-1]
+    outerGuard = self._guard[-1]
+
+    # The condition is evaluated to decide the branch, so it is computed
+    # outside the new guard -- before it is pushed.
     if isinstance(node.condition(), Node):
-      myCondition = self.visit(node[2])
+      conditionVar = self.visit(node[2])
+      version = self._version[conditionVar.name]
+      myGuard = Guard.literal(conditionVar, version) \
+                & self._definitionGuard.get((conditionVar.name, version), Guard.always())
     else:
-      myCondition = node.condition()
+      myGuard = Guard.coerce(node.condition())
 
     self.updateWritable(node[0].name())
 
-    newCondition = condition & CNFCondition(myCondition)
-    self._condition.append(newCondition)
-    self._condition = self._condition[:-1]
+    guard = outerGuard & myGuard
 
-    rVar = self.visit(node[1])
-    rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), rVar)
+    # The whole right-hand side runs under the guard, not just the final store.
+    self._guard.append(guard)
+    try:
+      rVar = self.visit(node[1])
+      rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), rVar)
 
-    lVar = self.visit(node[0])
-    action = ProgramAction(lVar, rhs, False, condition=newCondition)
-    self._addAction(action)
+      lVar = self.visit(node[0])
+      self._addAction(ProgramAction(lVar, rhs, False, condition=guard))
+    finally:
+      self._guard.pop()
+
+    name = node[0].name()
+    self._version[name] += 1
+    self._definitionGuard[(name, self._version[name])] = guard
 
     return lVar
 
@@ -119,17 +138,8 @@ class AST2ControlFlow(Visitor):
     return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype, is_temporary=node.tensor.temporary)
 
   def visit_IfThenElse(self, node):
-    if len(self._condition) > 0:
-      condition = self._condition.top()
-    else:
-      condition = True
-    self.visit(node.yesTerm())
-    self.visit(node.noTerm())
-    myCondition = node.condition()
-    self._condition.push(condition & myCondition)
-    self._condition.pop()
-    self._addAction(ProgramAction())
-    return self.visit(node.term())
+    raise NotImplementedError(
+      'IfThenElse is not lowered yet; use yateto.functions.where (Elementwise(Ternary)).')
 
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
@@ -151,7 +161,7 @@ class SortedGlobalsList(object):
     V = set()
     for pp in cfg:
       if pp.action:
-        V = V | pp.action.result.variables() | pp.action.variables() | pp.action.getCondition().variables()
+        V = V | pp.action.result.variables() | pp.action.allVariables()
     return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
 
 class SortedPrefetchList(object):

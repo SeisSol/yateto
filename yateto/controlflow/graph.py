@@ -83,6 +83,10 @@ class VariableView(object):
   def substituted(self, when, by, memoryLayout=None):
     return by if self == when else self
 
+  @property
+  def datatype(self):
+    return self.variable.datatype
+
   def viewed(self):
     return self.variable
 
@@ -185,6 +189,13 @@ class ProgramAction(object):
       V = V | self.result.variables()
     return V
 
+  def guardVariables(self):
+    """Variables read to evaluate this action's guard."""
+    return self.getGuard().variables()
+
+  def allVariables(self):
+    return self.variables() | self.guardVariables()
+
   def maySubstitute(self, when, by, result = True, term = True):
     maySubsTerm = self.term.maySubstitute(when, by)
     maySubsResult = self.result.maySubstitute(when, by)
@@ -196,21 +207,25 @@ class ProgramAction(object):
 
     return (not term or maySubsTerm) and (not result or maySubsResult) and compatible
 
-  def substituted(self, when, by, cond, result = True, term = True):
+  def substituted(self, when, by, guard=None, result = True, term = True):
+    """Replace `when` by `by`.
+
+    `guard` is passed only when the substitution redirects this action's *write
+    target* onto a variable another action writes under that guard; the action
+    then inherits it. A read substitution leaves the guard alone -- conjoining
+    there would restrict statements that are not themselves conditional.
+    """
     rsubs = self.result.substituted(when, by) if result else self.result
     tsubs = self.term.substituted(when, by, rsubs.memoryLayout()) if term else self.term
-    csubs = self.condition & cond
-    return ProgramAction(rsubs, tsubs, self.add, self.scalar, csubs)
+    gsubs = self.condition if guard is None else (self.getGuard() & guard)
+    return ProgramAction(rsubs, tsubs, self.add, self.scalar, gsubs)
 
   def setVariablesWritable(self, name):
     self.result.setWritable(name)
     self.term.setWritable(name)
 
-  def getCondition(self):
-    if isinstance(self.condition, CNFCondition):
-      return self.condition
-    else:
-      return CNFCondition(self.condition)
+  def getGuard(self):
+    return Guard.coerce(self.condition)
 
 
 # TODO: probably should be a subclass of ProgramAction
@@ -264,146 +279,157 @@ class ProgramPoint(object):
     self.bufferMap = None
 
 
-# a rather primitive CNF implementation.
-# do not overuse (i.e. avoid conditional assigns where possible)
+class Guard:
+  """A conjunction of literals over condition values.
 
-class CNFClause:
-  def __init__(self, variables):
-    if isinstance(variables, list):
-      self.variables = {var: True for var in variables}
-    else:
-      self.variables = variables
-    self.fulfilled = False
+  A literal is a ``(variable, version)`` pair mapped to the polarity the value
+  must have. Versions matter because a condition tensor may be written inside
+  the kernel: two reads separated by a write denote different values and must
+  not be treated as the same literal.
 
-  def negateVariables(self):
-    return {var: not self.variables[var] for var in self.variables}
+  Guards form a meet-semilattice under conjunction. That is all the guard
+  language needs -- ``assignIf`` produces a single positive literal, and nesting
+  conjoins. Disjunction would require a richer representation (a truth-table
+  bitmask over the condition variables is the cheapest one that stays exact),
+  but nothing produces a disjunctive guard.
+  """
 
-  def unite(self, clause):
-    output = CNFClause([])
-    for v in self.variables:
-      if v in clause and clause.variables[v] != self.variables[v]:
-        output.fulfilled = True
-    if not output.fulfilled:
-      output.variables = {**self.variables, **clause.variables}
-    return output
+  __slots__ = ('_literals', '_never')
 
-  def __repr__(self):
-    formatvar = lambda name: f'{name}' if self.variables[name] else f'~{name}'
-    return f'[{", ".join(formatvar(var) for var in self.variables)}]'
+  def __init__(self, literals=None, never=False):
+    self._literals = dict(literals) if literals else dict()
+    self._never = never
 
-  def ccode(self):
-    if not self.fulfilled and len(self.variables) == 0:
-      return 'false'
-    # for now, only allow scalarly-indexed variables
-    printvar = lambda var: f'{var}' if isinstance(var, Scalar) else f'{var}[{var.memoryLayout().addressString(Indices())}]'
-    formatvar = lambda name: f'{printvar(name)}' if self.variables[name] else f'!{printvar(name)}'
-    return f'({" || ".join(formatvar(var) for var in self.variables)})'
+  @classmethod
+  def always(cls):
+    return cls()
 
-  def variableIterator(self):
-    return (var for var in self.variables if isinstance(var, Variable))
+  @classmethod
+  def never(cls):
+    return cls(never=True)
 
-class CNFCondition:
-  def __init__(self, data):
-    if isinstance(data, bool):
-      if data == True:
-        self.clauses = []
-      elif data == False:
-        self.clauses = [CNFClause([])]
-    else:
-      self.clauses = [CNFClause([data])]
+  @classmethod
+  def literal(cls, variable, version=0, polarity=True):
+    return cls({(variable, version): polarity})
 
-  def _prune(self):
-    newclauses = []
-    for clause in self.clauses:
-      if clause.fulfilled:
-        newclauses = []
-        break
-      else:
-        if len(clause.variables) == 0:
-          newclauses = [clause]
-          break
-        else:
-          newclauses += [clause]
-    self.clauses = newclauses
+  @classmethod
+  def coerce(cls, value):
+    if isinstance(value, Guard):
+      return value
+    if isinstance(value, bool):
+      return cls.always() if value else cls.never()
+    if isinstance(value, list):
+      # FusedActions carry one guard per fused GEMM
+      guard = cls.always()
+      for entry in value:
+        guard = guard & cls.coerce(entry)
+      return guard
+    return cls.literal(value)
 
-  def tautology(self):
-    return len(self.clauses) == 0
+  def isAlways(self):
+    return not self._never and len(self._literals) == 0
 
-  def unfulfillable(self):
-    return any(not clause.fulfilled and len(clause.variables) == 0 for clause in self.clauses)
-
-  def __not__(self):
-    if self.tautology():
-      return CNFCondition(False)
-
-    # this is the actually painful step (as it's also pretty inefficient right now)
-    result = CNFCondition(True)
-    for clause in self.clauses:
-      clauseInv = CNFCondition(True)
-      negVar = clause.negateVariables()
-      clauseInv.clauses = [CNFClause({var: negVar[var]}) for var in negVar]
-
-      result = result | clauseInv
-    return result
+  def isNever(self):
+    return self._never
 
   def __and__(self, other):
-    return self.__rand__(other)
+    other = Guard.coerce(other)
+    if self._never or other._never:
+      return Guard.never()
+    literals = dict(self._literals)
+    for key, polarity in other._literals.items():
+      if literals.get(key, polarity) != polarity:
+        return Guard.never()
+      literals[key] = polarity
+    return Guard(literals)
 
-  def __rand__(self, other):
-    if not isinstance(other, CNFCondition):
-      other = CNFCondition(other)
+  __rand__ = __and__
 
-    clauses = self.clauses + other.clauses
+  def implies(self, other):
+    """Whether this guard holds only where `other` does.
 
-    condition = CNFCondition(True)
-    condition.clauses = clauses
-    condition._prune()
+    Exact for conjunctions: a superset of literals is the stronger formula.
+    """
+    other = Guard.coerce(other)
+    if self._never or other.isAlways():
+      return True
+    if other._never:
+      return False
+    return all(self._literals.get(key, None) is polarity
+               for key, polarity in other._literals.items())
 
-    return condition
-
-  def __or__(self, other):
-    return self.__ror__(other)
-
-  def __ror__(self, other):
-    if not isinstance(other, CNFCondition):
-      other = CNFCondition(other)
-
-    clauses = [clause.unite(oclause) for clause in self.clauses for oclause in other.clauses]
-    condition = CNFCondition(True)
-    condition.clauses = clauses
-    condition._prune()
-
-    return condition
-
-  def __repr__(self):
-    return f'{self.clauses}'
-
-  def ccode(self):
-    if self.tautology():
-      return 'true'
-    elif self.unfulfillable():
-      return 'false'
-    return f'({" && ".join(clause.ccode() for clause in self.clauses)})'
+  def literals(self):
+    """The literals as ``(variable, version, polarity)`` triples, in a stable order."""
+    return [(var, version, polarity)
+            for (var, version), polarity in sorted(self._literals.items(),
+                                                   key=lambda kv: (str(kv[0][0]), kv[0][1]))]
 
   def variables(self):
-    return {var for clause in self.clauses for var in clause.variableIterator()}
+    return {var for var, _ in self._literals if isinstance(var, Variable)}
+
+  def _key(self):
+    return (self._never, frozenset(self._literals.items()))
+
+  def __eq__(self, other):
+    return isinstance(other, Guard) and self._key() == other._key()
+
+  def __hash__(self):
+    return hash(self._key())
+
+  def __bool__(self):
+    raise TypeError('A Guard is not a bool; use isAlways()/isNever()/implies().')
+
+  def ccode(self):
+    if self.isAlways():
+      return 'true'
+    if self.isNever():
+      return 'false'
+    printvar = lambda var: f'{var}' if isinstance(var, Scalar) \
+                           else f'{var}[{var.memoryLayout().addressString(Indices())}]'
+    formatlit = lambda var, polarity: printvar(var) if polarity else f'!{printvar(var)}'
+    return ' && '.join(f'({formatlit(var, polarity)})'
+                       for var, _, polarity in self.literals())
+
+  def __repr__(self):
+    if self.isAlways():
+      return 'Guard(always)'
+    if self.isNever():
+      return 'Guard(never)'
+    body = ', '.join(f'{"" if polarity else "~"}{var}@{version}'
+                     for var, version, polarity in self.literals())
+    return f'Guard({body})'
+
 
 class LiveSet:
+  """Maps a variable to the guard under which it is live.
+
+  Liveness is a may-analysis, so over-approximating is always safe. The lattice
+  is deliberately coarse: joining two different guards yields "live
+  unconditionally". That keeps the guard language purely conjunctive -- neither
+  the join nor the kill needs a disjunction or a negation.
+  """
+
   def __init__(self, data: dict):
-    makeCNF = lambda x: x if isinstance(x, CNFCondition) else CNFCondition(x)
-    self.data = {k:makeCNF(data[k]) for k in data}
+    self.data = {k: Guard.coerce(v) for k, v in data.items()}
 
   def __sub__(self, other):
+    """Remove variables written by an action.
+
+    A variable that is only written under a guard survives where the guard does
+    not hold, so it stays live; we widen it to "unconditionally live" rather
+    than tracking the complement of the guard.
+    """
     if isinstance(other, dict):
       other = LiveSet(other)
 
-    result = {k:self.data[k] for k in self.data}
-
-    for var in other.data:
-      if var in result:
-        result[var] &= not other.data[var]
-        if result[var].unfulfillable():
-          del result[var]
+    result = dict(self.data)
+    for var, guard in other.data.items():
+      if var not in result:
+        continue
+      if guard.isAlways():
+        del result[var]
+      else:
+        result[var] = Guard.always()
 
     return LiveSet(result)
 
@@ -411,24 +437,33 @@ class LiveSet:
     if isinstance(other, dict):
       other = LiveSet(other)
 
-    result = {k:self.data[k] for k in self.data}
-
-    for var in other.data:
-      if var in result:
-        result[var] |= other.data[var]
-      else:
-        result[var] = other.data[var]
+    result = dict(self.data)
+    for var, guard in other.data.items():
+      if var in result and result[var] != guard:
+        result[var] = Guard.always()
+      elif var not in result:
+        result[var] = guard
 
     return LiveSet(result)
 
   def __contains__(self, element):
+    """``(var, guard) in live`` asks whether var is live anywhere `guard` holds."""
     if isinstance(element, tuple):
-      return element[0] in self.data and ((not self.data[element[0]]) & element[1]).unfulfillable()
-    else:
-      return element in self.data and (not self.data[element[0]]).unfulfillable()
+      var, guard = element
+      if var not in self.data:
+        return False
+      return not (self.data[var] & Guard.coerce(guard)).isNever()
+    return element in self.data
+
+  def guardOf(self, var):
+    return self.data.get(var, Guard.never())
 
   def variables(self):
-    return set(k for k in self.data)
+    return set(self.data)
+
+  def __repr__(self):
+    return f'LiveSet({self.data})'
+
 
 class FusedProgramPoint(ProgramPoint):
   def __init__(self, action: FusedActions):

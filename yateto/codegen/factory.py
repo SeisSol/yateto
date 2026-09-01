@@ -5,6 +5,7 @@ from ..memory import DenseMemoryLayout
 from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar
+from ..controlflow.graph import Guard
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -96,19 +97,13 @@ class KernelFactory(object):
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
   def _conditional(self, condition, generate):
-    if isinstance(condition, bool):
-      if condition:
-        return generate()
-      else:
-        return 0
-    else:
-      if condition.tautology():
-        return generate()
-      elif condition.unfulfillable():
-        return 0
-      else:
-        with self._cpp.If(f'{condition.ccode()}'):
-          return generate()
+    guard = Guard.coerce(condition)
+    if guard.isAlways():
+      return generate()
+    if guard.isNever():
+      return 0
+    with self._cpp.If(f'({guard.ccode()})'):
+      return generate()
 
 class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target):

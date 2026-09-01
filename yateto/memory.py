@@ -325,7 +325,14 @@ class CSCMemoryLayout(MemoryLayout):
       for nonzero in nonzeros:
         lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
-        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._shape[0])
+        # clamp against the *aligned* bounding box, not against the logical shape:
+        # `self._bbox[0]` was rounded up to the next alignment boundary above, and every
+        # consumer of an aligned layout (PSpaMM's block-sparse A kernels, vectorized
+        # copy/scale/add) relies on every aligned block being either full or empty.
+        # Clamping to `self._shape[0]` truncates the last block whenever the number of
+        # rows is not a multiple of the SIMD width and silently produces element-wise
+        # sparsity in a layout that advertises `alignedStride() == True`.
+        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._bbox[0].stop)
 
         for i in range(lower, upper):
           nonzeros_pre.add((np.int64(i), nonzero[1]))
@@ -476,7 +483,8 @@ class PatternMemoryLayout(MemoryLayout):
       for nonzero in nonzeros:
         lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
-        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._shape[0])
+        # see CSCMemoryLayout for why this clamps against the aligned bounding box
+        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._bbox[0].stop)
 
         for i in range(lower, upper):
           nonzeros_pre.add(tuple([np.int64(i)] + list(nonzero[1:])))
@@ -484,8 +492,11 @@ class PatternMemoryLayout(MemoryLayout):
       nonzeros = list(nonzeros_pre)
       nonzeros = sorted(zip(*[[nonzero[i] for nonzero in nonzeros] for i in range(len(self._shape))]), key=lambda x: x[::-1])
 
-    # keep everything in F order
-    self._pattern = np.zeros(self._shape, dtype=int, order='F')
+    # keep everything in F order; the first axis has to cover the aligned bounding box,
+    # which may reach past the logical shape when the row count is not a multiple of
+    # the SIMD width
+    patternShape = (max(self._shape[0], self._bbox[0].stop),) + tuple(self._shape[1:])
+    self._pattern = np.zeros(patternShape, dtype=int, order='F')
 
     for i, nonzero in enumerate(nonzeros):
       self._pattern[tuple(nonzero)] = i + 1 if pattern is None else pattern[tuple(nonzero)]

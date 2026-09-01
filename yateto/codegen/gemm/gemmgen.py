@@ -7,7 +7,7 @@ from collections import namedtuple
 
 from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
-from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
+from ..common import BatchedOperationsAux, KernelAttributes, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper
 from ..tiny_tensor_language import *
 
 
@@ -16,11 +16,12 @@ import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
 
 class GemmGen(object):
-  def __init__(self, arch, descr, gemm_cfg):
+  def __init__(self, arch, descr, gemm_cfg, attrs=None):
     self._arch = arch
     self._descr = descr
     self._gemm_cfg = gemm_cfg
     self._mode = gemm_cfg.operation_name
+    self._attrs = attrs if attrs is not None else KernelAttributes()
 
   def _is_special(self, value, specials):
     result = 'generic'

@@ -1,6 +1,6 @@
 from ..common import *
 from ..cache import RoutineGenerator, GpuRoutineGenerator
-from ..common import BatchedOperationsAux
+from ..common import BatchedOperationsAux, KernelAttributes
 
 
 # Optional modules
@@ -8,9 +8,10 @@ import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
 
 class CopyScaleAddGenerator(object):
-  def __init__(self, arch, descr):
+  def __init__(self, arch, descr, attrs=None):
     self._arch = arch
     self._descr = descr
+    self._attrs = attrs if attrs is not None else KernelAttributes()
 
   def _formatTerm(self, alpha, term):
     """Generate a sub-string of a term for a source code which is going to be used

@@ -2,10 +2,12 @@ import string
 from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
+from .. import aspp
 from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar
 from ..controlflow.graph import Guard
+from ..ops import Add
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -466,8 +468,9 @@ class ExportFactory(KernelFactory):
     else:
       assert False
 
-    eqsppnz = tensorIndexed.eqspp.nonzero()
-    spp = [elem for elem in zip(*eqsppnz)]
+    # 0-d safe: rank-0 tensors (condition variables, scalar reduction results)
+    # have a sparsity pattern too, but numpy refuses nonzero() on 0-d arrays
+    spp = aspp.nonzeroIndices(tensorIndexed.eqspp)
 
     values = None if tensorIndexed.values is None else list(tensorIndexed.values)
 
@@ -543,19 +546,26 @@ class ExportFactory(KernelFactory):
     }
 
   def _handleCondition(self, condition):
-    out = []
-    for clause in condition.clauses:
-      outclause = []
-      for var in clause.variables:
-        tensor = self._varTensor(clause.variables[var], ())
-        outclause += [tensor]
-      out += [outclause]
-    return out
+    """A guard exports as a flat conjunction of literals.
+
+    `version` distinguishes successive values of the same condition tensor; two
+    literals over the same tensor at different versions are different values.
+    """
+    guard = Guard.coerce(condition)
+    if guard.isNever():
+      return None
+    return [{
+      'tensor': self._varTensor(var, ()),
+      'version': version,
+      'negated': not polarity,
+    } for var, version, polarity in guard.literals()]
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     result = self._nodeTensor(result, node)
     preArgs = [self._nodeTensor(argument, term) for argument, term in zip(arguments, node)]
-    args = node.fillTerms(preArgs)
+    # immediate (non-Node) operands have to be exported as scalars, not raw values
+    args = [arg if isinstance(arg, dict) else self._scalarTensor(arg)
+            for arg in node.fillTerms(preArgs)]
 
     description = {
       'type': 'elementwise',
@@ -574,6 +584,7 @@ class ExportFactory(KernelFactory):
     assert len(arguments) == 1
     result = self._nodeTensor(result, node)
     argnodes = [self._nodeTensor(arguments[0], node.term())]
+    optype = getattr(node, 'optype', Add())
 
     description = {
       'type': 'reduction',
@@ -584,7 +595,7 @@ class ExportFactory(KernelFactory):
         'alpha': self._scalarTensor(scalar),
         'add': add,
       },
-      'optype': str(node.optype)
+      'optype': str(optype)
     }
     return self.generator.add_operation(description)
 
@@ -594,10 +605,10 @@ class ExportFactory(KernelFactory):
     return self.handleLinear(self._nodeTensor(result, node), argnodes, condition, add, scalar, node.transA(), node.transB())
 
   def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return create_Reduction(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
+    return self.create_Reduction(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
 
   def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return create_Elementwise(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
+    return self.create_Elementwise(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]

@@ -22,7 +22,7 @@ def __transposeMatrix(matrix):
     matrixT[tuple(entry[::-1])] = value
   return matrixT
 
-def __processMatrix(name, shape, entries, clones, transpose, alignStride, namespace=None):
+def __processMatrix(name, shape, entries, clones, transpose, alignStride, namespace, legacy):
   matrix = dict()
 
   dim = len(shape)
@@ -47,14 +47,14 @@ def __processMatrix(name, shape, entries, clones, transpose, alignStride, namesp
   for name in names:
     # compute a shape of a tensor (for now, assume transpose == invert dimensions)
     shape = shape[::-1] if transpose(name) else shape
-    if len(shape) == 2 and shape[1] == 1: # TODO: remove once all files are converted
+    if len(shape) == 2 and shape[1] == 1 and legacy: # TODO: remove once all files are converted
       shape = (shape[0],)
 
     # transpose matrix if it is needed
     mtx = __transposeMatrix(matrix) if transpose(name) else matrix
 
     # adjust layout description in case if a given matrix is a vector
-    if len(shape) == 1: # TODO: remove once all files are converted
+    if len(shape) == 1 and legacy: # TODO: remove once all files are converted
       mtx = {(i[0],): val for i,val in mtx.items()}
 
     # Create an tensor(matrix) using the matrix description and append the hash table
@@ -102,7 +102,7 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, ali
         else:
           __complain(child)
 
-      matrices.update( __processMatrix(name, (rows, columns), entries, clones, transpose, alignStride, namespace) )
+      matrices.update( __processMatrix(name, (rows, columns), entries, clones, transpose, alignStride, namespace, True) )
     else:
       __complain(node)
 
@@ -124,7 +124,7 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
       dim = len(shape)
       if len(next(iter(entries))) == dim:
         entries = [(*entry, True) for entry in entries]
-      matrices.update( __processMatrix(m['name'], shape, entries, clones, transpose, alignStride, namespace) )
+      matrices.update( __processMatrix(m['name'], shape, entries, clones, transpose, alignStride, namespace, False) )
 
   return create_collection(matrices)
 

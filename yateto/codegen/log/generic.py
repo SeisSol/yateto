@@ -4,10 +4,13 @@ from .. import gemm
 from ...memory import DenseMemoryLayout
 
 class Generic(object):
-  def __init__(self, arch, descr, target):
+  def __init__(self, arch, descr, target, attrs=None):
     self._arch = arch
     self._descr = descr
     self._target = target
+    # passed on to the gemm generator, which is where a call into an external
+    # kernel is emitted and the batch flags have to be named or not
+    self._attrs = attrs
 
   def _pointer(self, cpp, targetName, baseName, term, loopIndices, const=True):
     indices = term.indices & loopIndices
@@ -106,7 +109,8 @@ class Generic(object):
           self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, const=False)
           if outerPrefetchName is not None:
             self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices)
-        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target)
+        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target,
+                                   self._attrs)
         return generator.generate(cpp, routineCache)
 
     class InnerLoopBody(object):

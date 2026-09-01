@@ -9,7 +9,7 @@ from ..controlflow.graph import Variable
 from ..type import Tensor
 from .code import Cpp
 from .factory import *
-from .common import BatchedOperationsAux
+from .common import BatchedOperationsAux, KernelAttributes
 from ..type import Scalar
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
@@ -140,7 +140,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                  function,
                  tmp_mem_size,
                  is_compute_constant_tensors,
-                 target):
+                 target,
+                 attrs):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
@@ -155,6 +156,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       self.tmp_mem_size = tmp_mem_size
       self.is_compute_constant_tensors = is_compute_constant_tensors
       self.target = target
+      self.attrs = attrs
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -168,7 +170,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       else:
         tensors[base_name] = {group}
 
-  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target):
+  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target, attrs=None):
     scalarsP = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
@@ -217,7 +219,8 @@ class OptimizedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = self._routine_factories[target](fcpp, self._arch, target)
+      attrs = attrs if attrs is not None else KernelAttributes()
+      factory = self._routine_factories[target](fcpp, self._arch, target, attrs)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.post_generate(self._routineCache)
       factory.freeTmp()
@@ -236,7 +239,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                               function,
                               tmp_memory,
                               is_compute_constant_tensors,
-                              target)
+                              target,
+                              attrs)
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -269,6 +273,15 @@ class OptimizedKernelGenerator(KernelGenerator):
 
     if not is_same_target:
       raise RuntimeError("kernels with the same family belong to different compute target.")
+
+    # One struct carries the whole family, so one set of attributes has to
+    # describe every member of it: the flags member is either there for all of
+    # them or for none.
+    attrs = kernelOutlines[-1].attrs
+    for outline in kernelOutlines:
+      if outline and outline.attrs != attrs:
+        raise RuntimeError("kernels within the same family were given different "
+                           "attributes.")
 
     if familyStride is not None:
       executeName = lambda index: self.EXECUTE_NAME + str(index)
@@ -353,7 +366,11 @@ class OptimizedKernelGenerator(KernelGenerator):
         if target == 'gpu':
           header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
           header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
-          header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+          # Only where the kernel asked for it: without the member, a caller
+          # that means to skip elements fails to compile instead of getting a
+          # kernel that computes all of them.
+          if attrs.flags:
+            header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)

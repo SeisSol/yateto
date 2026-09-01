@@ -116,12 +116,68 @@ def initializeWithZero(cpp, arch, result: TensorDescription, writeBB = None):
     cpp.memset(result.name, result.memoryLayout.requiredReals(), arch.typename)
 
 
+class KernelAttributes:
+  """Switches the caller sets on one kernel at ``Generator.add`` time.
+
+  They are not code generation options: a kernel's attributes are part of
+  what the kernel *is*, because they change its generated interface. The
+  batch flags are the first one -- a kernel that does not declare them has
+  no ``flags`` member to assign to, so a caller that means to mask elements
+  off and forgot the attribute finds out from the compiler rather than from
+  a result that silently ignored the mask.
+
+  Unknown keys are rejected here rather than ignored, since an attribute
+  that does nothing looks exactly like a typo in one that would have.
+  """
+
+  FLAGS = 'flags'
+  KNOWN = frozenset({FLAGS})
+
+  def __init__(self, attrs=None):
+    attrs = dict(attrs) if attrs else {}
+    unknown = sorted(set(attrs) - self.KNOWN)
+    if unknown:
+      raise ValueError(
+        'unknown kernel attribute(s) {}; known are {}'.format(
+          ', '.join(repr(key) for key in unknown),
+          ', '.join(repr(key) for key in sorted(self.KNOWN))))
+    self._attrs = attrs
+
+  @property
+  def flags(self):
+    """Whether the kernel takes a per-element mask of elements to skip."""
+    return bool(self._attrs.get(self.FLAGS, False))
+
+  def as_dict(self):
+    """The attributes as the external code generators want them."""
+    return dict(self._attrs)
+
+  def __eq__(self, other):
+    if isinstance(other, KernelAttributes):
+      return self._attrs == other._attrs
+    return NotImplemented
+
+  def __repr__(self):
+    return f'KernelAttributes({self._attrs!r})'
+
+
 class BatchedOperationsAux:
   NUM_ELEMENTS_NAME = 'numElements'
   EXTRA_OFFSET_NAME = 'extraOffset'
   STREAM_PTR_NAME = 'streamPtr'
   FLAGS_NAME = 'flags'
   FORBIDDEN_STREAM_PTR = 'reinterpret_cast<void*>(std::numeric_limits<uintptr_t>::max())'
+
+  @classmethod
+  def flags_arg(cls, attrs):
+    """The batch-flags argument for a kernel that always takes one.
+
+    The external generators (GemmForge, ChainForge) put a flags parameter in
+    every kernel they emit, so the choice at the call site is between the
+    member and a literal null -- and the member only exists when the kernel
+    declares the attribute.
+    """
+    return cls.FLAGS_NAME if attrs.flags else 'nullptr'
 
   def __init__(self, underlying_data_type):
     self.underlying_data_type = underlying_data_type

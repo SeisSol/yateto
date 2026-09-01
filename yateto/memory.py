@@ -6,6 +6,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from . import aspp
+import sys
 
 class MemoryLayout(ABC):
   def __init__(self, shape):
@@ -84,6 +85,36 @@ class MemoryLayout(ABC):
     starts = [0] * len(self._shape)
     ends = list(self._shape)
     return starts, ends
+
+  def sparsityBlockSize(self, dim=0):
+    """Largest B for which the sparsity pattern is constant within every
+    B-aligned block along `dim`.
+
+    For every block [k*B, (k+1)*B) along `dim`, and every combination of the
+    remaining indices, either all entries of the block are stored or none are.
+    B == 1 means arbitrary, element-wise sparsity; a dense layout has no
+    restriction at all and reports maxsize.
+
+    This is a property of the *data*, computed from the pattern the layout
+    actually stores. It must not be derived from the `alignStride` request,
+    which is an intent and not a guarantee.
+    """
+    return sys.maxsize
+
+  def sparsityBlockShape(self):
+    """Per-dimension block sizes, as a tuple.
+
+    The all-or-nothing property is separable: if the pattern is complete in
+    B_d-aligned blocks along every dimension d independently, then it is also
+    complete in every tile (t_0, ..., t_n) with t_d <= B_d. So this tuple
+    answers arbitrary tile queries, which a single scalar cannot.
+    """
+    return tuple(self.sparsityBlockSize(d) for d in range(len(self._shape)))
+
+  def respectsTile(self, tile):
+    """Is the pattern all-or-nothing within every `tile`-aligned tile?"""
+    shape = self.sparsityBlockShape()
+    return all(t <= b for t, b in zip(tile, shape))
 
 class DenseMemoryLayout(MemoryLayout):
   ALIGNMENT_ARCH = None
@@ -307,6 +338,7 @@ class CSCMemoryLayout(MemoryLayout):
 
     self.aligned = alignStride
     self._spp = spp
+    self._blockSize = None
 
     if len(self._shape) != 2:
       raise ValueError('CSCMemoryLayout may only be used for matrices.')
@@ -327,11 +359,9 @@ class CSCMemoryLayout(MemoryLayout):
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
         # clamp against the *aligned* bounding box, not against the logical shape:
         # `self._bbox[0]` was rounded up to the next alignment boundary above, and every
-        # consumer of an aligned layout (PSpaMM's block-sparse A kernels, vectorized
-        # copy/scale/add) relies on every aligned block being either full or empty.
-        # Clamping to `self._shape[0]` truncates the last block whenever the number of
-        # rows is not a multiple of the SIMD width and silently produces element-wise
-        # sparsity in a layout that advertises `alignedStride() == True`.
+        # consumer of an aligned layout relies on each aligned block being either full or
+        # empty. Clamping to `self._shape[0]` truncates the last block whenever the row
+        # count is not a multiple of the SIMD width.
         upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._bbox[0].stop)
 
         for i in range(lower, upper):
@@ -413,6 +443,29 @@ class CSCMemoryLayout(MemoryLayout):
     entries = self.entries(*rng)
     return list(enumerate(entries))
 
+  def sparsityBlockSize(self, dim=0):
+    if dim != 0:
+      # CSC only compresses the row dimension
+      return 1
+    if self._blockSize is None:
+      rows = dict()
+      for col in range(self._shape[1]):
+        rows[col] = set(
+          int(self._rowIndex[i]) for i in range(self._colPtr[col], self._colPtr[col+1]))
+      extent = self._bbox[0].stop
+      B = 1
+      candidate = 2
+      while candidate <= extent:
+        if all(len(r & set(range(b, b+candidate))) in (0, candidate)
+               for r in rows.values()
+               for b in range(0, extent, candidate)):
+          B = candidate
+        else:
+          break
+        candidate *= 2
+      self._blockSize = B
+    return self._blockSize
+
   def alignedStride(self):
     return self.aligned
 
@@ -483,7 +536,6 @@ class PatternMemoryLayout(MemoryLayout):
       for nonzero in nonzeros:
         lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
-        # see CSCMemoryLayout for why this clamps against the aligned bounding box
         upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._bbox[0].stop)
 
         for i in range(lower, upper):
@@ -492,9 +544,7 @@ class PatternMemoryLayout(MemoryLayout):
       nonzeros = list(nonzeros_pre)
       nonzeros = sorted(zip(*[[nonzero[i] for nonzero in nonzeros] for i in range(len(self._shape))]), key=lambda x: x[::-1])
 
-    # keep everything in F order; the first axis has to cover the aligned bounding box,
-    # which may reach past the logical shape when the row count is not a multiple of
-    # the SIMD width
+    # keep everything in F order
     patternShape = (max(self._shape[0], self._bbox[0].stop),) + tuple(self._shape[1:])
     self._pattern = np.zeros(patternShape, dtype=int, order='F')
 
@@ -642,6 +692,24 @@ class PatternMemoryLayout(MemoryLayout):
 
   __hash__ = object.__hash__
 
+  def sparsityBlockSize(self, dim=0):
+    nzp = (self._pattern != 0)
+    extent = nzp.shape[dim]
+    moved = np.moveaxis(nzp, dim, 0).reshape(extent, -1)
+    B = 1
+    candidate = 2
+    while candidate <= extent:
+      if extent % candidate != 0:
+        break
+      blocks = moved.reshape(extent // candidate, candidate, -1)
+      counts = blocks.sum(axis=1)
+      if bool(np.all((counts == 0) | (counts == candidate))):
+        B = candidate
+      else:
+        break
+      candidate *= 2
+    return B
+
   def equalStride(self, dim):
     # every slice along `dim` holds the same number of non-zeros as the fullest one,
     # i.e. the pattern is "rectangular" along that axis
@@ -667,6 +735,9 @@ class AlignedPatternMemoryLayout:
 class MemoryLayoutView(MemoryLayout):
   def isSparse(self):
     return self.base.isSparse()
+
+  def sparsityBlockSize(self, dim=0):
+    return self.base.sparsityBlockSize(dim)
 
   def __init__(self, base, index, start, end):
     super().__init__([base._shape[i] if i != index else end - start for i in range(len(base.shape()))])

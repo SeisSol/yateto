@@ -1,6 +1,59 @@
 from typing import List
 from abc import ABC, abstractmethod
+from enum import IntEnum
 import operator
+
+class Sparsity:
+  """How much structure a GEMM operand's sparsity pattern has.
+
+  Not an enum. The granularities a consumer may ask about form a lattice of
+  tile shapes ordered componentwise, not a linear scale: a pattern that is
+  complete in 8x1 blocks (good enough for an AVX-512 double kernel) and one
+  that is complete in 4x4 tiles (good enough for a small matrix-unit fragment)
+  are incomparable. Collapsing that into an ordered enum would force an
+  arbitrary total order and lose the shape, which is exactly the information
+  the next consumer needs.
+
+  `blockShape` is per-dimension and measured from the pattern the layout
+  actually stores, never from an `alignStride` request. A dense operand has no
+  restriction and reports `None`.
+  """
+
+  __slots__ = ('blockShape',)
+
+  def __init__(self, blockShape=None):
+    self.blockShape = blockShape
+
+  @classmethod
+  def of(cls, memoryLayout):
+    if not memoryLayout.isSparse():
+      return cls(None)
+    return cls(tuple(memoryLayout.sparsityBlockShape()))
+
+  @property
+  def dense(self):
+    return self.blockShape is None
+
+  def respects(self, tile):
+    """Can a kernel treat this operand as tiles of shape `tile`?"""
+    if self.dense:
+      return True
+    return all(t <= b for t, b in zip(tile, self.blockShape))
+
+  def __bool__(self):
+    # keeps historical `if sparseA:` checks in external GemmTool subclasses working
+    return not self.dense
+
+  def __repr__(self):
+    return 'Sparsity(dense)' if self.dense else 'Sparsity{}'.format(self.blockShape)
+
+  def __eq__(self, other):
+    return isinstance(other, Sparsity) and self.blockShape == other.blockShape
+
+  def __hash__(self):
+    return hash(self.blockShape)
+
+DENSE = Sparsity(None)
 
 class Preference(object):
   HIGHEST = 4
@@ -36,7 +89,7 @@ class BLASlike(GemmTool):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
-    return (not sparseA and not sparseB and target == 'cpu')
+    return (sparseA.dense and sparseB.dense and target == 'cpu')
 
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
@@ -92,7 +145,7 @@ class Eigen(BLASlike):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
-    return (not sparseA and not sparseB and target == 'cpu')
+    return (sparseA.dense and sparseB.dense and target == 'cpu')
 
   def bool2Trans(self, trans):
     return '.transpose()' if trans else ''
@@ -197,7 +250,7 @@ class LIBXSMM_JIT(CodeGenerator):
     # See e.g. here:
     # https://libxsmm.readthedocs.io/en/latest/libxsmm_qna/#what-is-a-small-matrix-multiplication
     # https://github.com/hfp/libxsmm/issues/396#issuecomment-674741063
-    return self.archSupported() and not (sparseA or sparseB) and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
+    return self.archSupported() and sparseA.dense and sparseB.dense and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
 class LIBXSMM(CodeGenerator):
   def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
@@ -210,6 +263,8 @@ class LIBXSMM(CodeGenerator):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, target):
+    # LIBXSMM bakes the pattern into the generated kernel, so any granularity is
+    # fine; it just cannot take both operands sparse at once.
     return self.archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
@@ -235,7 +290,13 @@ class PSpaMM(CodeGenerator):
     # NOTE: PSpaMM 0.3.0+ supports SIMD-aligned block sparsity in A (which is currently covered by sparseA + alignedA)
     # also, it supports for AVX512/10 and SVE unaligned matmuls in 0.3.1
     noAlign = self._arch.host_name.lower() in {'thunderx2t99', 'knl', 'skx', 'a64fx', 'bergamo', 'turin', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'avx10-128', 'avx10-256', 'avx10-512'}
-    alignment = sparseA and alignedA or not sparseA and (noAlign or alignedA)
+    # PSpaMM vectorizes over rows of A: it needs whole `alignedReals`-row
+    # columns, and move_register_block() raises NotImplementedError otherwise.
+    vectorTile = (self._arch.alignedReals, 1)
+    if not sparseA.respects(vectorTile):
+      return False
+    alignment = (not sparseA.dense) and alignedA \
+             or sparseA.dense and (noAlign or alignedA)
     return self.archSupported() and (alignedC or noAlign) and alignment and (not transA and not transB) and target == 'cpu'
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):

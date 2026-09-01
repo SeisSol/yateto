@@ -279,13 +279,16 @@ class Generator(object):
       self._kernelFamilies[name] = KernelFamily(namespace=namespace)
     family = self._kernelFamilies[name]
     pmax = max(parameterSpace)
-    stride = [1]
-    for i in range(len(pmax)-1):
-      stride.append(stride[i] * (pmax[i]+1))
-    stride = tuple(stride)
+    rank = len(pmax)
+    stride = []
+    if rank > 0:
+      stride = [1]
+      for i in range(rank - 1):
+        stride.append(stride[i] * (pmax[i] + 1))
+      stride = tuple(stride)
     family.setStride(stride)
     for p in parameterSpace:
-      indexedName = '{}({})'.format(name, KernelFamily.linear(stride, p))
+      indexedName = f'{name}({KernelFamily.linear(stride, p)})'
       ast = astGenerator(*p)
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
       family.add(indexedName, ast, prefetch, namespace, target=target,

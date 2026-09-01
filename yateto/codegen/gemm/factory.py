@@ -1,4 +1,5 @@
 from ...ast.indices import BoundingBox, Range
+from ...gemm_configuration import Sparsity
 from ..common import TensorDescription
 from .generic import Generic
 from .gemmgen import GemmGen
@@ -27,8 +28,19 @@ class Description(object):
     self.beta = beta
     self.prefetchName = prefetchName
 
-    self.isACsc = self.leftTerm.memoryLayout.isCSC()
-    self.isBCsc = self.rightTerm.memoryLayout.isCSC()
+    self.isACsc = self.leftTerm.memoryLayout.isSparse()
+    self.isBCsc = self.rightTerm.memoryLayout.isSparse()
+
+    # Classify by the pattern the layout really stores. A layout that merely
+    # *asked* for aligned strides is not a promise that its sparsity is
+    # SIMD-block-complete, and tools such as PSpaMM need that distinction.
+    self.sparsityA = Sparsity.of(self.leftTerm.memoryLayout)
+    self.sparsityB = Sparsity.of(self.rightTerm.memoryLayout)
+
+    if self.result.memoryLayout.isSparse():
+      raise NotImplementedError(
+        'yateto: sparse memory layouts are not supported for GEMM results (yet); '
+        'tensor "{}" uses {}.'.format(self.result.name, type(self.result.memoryLayout).__name__))
 
     bbA = BoundingBox.fromSpp(self.leftTerm.eqspp)
     bbB = BoundingBox.fromSpp(self.rightTerm.eqspp)
@@ -73,8 +85,8 @@ def generator(arch, descr, gemm_cfg, target, attrs=None):
     gemmTool = gemm_cfg.getGemmTool(m.size(),
                                     n.size(),
                                     k.size(),
-                                    descr.isACsc,
-                                    descr.isBCsc,
+                                    descr.sparsityA,
+                                    descr.sparsityB,
                                     descr.transA,
                                     descr.transB,
                                     descr.alpha,

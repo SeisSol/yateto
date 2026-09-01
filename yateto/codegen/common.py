@@ -68,20 +68,38 @@ class IndexedTensorDescription(TensorDescription):
         addressing = None # var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
-def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', indexNo=None):
+def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', fixed={}, indexNo=None):
   flops = 0
+  firstLoop = False
   if indexNo == None:
     indexNo = len(indexNames)-1
+    firstLoop = True
+    # bail out before emitting anything if any pinned index misses its range,
+    # otherwise we leave empty scopes with unused constexpr variables behind
+    for index in indexNames:
+      if index in fixed and not (ranges[index].start <= fixed[index] < ranges[index].stop):
+        return 0
   if indexNo < 0:
-    flops = body()
+    if firstLoop:
+      with cpp.AnonymousScope():
+        flops = body()
+    else:
+      flops = body()
   else:
     index = indexNames[indexNo]
     rng = ranges[index]
-    if pragmaSimd and indexNo == 0:
-      cpp('#pragma omp simd')
-    with cpp.For('int {3}{0} = {1}; {3}{0} < {2}; ++{3}{0}'.format(index, rng.start, rng.stop, prefix)):
-      flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, indexNo-1)
-    flops = flops * rng.size()
+    if index in fixed:
+      with cpp.AnonymousScope():
+        cpp(f'[[maybe_unused]] constexpr int {prefix}{index} = {fixed[index]};')
+        flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, fixed, indexNo-1)
+    else:
+      # the pragma belongs on the innermost *emitted* loop, i.e. the one over the
+      # fastest-running index that has not been pinned by unrolling
+      if pragmaSimd and all(indexNames[i] in fixed for i in range(indexNo)):
+        cpp('#pragma omp simd')
+      with cpp.For('int {3}{0} = {1}; {3}{0} < {2}; ++{3}{0}'.format(index, rng.start, rng.stop, prefix)):
+        flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, fixed, indexNo-1)
+      flops = flops * rng.size()
   return flops
 
 def loopRanges(term: IndexedTensorDescription, loopIndices):
@@ -100,8 +118,8 @@ def testLoopRangesAContainedInB(A, B):
 def boundingBoxFromLoopRanges(indices, loopRanges):
   return BoundingBox([loopRanges[index] for index in indices])
 
-def reduceSpp(spp, sourceIndices, targetIndices):
-  return spp.indexSum(sourceIndices, targetIndices)
+def reduceSpp(spp, sourceIndices, targetIndices, fixedIndices):
+  return spp.indexSum(sourceIndices, targetIndices, fixedIndices)
 
 def initializeWithZero(cpp, arch, result: TensorDescription, writeBB = None):
   if writeBB:

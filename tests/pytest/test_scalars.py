@@ -1,0 +1,181 @@
+"""Scalars and rank-0 tensors share one interface.
+
+What separates them is the calling convention -- a scalar is handed over by
+value, a tensor by pointer -- and nothing else.
+"""
+
+import os
+import re
+import tempfile
+
+import numpy as np
+import pytest
+
+from yateto import Generator, GeneratorCollection, Tensor, ops
+from yateto.arch import useArchitectureIdentifiedBy
+from yateto.ast.cost import BoundingBoxCostEstimator
+from yateto.ast.node import Elementwise, IndexedTensor
+from yateto.ast.visitor import FindTensors
+from yateto.generator import Kernel
+from yateto.type import Datatype, ImmediateScalar, Scalar
+
+import yateto.functions as yf
+
+N = 6
+
+
+@pytest.fixture
+def arch():
+    return useArchitectureIdentifiedBy('dhsw')
+
+
+@pytest.fixture
+def quantities():
+    return {
+        'scalar': Scalar('alpha'),
+        'immediate': ImmediateScalar(2.5),
+        'rank0': Tensor('s', ()),
+        'matrix': Tensor('A', (N, N)),
+    }
+
+
+class TestRankZeroInterface:
+    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    def test_shape_is_empty(self, quantities, key):
+        assert quantities[key].shape() == ()
+
+    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    def test_one_entry_of_storage(self, quantities, key):
+        assert quantities[key].memoryLayout().requiredReals() == 1
+
+    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    def test_sparsity_pattern_is_rank_zero(self, quantities, key):
+        assert quantities[key].spp().shape == ()
+
+    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    def test_indexing_with_the_empty_index(self, quantities, key):
+        assert isinstance(quantities[key][''], IndexedTensor)
+
+    @pytest.mark.parametrize('key', ['scalar', 'immediate'])
+    def test_indices_are_rejected(self, quantities, key):
+        with pytest.raises(ValueError):
+            quantities[key]['ij']
+
+    def test_a_scalar_matches_a_rank_zero_tensor(self, quantities):
+        scalar, rank0 = quantities['scalar'], quantities['rank0']
+        assert scalar.shape() == rank0.shape()
+        assert scalar.memoryLayout().requiredReals() == rank0.memoryLayout().requiredReals()
+
+
+class TestCallingConvention:
+    def test_a_scalar_is_passed_by_value(self, quantities):
+        assert quantities['scalar'].isPassedByValue()
+        assert quantities['immediate'].isPassedByValue()
+
+    def test_a_tensor_is_passed_by_pointer(self, quantities):
+        assert not quantities['rank0'].isPassedByValue()
+        assert not quantities['matrix'].isPassedByValue()
+
+    def test_a_scalar_is_not_a_tensor_argument(self, quantities):
+        scalar, matrix = quantities['scalar'], quantities['matrix']
+        result = Tensor('C', (N, N))
+        found = FindTensors().visit(result['ij'] <= scalar * matrix['ij'])
+        assert 'alpha' not in found
+        assert 'A' in found and 'C' in found
+
+    def test_a_rank_zero_tensor_is_a_tensor_argument(self, quantities):
+        rank0, matrix = quantities['rank0'], quantities['matrix']
+        result = Tensor('C', (N, N))
+        found = FindTensors().visit(result['ij'] <= yf.mul(rank0[''], matrix['ij']))
+        assert 's' in found
+
+
+class TestScalingLowering:
+    """A by-value rank-0 operand becomes a scale factor, not a loop."""
+
+    @staticmethod
+    def emit(arch, statements, gemm_cfg=None):
+        generator = Generator(arch)
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=gemm_cfg or GeneratorCollection([]))
+            return (open(os.path.join(out, 'kernel.cpp')).read(),
+                    open(os.path.join(out, 'kernel.h')).read())
+
+    def test_a_named_scalar_is_declared_by_value(self, arch, quantities):
+        A, C = quantities['matrix'], Tensor('C', (N, N))
+        _, header = self.emit(arch, [C['ij'] <= Scalar('alpha') * A['ij']])
+        assert re.search(r'double alpha\b', header)
+        assert not re.search(r'double\s*\*\s*alpha', header)
+
+    def test_a_rank_zero_tensor_is_declared_by_pointer(self, arch, quantities):
+        A, C, s = quantities['matrix'], Tensor('C', (N, N)), quantities['rank0']
+        _, header = self.emit(arch, [C['ij'] <= yf.mul(s[''], A['ij'])])
+        assert re.search(r'double const\s*\*\s*s', header)
+
+    def test_a_scaling_does_not_get_its_own_loop(self, arch, quantities):
+        A, C = quantities['matrix'], Tensor('C', (N, N))
+        code, _ = self.emit(arch, [C['ij'] <= 2.0 * A['ij']])
+        body = code[code.index('k0::execute'):]
+        body = body[:body.index('\n  }\n')]
+        assert body.count('for (') == 2, 'one loop nest over i and j, no extra pass'
+
+    def test_a_rank_zero_operand_does_get_a_loop(self, arch, quantities):
+        A, C, s = quantities['matrix'], Tensor('C', (N, N)), quantities['rank0']
+        code, _ = self.emit(arch, [C['ij'] <= yf.mul(s[''], A['ij'])])
+        assert 's[0]' in code
+
+    def test_an_integer_scaling_keeps_the_integer_type(self, arch):
+        AI = Tensor('AI', (N, N), datatype=Datatype.I32)
+        BI = Tensor('BI', (N, N), datatype=Datatype.I32)
+        code, _ = self.emit(arch, [AI['ij'] <= -BI['ij']])
+        body = code[code.index('k0::execute'):]
+        body = body[:body.index('\n  }\n')]
+        assert '-1.0' not in body
+        assert 'int32_t' in body
+
+    def test_the_scale_factor_reaches_the_program_action(self, arch, quantities):
+        A, C = quantities['matrix'], Tensor('C', (N, N))
+        kernel = Kernel('k', C['ij'] <= 2.0 * A['ij'])
+        kernel.prepareUntilUnitTest(arch)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        scalars = [pp.action.scalar for pp in kernel.cfg if pp.action is not None]
+        assert 2.0 in scalars
+
+    def test_nested_scalings_are_rejected(self, quantities):
+        A = quantities['matrix']
+        with pytest.raises(ValueError, match='Multiple multiplications'):
+            2.0 * (3.0 * A['ij'])
+
+
+class TestScalingSemantics:
+    def test_a_sign_flip_is_free(self, arch, quantities):
+        A, C = quantities['matrix'], Tensor('C', (N, N))
+        kernel = Kernel('k', C['ij'] <= -A['ij'])
+        kernel.prepareUntilUnitTest(arch)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        assert kernel.nonZeroFlops == 0
+
+    def test_a_general_factor_is_not_free(self, arch, quantities):
+        A, C = quantities['matrix'], Tensor('C', (N, N))
+        kernel = Kernel('k', C['ij'] <= 2.0 * A['ij'])
+        kernel.prepareUntilUnitTest(arch)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        assert kernel.nonZeroFlops > 0
+
+    def test_scaling_a_product_keeps_the_product(self, quantities):
+        A, B = quantities['matrix'], Tensor('B', (N, N))
+        expr = 2.0 * (A['ik'] * B['kj'])
+        symbol, term = expr.scalingOperands()
+        assert isinstance(symbol, ImmediateScalar) and symbol.data == 2.0
+        assert term is not None
+
+    def test_the_operands_follow_a_replaced_child(self, quantities):
+        A, B = quantities['matrix'], Tensor('B', (N, N))
+        expr = 2.0 * A['ij']
+        replacement = B['ij']
+        expr.setScaledTerm(replacement)
+        # terms is derived from the children, so it must show the new one
+        assert replacement in expr.terms
+        assert expr.scaledTerm() is replacement

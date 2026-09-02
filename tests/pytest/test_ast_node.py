@@ -152,13 +152,13 @@ class TestScaling:
         assert isinstance(symbol, Scalar) and symbol.name() == "alpha"
         assert term is not None
 
-    def test_nested_scalar_mul_rejected(self, square_tensors):
-        # ``k1 * (k2 * A)`` is disallowed by design - the user must
-        # pre-fold scalars into a single coefficient.  This keeps the AST
-        # unambiguous and the code generator simple.
+    def test_nested_scalar_mul_collapses(self, square_tensors):
         A = square_tensors["A"]
-        with pytest.raises(ValueError, match="Multiple multiplications"):
-            2.0 * (3.0 * A["ij"])
+        # two factors become one; the term underneath is untouched
+        expr = 2.0 * (3.0 * A["ij"])
+        assert self.scaleOf(expr) == 6.0
+        assert isinstance(expr.scaledTerm(), IndexedTensor)
+
 
     def test_scalar_times_einsum_preserves_einsum_child(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]

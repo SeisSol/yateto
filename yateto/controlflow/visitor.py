@@ -2,7 +2,7 @@ import collections
 from .. import aspp
 from .. import ops
 from ..ast.visitor import Visitor
-from ..type import AddressingMode, Tensor
+from ..type import AddressingMode, Tensor, DerivedScalar
 from .graph import *
 from ..memory import DenseMemoryLayout
 from ..ast.node import Permute, Node, Broadcast
@@ -215,14 +215,31 @@ class SortedPrefetchList(object):
         V = V | {pp.action.term.node.prefetch}
     return sorted([v for v in V], key=lambda x: x.name())
 
+def _scalarsOf(cfg):
+  S = set()
+  for pp in cfg:
+    if pp.action:
+      scalars = pp.action.scalar if isinstance(pp.action.scalar, list) else [pp.action.scalar]
+      S = S | {scalar for scalar in scalars if isinstance(scalar, Tensor)}
+  return S
+
 class ScalarsSet(object):
+  """The scalars the caller sets, i.e. the ones in the kernel signature."""
+
   def visit(self, cfg):
-    S = set()
-    for pp in cfg:
-      if pp.action:
-        if isinstance(pp.action.scalar, Tensor):
-          S = S | {pp.action.scalar}
-    return S
+    scalars = _scalarsOf(cfg)
+    # a derived scalar is computed in the prologue, so it also pulls in the
+    # named scalars its expression reads
+    for derived in [s for s in scalars if isinstance(s, DerivedScalar)]:
+      scalars = scalars | derived.dependencies()
+    return {scalar for scalar in scalars if not scalar.temporary}
+
+class DerivedScalarsList(object):
+  """The scalars the kernel computes before it does anything else."""
+
+  def visit(self, cfg):
+    derived = [s for s in _scalarsOf(cfg) if isinstance(s, DerivedScalar)]
+    return sorted(derived, key=lambda s: s.name())
 
 class PrettyPrinter(object):
   def __init__(self, printPPState = False):

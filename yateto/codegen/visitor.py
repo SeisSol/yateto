@@ -4,7 +4,7 @@ from functools import reduce
 from io import StringIO
 from ..memory import DenseMemoryLayout
 from .. import aspp
-from ..controlflow.visitor import ScalarsSet, SortedGlobalsList, SortedPrefetchList
+from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Variable
 from ..type import Tensor
@@ -57,12 +57,7 @@ class KernelGenerator(object):
     return cls.BUFFER_NAME + str(buf)
 
   def deduce_single_scalar(self, scalar):
-    if scalar is None:
-      return 1.0
-    if isinstance(scalar, Tensor):
-      # a named scalar is a member of the kernel struct
-      return scalar.name()
-    return scalar
+    return 1.0 if scalar is None else scalar
 
   def deduce_scalar_list(self, action):
     return [self.deduce_single_scalar(scalar) for scalar in action.scalar]
@@ -73,6 +68,18 @@ class KernelGenerator(object):
     else:
       return self.deduce_single_scalar(action.scalar)
 
+  def _generateScalarPrologue(self, cpp, cfg):
+    """Compute every scalar-only expression up front.
+
+    They read nothing the kernel produces, so hoisting them here means they are
+    evaluated once, before any kernel or external routine call, rather than per
+    statement. A guarded statement gets its factor computed regardless of the
+    guard, which only matters for an expression that can trap.
+    """
+    for scalar in DerivedScalarsList().visit(cfg):
+      datatype = scalar.getDatatype(self._arch)
+      cpp(f'{datatype.ctype()} const {scalar.name()} = {scalar.expression.ccode(self._arch)};')
+
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
     hwFlops = 0
     # temporary memory required (per element in case of gpu)
@@ -80,6 +87,7 @@ class KernelGenerator(object):
     #       an provided by the user
     required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
+    self._generateScalarPrologue(cpp, cfg)
     if factory.allocateTemporary():
       localPtrs = set()
       for pp in cfg:

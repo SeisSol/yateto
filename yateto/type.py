@@ -371,6 +371,61 @@ class Tensor(IdentifiedType):
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)
 
+class ScalarExpression:
+  """A computation over scalars, evaluated before any kernel call.
+
+  Its leaves are named scalars and numbers, never tensor reads, so it depends on
+  nothing the kernel produces and can be hoisted to the top of the kernel.
+  """
+
+  def __init__(self, optype, *operands):
+    optype.checkArity(len(operands))
+    self.optype = optype
+    self.operands = operands
+
+  def scalars(self):
+    """The named scalars this expression reads."""
+    found = set()
+    for operand in self.operands:
+      if isinstance(operand, ScalarExpression):
+        found |= operand.scalars()
+      elif isinstance(operand, Tensor):
+        found.add(operand)
+    return found
+
+  def datatype(self, arch):
+    from .ops import promote
+    types = []
+    for operand in self.operands:
+      if isinstance(operand, ScalarExpression):
+        types.append(operand.datatype(arch))
+      elif isinstance(operand, Tensor):
+        types.append(operand.getDatatype(arch))
+    return promote(types) if types else arch.datatype
+
+  def ccode(self, arch):
+    def spell(operand):
+      if isinstance(operand, ScalarExpression):
+        return operand.ccode(arch)
+      if isinstance(operand, Tensor):
+        return operand.name()
+      return self.datatype(arch).literal(operand)
+    return self.optype.callstr(*[spell(operand) for operand in self.operands])
+
+  def _key(self):
+    return (self.optype, tuple(o._key() if isinstance(o, ScalarExpression) else o
+                               for o in self.operands))
+
+  def __eq__(self, other):
+    return isinstance(other, ScalarExpression) and self._key() == other._key()
+
+  def __hash__(self):
+    return hash(self._key())
+
+  def __repr__(self):
+    return f'{self.optype}({", ".join(repr(o) for o in self.operands)})'
+
+
 class Scalar(Tensor):
   """A rank-0 tensor that is handed over by value.
 
@@ -382,6 +437,94 @@ class Scalar(Tensor):
   def __init__(self, name, namespace=None, datatype=None):
     super().__init__(name, (), namespace=namespace, datatype=datatype,
                      addressing=AddressingMode.SCALAR)
+
+  def __str__(self):
+    # a scalar spells itself as its name: it is a value in the generated code,
+    # and its shape carries nothing worth printing
+    return self.name()
+
+  # Arithmetic between scalars builds a ScalarExpression. Against a tensor node
+  # NotImplemented lets Python fall back to the node's reflected operator, which
+  # knows how to turn this into a scale factor.
+  @staticmethod
+  def _combine(optype, left, right):
+    from .ast.node import Node
+    if isinstance(left, Node) or isinstance(right, Node):
+      return NotImplemented
+    return derivedScalar(optype, left, right)
+
+  def __mul__(self, other):
+    from . import ops
+    return self._combine(ops.Mul(), self, other)
+  __rmul__ = __mul__
+
+  def __add__(self, other):
+    from . import ops
+    return self._combine(ops.Add(), self, other)
+  __radd__ = __add__
+
+  def __sub__(self, other):
+    from . import ops
+    negated = self._combine(ops.Mul(), -1.0, other)
+    return negated if negated is NotImplemented else self._combine(ops.Add(), self, negated)
+
+  def __rsub__(self, other):
+    from . import ops
+    return self._combine(ops.Add(), other, -self)
+
+  def __truediv__(self, other):
+    from . import ops
+    return self._combine(ops.Div(), self, other)
+
+  def __rtruediv__(self, other):
+    from . import ops
+    return self._combine(ops.Div(), other, self)
+
+  def __neg__(self):
+    from . import ops
+    return derivedScalar(ops.Mul(), -1.0, self)
+
+
+class DerivedScalar(Scalar):
+  """A scalar computed from other scalars before the kernel runs.
+
+  Temporary, so it is not part of the kernel signature: the caller does not set
+  it, the kernel computes it in its prologue.
+  """
+
+  # internal name; a user tensor cannot start with an underscore, so these
+  # cannot collide with one
+  BASE_NAME = r'_s\d+'
+  VALID_NAME = r'^_s\d+$'
+
+  _counter = 0
+
+  def __init__(self, expression):
+    DerivedScalar._counter += 1
+    super().__init__(f'_s{DerivedScalar._counter}')
+    self.temporary = True
+    self.expression = expression
+
+  def getDatatype(self, arch):
+    return self.expression.datatype(arch) if self.datatype is None else self.datatype
+
+  def dependencies(self):
+    return self.expression.scalars()
+
+
+def derivedScalar(optype, *operands):
+  """Combine scalars into one derived scalar.
+
+  A derived operand contributes its expression rather than itself, so every
+  derived scalar reads only named scalars and numbers -- there is never a chain
+  of them to order in the prologue.
+  """
+  flattened = [o.expression if isinstance(o, DerivedScalar) else o for o in operands]
+  expression = ScalarExpression(optype, *flattened)
+  # the same expression yields the same scalar, so it is computed once
+  return _derivedCache.setdefault(expression, DerivedScalar(expression))
+
+_derivedCache = dict()
 
 class Collection(object):
   def update(self, collection):

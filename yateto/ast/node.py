@@ -4,7 +4,7 @@ from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
 from .. import aspp
-from ..type import AddressingMode, Tensor
+from ..type import AddressingMode, Tensor, derivedScalar
 from .. import ops
 import numpy as np
 
@@ -91,16 +91,38 @@ class Node(ABC):
       return value['']
     return float(value)
 
+  @staticmethod
+  def _combineFactors(left, right):
+    """Multiply two scale factors into one.
+
+    Two numbers collapse right away; anything else becomes a derived scalar,
+    computed once in the kernel prologue rather than in a loop.
+    """
+    if left is None:
+      return right
+    if right is None:
+      return left
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+      return left * right
+    return derivedScalar(ops.Mul(), left, right)
+
   def isScaling(self):
-    """Whether this node multiplies a term by a by-value rank-0 quantity."""
+    """Whether this node multiplies a term by a scale factor."""
     return self.scalingOperands() is not None
 
   def scalingOperands(self):
     return None
 
-  def _checkMultipleScalarMults(self):
-    if self.isScaling():
-      raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
+  def splitScaling(self):
+    """``(factor, term)`` with the scale factor peeled off; factor may be None."""
+    scaling = self.scalingOperands()
+    return scaling if scaling is not None else (None, self)
+
+  def scaled(self, factor):
+    """Multiply by a scale factor, collapsing with one already present."""
+    mine, term = self.splitScaling()
+    combined = Node._combineFactors(mine, factor)
+    return Elementwise(ops.Mul(), Node._scalarOperand(combined), term)
 
   def _accumulate(self, other, optype):
     """Flatten chains of the same operation into one n-ary Accumulate."""
@@ -130,17 +152,16 @@ class Node(ABC):
 
   def __mul__(self, other):
     if not isinstance(other, Node):
-      self._checkMultipleScalarMults()
-      return Elementwise(ops.Mul(), Node._scalarOperand(other), self)
-    if self.isScaling():
-      other._checkMultipleScalarMults()
-      self.setScaledTerm(self.scaledTerm() * other)
-      return self
-    elif other.isScaling():
-      self._checkMultipleScalarMults()
-      other.setScaledTerm(self * other.scaledTerm())
-      return other
-    return self._binOp(other, Einsum)
+      return self.scaled(other)
+
+    # peel the scale factors off both sides, multiply the tensors, and put the
+    # combined factor back on top -- so a product carries at most one factor
+    leftFactor, leftTerm = self.splitScaling()
+    rightFactor, rightTerm = other.splitScaling()
+    product = leftTerm._binOp(rightTerm, Einsum)
+
+    factor = Node._combineFactors(leftFactor, rightFactor)
+    return product if factor is None else product.scaled(factor)
 
   def __rmul__(self, other):
     return self.__mul__(other)
@@ -154,8 +175,7 @@ class Node(ABC):
     return self.__add__(other)
 
   def __neg__(self):
-    self._checkMultipleScalarMults()
-    return Elementwise(ops.Mul(), Node._scalarOperand(-1.0), self)
+    return self.scaled(-1.0)
 
   def __sub__(self, other):
     return self._accumulate(-other, ops.Add())

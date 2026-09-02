@@ -17,7 +17,7 @@ from yateto.ast.cost import BoundingBoxCostEstimator
 from yateto.ast.node import Elementwise, IndexedTensor
 from yateto.ast.visitor import FindTensors
 from yateto.generator import Kernel
-from yateto.type import AddressingMode, Datatype, Scalar
+from yateto.type import AddressingMode, Datatype, DerivedScalar, Scalar
 
 import yateto.functions as yf
 
@@ -159,10 +159,19 @@ class TestScalingLowering:
         rank0, matrix = quantities['rank0'], quantities['matrix']
         assert (rank0[''] <= yf.sum(matrix['ij'], 'ij')) is not None
 
-    def test_nested_scalings_are_rejected(self, quantities):
+    def test_nested_numeric_scalings_collapse(self, quantities):
         A = quantities['matrix']
-        with pytest.raises(ValueError, match='Multiple multiplications'):
-            2.0 * (3.0 * A['ij'])
+        expr = 2.0 * (3.0 * A['ij'])
+        factor, _ = expr.scalingOperands()
+        assert factor == 6.0
+
+    def test_nested_named_scalings_become_one_derived_scalar(self, quantities):
+        A = quantities['matrix']
+        alpha, beta = Scalar('alpha'), Scalar('beta')
+        expr = alpha * (beta * A['ij'])
+        factor, _ = expr.scalingOperands()
+        assert isinstance(factor, DerivedScalar)
+        assert {s.name() for s in factor.dependencies()} == {'alpha', 'beta'}
 
 
 class TestScalingSemantics:

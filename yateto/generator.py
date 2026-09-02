@@ -9,6 +9,7 @@ from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors, FindPrefetchCapabilities
 from .ast.transformer import *
 from .codegen.cache import *
+from .codegen.common import KernelAttributes
 from .codegen.code import Cpp
 from .codegen.test_framework import *
 from .codegen.visitor import *
@@ -25,7 +26,8 @@ class Kernel(object):
   VALID_NAME = r'^{}$'.format(BASE_NAME)
   VALID_TARGETS = ['cpu', 'gpu']
 
-  def __init__(self, name, ast, prefetch=None, namespace=None, target='cpu'):
+  def __init__(self, name, ast, prefetch=None, namespace=None, target='cpu',
+               attrs=None):
     self.name = name
     if isinstance(ast, list):
       self.ast = ast
@@ -48,6 +50,11 @@ class Kernel(object):
       raise ValueError(f'target platform is incorrect. '
                        f'Given: {target}. Allowed: {", ".join(self.VALID_TARGETS)}')
     self.target = target
+
+    #: Per-kernel switches that change the generated interface; see
+    #: KernelAttributes. Validated here so a typo is reported against the
+    #: `add` call that made it, not against generated C++ much later.
+    self.attrs = KernelAttributes(attrs)
 
     self.cfg = None
     self.nonZeroFlops = -1
@@ -161,7 +168,8 @@ class KernelFamily(object):
       index += p*stride[i]
     return index
 
-  def add(self, name, ast, prefetch=None, namespace=None, target='cpu'):
+  def add(self, name, ast, prefetch=None, namespace=None, target='cpu',
+          attrs=None):
     baseName = self.baseName(name)
     if not self.name:
       self.name = baseName
@@ -169,7 +177,8 @@ class KernelFamily(object):
 
     group = self.group(name)
     internalName = '_{}_{}'.format(baseName, group)
-    self._kernels[group] = Kernel(internalName, ast, prefetch, namespace, target)
+    self._kernels[group] = Kernel(internalName, ast, prefetch, namespace, target,
+                                  attrs)
 
     if namespace is None:
       self.namespace = ''
@@ -244,16 +253,19 @@ class Generator(object):
   def arch(self):
     return self._arch
 
-  def add(self, name: str, ast: Node, prefetch=None, namespace=None, target='cpu'):
+  def add(self, name: str, ast: Node, prefetch=None, namespace=None, target='cpu',
+          attrs=None):
     if KernelFamily.isValidName(name):
       baseName = KernelFamily.baseName(name)
       if baseName not in self._kernelFamilies:
         self._kernelFamilies[baseName] = KernelFamily()
-      self._kernelFamilies[baseName].add(name, ast, prefetch, namespace, target)
+      self._kernelFamilies[baseName].add(name, ast, prefetch, namespace, target,
+                                         attrs)
     else:
       if not Kernel.isValidName(name):
         raise ValueError(f'Kernel name invalid (must match regexp {Kernel.VALID_NAME}): {name}')
-      kernel = Kernel(name, ast, prefetch, namespace=namespace, target=target)
+      kernel = Kernel(name, ast, prefetch, namespace=namespace, target=target,
+                      attrs=attrs)
       self._kernels.append(kernel)
 
   def kernels(self):
@@ -265,22 +277,27 @@ class Generator(object):
                 astGenerator,
                 prefetchGenerator=None,
                 namespace=None,
-                target='cpu'):
+                target='cpu',
+                attrs=None):
 
     if name not in self._kernelFamilies:
       self._kernelFamilies[name] = KernelFamily(namespace=namespace)
     family = self._kernelFamilies[name]
     pmax = max(parameterSpace)
-    stride = [1]
-    for i in range(len(pmax)-1):
-      stride.append(stride[i] * (pmax[i]+1))
-    stride = tuple(stride)
+    rank = len(pmax)
+    stride = []
+    if rank > 0:
+      stride = [1]
+      for i in range(rank - 1):
+        stride.append(stride[i] * (pmax[i] + 1))
+      stride = tuple(stride)
     family.setStride(stride)
     for p in parameterSpace:
-      indexedName = '{}({})'.format(name, KernelFamily.linear(stride, p))
+      indexedName = f'{name}({KernelFamily.linear(stride, p)})'
       ast = astGenerator(*p)
       prefetch = prefetchGenerator(*p) if prefetchGenerator is not None else None
-      family.add(indexedName, ast, prefetch, namespace, target=target)
+      family.add(indexedName, ast, prefetch, namespace, target=target,
+                 attrs=attrs)
 
   @classmethod
   def _headerGuardName(self, namespace, fileBaseName):
@@ -388,7 +405,8 @@ class Generator(object):
                   kernelOutline = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
                                                                            kernel.cfg,
                                                                            gemm_cfg,
-                                                                           kernel.target)
+                                                                           kernel.target,
+                                                                           kernel.attrs)
                   with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
                     optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
 
@@ -400,7 +418,8 @@ class Generator(object):
                     kernelOutlines[group] = optKernelGenerator.generateKernelOutline(kernel.nonZeroFlops,
                                                                                      kernel.cfg,
                                                                                      gemm_cfg,
-                                                                                     kernel.target)
+                                                                                     kernel.target,
+                                                                                     kernel.attrs)
 
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())

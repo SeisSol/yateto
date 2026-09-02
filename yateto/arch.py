@@ -131,8 +131,14 @@ class Architecture(object):
     return self.name == other.name
 
   def headers(self):
-    if self.backend in ['cpp', 'cuda']:
+    """
+    Includes for the test framework. I.e. to make the GPU APIs run.
+    """
+
+    if self.backend in ['cpp']:
       return []
+    elif self.backend in ['cuda']:
+      return ['cuda_runtime.h']
     elif self.backend in ['hip']:
       return ['hip/hip_runtime.h']
     elif self.backend in ['oneapi', 'hipsycl', 'acpp']:

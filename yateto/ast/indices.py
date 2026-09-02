@@ -44,6 +44,9 @@ class Indices(object):
       return sorted(pos)
     return pos
 
+  def positionsIncomplete(self, I):
+    return [self.find(i) for i in I if i in self]
+
   def __eq__(self, other):
     return other != None and self._indices == other._indices and self._size == other._size
 

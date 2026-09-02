@@ -1,4 +1,4 @@
-from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux
+from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
 from ...ast.indices import BoundingBox
 from ..cache import RoutineGenerator, GpuRoutineGenerator
 from chainforge.interfaces import YatetoInterface as yi
@@ -8,9 +8,10 @@ from chainforge.backend.generator import Generator as ChainForgeGenerator
 
 
 class FusedGemms:
-  def __init__(self, arch, descr):
+  def __init__(self, arch, descr, attrs=None):
     self._arch = arch
     self._descr = descr
+    self._attrs = attrs if attrs is not None else KernelAttributes()
     self._datatype = self._descr[0].node.datatype
     self._batch_aux = BatchedOperationsAux()
     self._cache = {}
@@ -141,7 +142,7 @@ class FusedGemms:
                                         alpha,
                                         beta,
                                         BatchedOperationsAux.NUM_ELEMENTS_NAME,
-                                        BatchedOperationsAux.FLAGS_NAME,
+                                        BatchedOperationsAux.flags_arg(self._attrs),
                                         BatchedOperationsAux.STREAM_PTR_NAME)
 
   @classmethod

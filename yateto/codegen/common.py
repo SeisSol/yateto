@@ -85,20 +85,38 @@ def scaleFactor(datatype, alpha):
 # emits its own loops into the same scope has to use it as well.
 INDEX_PREFIX = '_'
 
-def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, indexNo=None):
+def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, fixed={}, indexNo=None):
   flops = 0
+  firstLoop = False
   if indexNo == None:
     indexNo = len(indexNames)-1
+    firstLoop = True
+    # bail out before emitting anything if any pinned index misses its range,
+    # otherwise we leave empty scopes with unused constexpr variables behind
+    for index in indexNames:
+      if index in fixed and not (ranges[index].start <= fixed[index] < ranges[index].stop):
+        return 0
   if indexNo < 0:
-    flops = body()
+    if firstLoop:
+      with cpp.AnonymousScope():
+        flops = body()
+    else:
+      flops = body()
   else:
     index = indexNames[indexNo]
     rng = ranges[index]
-    if pragmaSimd and indexNo == 0:
-      cpp('#pragma omp simd')
-    with cpp.For('int {3}{0} = {1}; {3}{0} < {2}; ++{3}{0}'.format(index, rng.start, rng.stop, prefix)):
-      flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, indexNo-1)
-    flops = flops * rng.size()
+    if index in fixed:
+      with cpp.AnonymousScope():
+        cpp(f'[[maybe_unused]] constexpr int {prefix}{index} = {fixed[index]};')
+        flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, fixed, indexNo-1)
+    else:
+      # the pragma belongs on the innermost *emitted* loop, i.e. the one over the
+      # fastest-running index that has not been pinned by unrolling
+      if pragmaSimd and all(indexNames[i] in fixed for i in range(indexNo)):
+        cpp('#pragma omp simd')
+      with cpp.For('int {3}{0} = {1}; {3}{0} < {2}; ++{3}{0}'.format(index, rng.start, rng.stop, prefix)):
+        flops = forLoops(cpp, indexNames, ranges, body, pragmaSimd, prefix, fixed, indexNo-1)
+      flops = flops * rng.size()
   return flops
 
 def loopRanges(term: IndexedTensorDescription, loopIndices):
@@ -117,8 +135,8 @@ def testLoopRangesAContainedInB(A, B):
 def boundingBoxFromLoopRanges(indices, loopRanges):
   return BoundingBox([loopRanges[index] for index in indices])
 
-def reduceSpp(spp, sourceIndices, targetIndices):
-  return spp.indexSum(sourceIndices, targetIndices)
+def reduceSpp(spp, sourceIndices, targetIndices, fixedIndices):
+  return spp.indexSum(sourceIndices, targetIndices, fixedIndices)
 
 def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
   if writeBB:
@@ -133,6 +151,51 @@ def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
     cpp.memset(result.name, result.memoryLayout.requiredReals(), result.datatype.ctype())
 
 
+class KernelAttributes:
+  """Switches the caller sets on one kernel at ``Generator.add`` time.
+
+  They are not code generation options: a kernel's attributes are part of
+  what the kernel *is*, because they change its generated interface. The
+  batch flags are the first one -- a kernel that does not declare them has
+  no ``flags`` member to assign to, so a caller that means to mask elements
+  off and forgot the attribute finds out from the compiler rather than from
+  a result that silently ignored the mask.
+
+  Unknown keys are rejected here rather than ignored, since an attribute
+  that does nothing looks exactly like a typo in one that would have.
+  """
+
+  FLAGS = 'flags'
+  KNOWN = frozenset({FLAGS})
+
+  def __init__(self, attrs=None):
+    attrs = dict(attrs) if attrs else {}
+    unknown = sorted(set(attrs) - self.KNOWN)
+    if unknown:
+      raise ValueError(
+        'unknown kernel attribute(s) {}; known are {}'.format(
+          ', '.join(repr(key) for key in unknown),
+          ', '.join(repr(key) for key in sorted(self.KNOWN))))
+    self._attrs = attrs
+
+  @property
+  def flags(self):
+    """Whether the kernel takes a per-element mask of elements to skip."""
+    return bool(self._attrs.get(self.FLAGS, False))
+
+  def as_dict(self):
+    """The attributes as the external code generators want them."""
+    return dict(self._attrs)
+
+  def __eq__(self, other):
+    if isinstance(other, KernelAttributes):
+      return self._attrs == other._attrs
+    return NotImplemented
+
+  def __repr__(self):
+    return f'KernelAttributes({self._attrs!r})'
+
+
 class BatchedOperationsAux:
   NUM_ELEMENTS_NAME = 'numElements'
   EXTRA_OFFSET_NAME = 'extraOffset'
@@ -143,6 +206,17 @@ class BatchedOperationsAux:
   @classmethod
   def _get_ptr_type(cls, addressing: AddressingMode):
     return addressing.pointer_type()
+
+  @classmethod
+  def flags_arg(cls, attrs):
+    """The batch-flags argument for a kernel that always takes one.
+
+    The external generators (GemmForge, ChainForge) put a flags parameter in
+    every kernel they emit, so the choice at the call site is between the
+    member and a literal null -- and the member only exists when the kernel
+    declares the attribute.
+    """
+    return cls.FLAGS_NAME if attrs.flags else 'nullptr'
 
   @classmethod
   def deduce_addresing(cls, term):

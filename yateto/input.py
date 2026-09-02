@@ -2,7 +2,7 @@ import re
 import itertools
 import json
 from . import Collection, Tensor
-from .memory import AlignedCSCMemoryLayout, CSCMemoryLayout, DenseMemoryLayout
+from .memory import AlignedCSCMemoryLayout, CSCMemoryLayout, DenseMemoryLayout, PatternMemoryLayout, AlignedPatternMemoryLayout
 from . import aspp
 from .util import create_collection
 import os
@@ -11,10 +11,10 @@ import lzma
 import importlib.util
 lxmlSpec = importlib.util.find_spec('lxml')
 etreeSpec = importlib.util.find_spec('lxml.etree') if lxmlSpec else None
-if etreeSpec:
-  etree = etreeSpec.loader.load_module()
+if etreeSpec is not None:
+  import lxml.etree as etree
 else:
-  etree = importlib.util.find_spec('xml.etree.ElementTree').loader.load_module()
+  import xml.etree.ElementTree as etree
 
 def __transposeMatrix(matrix):
   matrixT = dict()
@@ -22,7 +22,7 @@ def __transposeMatrix(matrix):
     matrixT[tuple(entry[::-1])] = value
   return matrixT
 
-def __processMatrix(name, shape, entries, clones, transpose, alignStride, namespace=None):
+def __processMatrix(name, shape, entries, clones, transpose, alignStride, namespace, legacy):
   matrix = dict()
 
   dim = len(shape)
@@ -47,14 +47,14 @@ def __processMatrix(name, shape, entries, clones, transpose, alignStride, namesp
   for name in names:
     # compute a shape of a tensor (for now, assume transpose == invert dimensions)
     shape = shape[::-1] if transpose(name) else shape
-    if len(shape) == 2 and shape[1] == 1: # TODO: remove once all files are converted
+    if len(shape) == 2 and shape[1] == 1 and legacy: # TODO: remove once all files are converted
       shape = (shape[0],)
 
     # transpose matrix if it is needed
     mtx = __transposeMatrix(matrix) if transpose(name) else matrix
 
     # adjust layout description in case if a given matrix is a vector
-    if len(shape) == 1: # TODO: remove once all files are converted
+    if len(shape) == 1 and legacy: # TODO: remove once all files are converted
       mtx = {(i[0],): val for i,val in mtx.items()}
 
     # Create an tensor(matrix) using the matrix description and append the hash table
@@ -102,7 +102,7 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, ali
         else:
           __complain(child)
 
-      matrices.update( __processMatrix(name, (rows, columns), entries, clones, transpose, alignStride, namespace) )
+      matrices.update( __processMatrix(name, (rows, columns), entries, clones, transpose, alignStride, namespace, True) )
     else:
       __complain(node)
 
@@ -124,7 +124,7 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
       dim = len(shape)
       if len(next(iter(entries))) == dim:
         entries = [(*entry, True) for entry in entries]
-      matrices.update( __processMatrix(m['name'], shape, entries, clones, transpose, alignStride, namespace) )
+      matrices.update( __processMatrix(m['name'], shape, entries, clones, transpose, alignStride, namespace, False) )
 
   return create_collection(matrices)
 
@@ -180,13 +180,15 @@ def memoryLayoutFromFile(xmlFile, db, clones, strict=False):
       names = groups[group] if group in groups else (clones[name] if name in clones else [name])
       for n in names:
         tensor = db.byName(n)
+
+        # for backwards compatibility reasons, take CSC if we have a proper matrix at hand
         if sparsealigned:
           if tensor.memoryLayout().alignedStride():
-            tensor.setMemoryLayout(AlignedCSCMemoryLayout)
+            tensor.setMemoryLayout(AlignedCSCMemoryLayout if tensor.rank() == 2 else AlignedPatternMemoryLayout)
           else:
-            tensor.setMemoryLayout(CSCMemoryLayout)
+            tensor.setMemoryLayout(CSCMemoryLayout if tensor.rank() == 2 else PatternMemoryLayout)
         elif sparse:
-          tensor.setMemoryLayout(CSCMemoryLayout)
+          tensor.setMemoryLayout(CSCMemoryLayout if tensor.rank() == 2 else PatternMemoryLayout)
         else:
           tensor.setMemoryLayout(DenseMemoryLayout, alignStride=tensor.memoryLayout().alignedStride())
     elif strict:

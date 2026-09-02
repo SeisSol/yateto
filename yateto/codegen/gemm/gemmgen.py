@@ -7,27 +7,23 @@ from collections import namedtuple
 
 from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
-from ..common import BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, toTinyTCType, toTinyTCImmediate
+from ..common import BatchedOperationsAux, KernelAttributes, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, toTinyTCType, toTinyTCImmediate
 from ..tiny_tensor_language import *
 from ...type import Datatype
 import importlib.util
 
 
 # Optional modules
+import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
-try:
-  if gf_spec:
-    gf = gf_spec.loader.load_module()
-except:
-  raise ('Cannot load gemmforge.')
-
 
 class GemmGen(object):
-  def __init__(self, arch, descr, gemm_cfg):
+  def __init__(self, arch, descr, gemm_cfg, attrs=None):
     self._arch = arch
     self._descr = descr
     self._gemm_cfg = gemm_cfg
     self._mode = gemm_cfg.operation_name
+    self._attrs = attrs if attrs is not None else KernelAttributes()
 
   def _is_special(self, value, specials):
     result = 'generic'
@@ -150,6 +146,8 @@ class GemmGen(object):
       ctype = d.result.datatype.ctype()
 
       if gf_spec:
+        import gemmforge as gf
+
         aux = BatchedOperationsAux()
 
         matrix_a = gf.YatetoInterface.produce_dense_matrix((m, k),
@@ -180,7 +178,7 @@ class GemmGen(object):
                   aux.deduce_ptr_arg(d.result, as_const=False),
                   aux.deduce_offset_arg(d.result),
                   BatchedOperationsAux.NUM_ELEMENTS_NAME,
-                  BatchedOperationsAux.FLAGS_NAME,
+                  BatchedOperationsAux.flags_arg(self._attrs),
                   BatchedOperationsAux.STREAM_PTR_NAME]
           args_str = ', '.join(args)
 

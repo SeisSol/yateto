@@ -10,8 +10,10 @@ from ..controlflow.graph import Variable
 from ..type import Tensor
 from .code import Cpp
 from .factory import *
-from .common import BatchedOperationsAux
+from .common import BatchedOperationsAux, KernelAttributes
 from ..type import Scalar, Tensor, Datatype
+
+import numpy as np
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
@@ -121,6 +123,9 @@ class OptimizedKernelGenerator(KernelGenerator):
   EXECUTE_ARRAY_NAME = 'ExecutePtrs'
   NONZEROFLOPS_NAME = 'NonZeroFlops'
   HARDWAREFLOPS_NAME = 'HardwareFlops'
+  OUTBOUND_BYTES_NAME = 'OutboundBytes'
+  INBOUND_CONST_BYTES_NAME = 'InboundConstBytes'
+  INBOUND_BYTES_NAME = 'InboundBytes'
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
@@ -143,6 +148,9 @@ class OptimizedKernelGenerator(KernelGenerator):
     def __init__(self,
                  nonZeroFlops,
                  hwFlops,
+                 inConstBytes,
+                 inBytes,
+                 outBytes,
                  tensors,
                  writable,
                  prefetch,
@@ -151,10 +159,14 @@ class OptimizedKernelGenerator(KernelGenerator):
                  tmp_mem_size,
                  is_compute_constant_tensors,
                  datatype,
-                 target):
+                 target,
+                 attrs):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
+      self.inConstBytes = inConstBytes
+      self.inBytes = inBytes
+      self.outBytes = outBytes
       self.tensors = tensors
       self.writable = writable
       self.prefetch = prefetch
@@ -164,6 +176,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       self.is_compute_constant_tensors = is_compute_constant_tensors
       self.datatype = datatype
       self.target = target
+      self.attrs = attrs
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -177,8 +190,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       else:
         tensors[base_name] = {group}
 
-
-  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target):
+  def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target, attrs=None):
     scalarsP = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
@@ -186,6 +198,11 @@ class OptimizedKernelGenerator(KernelGenerator):
     is_compute_constant_tensors = dict()
     scalars = collections.OrderedDict()
     datatype = dict()
+
+    inConstTensors = {}
+    inTensors = {}
+    outTensors = {}
+
     for scalar in scalarsP:
       self.KernelOutline._addTensor(scalar, scalars)
       datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
@@ -203,6 +220,21 @@ class OptimizedKernelGenerator(KernelGenerator):
 
       is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
 
+      nm = var.tensor.nameWithNamespace()
+
+      size = var.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
+      if var.tensor.is_compute_constant():
+        inConstTensors[nm] = size
+      else:
+        if var.writable:
+          outTensors[nm] = size
+        else:
+          inTensors[nm] = size
+
+    inConstBytes = sum(size for size in inConstTensors.values())
+    inBytes = sum(size for size in inTensors.values())
+    outBytes = sum(size for size in outTensors.values())
+
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()
     for tensor in prefetchTensors:
@@ -211,7 +243,8 @@ class OptimizedKernelGenerator(KernelGenerator):
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
-      factory = self._routine_factories[target](fcpp, self._arch, target)
+      attrs = attrs if attrs is not None else KernelAttributes()
+      factory = self._routine_factories[target](fcpp, self._arch, target, attrs)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.post_generate(self._routineCache)
       factory.freeTmp()
@@ -220,6 +253,9 @@ class OptimizedKernelGenerator(KernelGenerator):
       function = functionIO.getvalue()
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
+                              inConstBytes,
+                              inBytes,
+                              outBytes,
                               tensors,
                               writable,
                               prefetch,
@@ -228,7 +264,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                               tmp_memory,
                               is_compute_constant_tensors,
                               datatype,
-                              target)
+                              target,
+                              attrs)
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -269,6 +306,15 @@ class OptimizedKernelGenerator(KernelGenerator):
     if not is_same_target:
       raise RuntimeError("kernels with the same family belong to different compute target.")
 
+    # One struct carries the whole family, so one set of attributes has to
+    # describe every member of it: the flags member is either there for all of
+    # them or for none.
+    attrs = kernelOutlines[-1].attrs
+    for outline in kernelOutlines:
+      if outline and outline.attrs != attrs:
+        raise RuntimeError("kernels within the same family were given different "
+                           "attributes.")
+
     if familyStride is not None:
       executeName = lambda index: self.EXECUTE_NAME + str(index)
       formatArray = lambda lst: '{{{}}}'.format(', '.join([str(l) for l in lst]))
@@ -280,20 +326,20 @@ class OptimizedKernelGenerator(KernelGenerator):
 
     with header.Namespace(self.NAMESPACE):
       with header.Struct(name):
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.NONZEROFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.nonZeroFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
-        header('{} {} const {}{} = {};'.format(
-          MODIFIERS,
-          self._arch.ulongTypename,
-          self.HARDWAREFLOPS_NAME,
-          brackets,
-          formatArray([kernelOutline.hwFlops if kernelOutline else 0 for kernelOutline in kernelOutlines])
-        ))
+        def addConst(name, attrcall):
+          header('{} {} const {}{} = {};'.format(
+            MODIFIERS,
+            self._arch.ulongTypename,
+            name,
+            brackets,
+            formatArray([attrcall(kernelOutline) if kernelOutline else 0 for kernelOutline in kernelOutlines])
+          ))
+
+        addConst(self.NONZEROFLOPS_NAME, lambda ko: ko.nonZeroFlops)
+        addConst(self.HARDWAREFLOPS_NAME, lambda ko: ko.hwFlops)
+        addConst(self.INBOUND_CONST_BYTES_NAME, lambda ko: ko.inConstBytes)
+        addConst(self.INBOUND_BYTES_NAME, lambda ko: ko.inBytes)
+        addConst(self.OUTBOUND_BYTES_NAME, lambda ko: ko.outBytes)
 
         # tmp mem required by a kernel(s)
         tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
@@ -356,7 +402,11 @@ class OptimizedKernelGenerator(KernelGenerator):
         if target == 'gpu':
           header(f'unsigned {BatchedOperationsAux.NUM_ELEMENTS_NAME} = 0;')
           header(f'void *{BatchedOperationsAux.STREAM_PTR_NAME} = {BatchedOperationsAux.FORBIDDEN_STREAM_PTR};')
-          header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+          # Only where the kernel asked for it: without the member, a caller
+          # that means to skip elements fails to compile instead of getting a
+          # kernel that computes all of them.
+          if attrs.flags:
+            header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
@@ -399,22 +449,23 @@ class OptimizedKernelGenerator(KernelGenerator):
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
             header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
 
-          aux_functions = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME, self.TEMP_MEM_REQUIRED_NAME]
-          for function in aux_functions:
-            funName = function[:1].lower() + function[1:]
-            with header.Function(funName, args, '{} {}'.format(MODIFIERS, self._arch.ulongTypename)):
-              header('return {}[{}];'.format(function, indexF))
+          indexer = f'[{indexF}]'
+        else:
+          args = ''
+          indexer = ''
 
-    flopCounters = [self.NONZEROFLOPS_NAME, self.HARDWAREFLOPS_NAME]
-    for fc in flopCounters:
-      cpp('{} {} const {}::{}::{}{};'.format(
-        CONSTEXPR,
-        self._arch.ulongTypename,
-        self.NAMESPACE,
-        name,
-        fc,
-        brackets
-      ))
+        aux_functions = [self.NONZEROFLOPS_NAME,
+                          self.HARDWAREFLOPS_NAME,
+                          self.INBOUND_CONST_BYTES_NAME,
+                          self.INBOUND_BYTES_NAME,
+                          self.OUTBOUND_BYTES_NAME,
+                          self.TEMP_MEM_REQUIRED_NAME]
+
+        for function in aux_functions:
+          funName = function[:1].lower() + function[1:]
+          with header.Function(funName, args, f'{MODIFIERS} {self._arch.ulongTypename}'):
+            header(f'return {function}{indexer};')
+
     if familyStride is not None:
       cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
         CONSTEXPR,
@@ -687,6 +738,8 @@ class InitializerGenerator(object):
       raise NotImplementedError
 
     def listToInitializerList(self, lst):
+      if isinstance(lst, np.ndarray):
+        lst = lst.flatten(order='K')
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
 
     def formatArray(self, numberType, name, values, declarationOnly):
@@ -734,6 +787,25 @@ class InitializerGenerator(object):
       cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
       cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
 
+  class PatternTensorView(TensorView):
+    PATTERN_NAME = 'Pattern'
+
+    def typename(self, dim, arch, const):
+      constStr = 'true' if const else 'false'
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim}, {arch.typename}, {arch.uintTypename}, {constStr}>'
+
+    def generate(self, cpp, memLayout, arch, index, const):
+      cpp( 'return {}({}, {}, {});'.format(
+          self.typename(len(memLayout.shape()), arch, const),
+          self.ARGUMENT_NAME,
+          self.listToInitializerList(memLayout.shape()),
+          self.PATTERN_NAME + (index if index is not None else '')
+        )
+      )
+
+    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
+      cpp(self.formatArray(numberType, namespace + self.PATTERN_NAME + index, memLayout.pattern(), declarationOnly))
+
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
     self._numberType = f'{self._arch.uintTypename} const'
@@ -777,7 +849,8 @@ class InitializerGenerator(object):
     memoryLayout = tensor.memoryLayout()
     memLayoutMap = {
       'DenseMemoryLayout': self.DenseTensorView,
-      'CSCMemoryLayout': self.CSCMatrixView
+      'CSCMemoryLayout': self.CSCMatrixView,
+      'PatternMemoryLayout': self.PatternTensorView
     }
     return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch))
 

@@ -332,6 +332,9 @@ class Tensor(IdentifiedType):
   def shape(self):
     return self._shape
 
+  def rank(self):
+    return len(self._shape)
+
   def memoryLayout(self):
     return self._memoryLayout
 

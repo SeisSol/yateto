@@ -2,7 +2,6 @@ from ..ast.node import Node, FusedGEMMs, LoopOverGEMM
 from ..ast.indices import Indices
 from collections import OrderedDict
 from typing import Dict, List
-from ..type import ScalarMixin
 
 class Variable(object):
   def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None, is_temporary=False, datatype=None):

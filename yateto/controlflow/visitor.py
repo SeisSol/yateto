@@ -2,7 +2,7 @@ import collections
 from .. import aspp
 from .. import ops
 from ..ast.visitor import Visitor
-from ..type import ScalarMixin, ImmediateScalar
+from ..type import AddressingMode, Tensor
 from .graph import *
 from ..memory import DenseMemoryLayout
 from ..ast.node import Permute, Node, Broadcast
@@ -109,10 +109,9 @@ class AST2ControlFlow(Visitor):
     # A multiplication by a by-value rank-0 quantity becomes the scale factor of
     # a single action rather than a loop of its own; that is what lets it fold
     # into a GEMM's alpha instead of running as a separate pass.
-    symbol, term = scaling
+    scalar, term = scaling
     variable = self.visit(term)
 
-    scalar = symbol.data if isinstance(symbol, ImmediateScalar) else symbol
     result = self._nextTemporary(node)
     action = ProgramAction(result, variable, False, scalar, condition=self._guard[-1])
     self._addAction(action)
@@ -221,7 +220,7 @@ class ScalarsSet(object):
     S = set()
     for pp in cfg:
       if pp.action:
-        if isinstance(pp.action.scalar, ScalarMixin):
+        if isinstance(pp.action.scalar, Tensor):
           S = S | {pp.action.scalar}
     return S
 

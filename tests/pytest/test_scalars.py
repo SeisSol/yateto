@@ -17,7 +17,7 @@ from yateto.ast.cost import BoundingBoxCostEstimator
 from yateto.ast.node import Elementwise, IndexedTensor
 from yateto.ast.visitor import FindTensors
 from yateto.generator import Kernel
-from yateto.type import Datatype, ImmediateScalar, Scalar
+from yateto.type import AddressingMode, Datatype, Scalar
 
 import yateto.functions as yf
 
@@ -33,33 +33,34 @@ def arch():
 def quantities():
     return {
         'scalar': Scalar('alpha'),
-        'immediate': ImmediateScalar(2.5),
         'rank0': Tensor('s', ()),
         'matrix': Tensor('A', (N, N)),
     }
 
 
 class TestRankZeroInterface:
-    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    @pytest.mark.parametrize('key', ['scalar', 'rank0'])
     def test_shape_is_empty(self, quantities, key):
         assert quantities[key].shape() == ()
 
-    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    @pytest.mark.parametrize('key', ['scalar', 'rank0'])
     def test_one_entry_of_storage(self, quantities, key):
         assert quantities[key].memoryLayout().requiredReals() == 1
 
-    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    @pytest.mark.parametrize('key', ['scalar', 'rank0'])
     def test_sparsity_pattern_is_rank_zero(self, quantities, key):
         assert quantities[key].spp().shape == ()
 
-    @pytest.mark.parametrize('key', ['scalar', 'immediate', 'rank0'])
+    @pytest.mark.parametrize('key', ['scalar', 'rank0'])
     def test_indexing_with_the_empty_index(self, quantities, key):
         assert isinstance(quantities[key][''], IndexedTensor)
 
-    @pytest.mark.parametrize('key', ['scalar', 'immediate'])
-    def test_indices_are_rejected(self, quantities, key):
-        with pytest.raises(ValueError):
-            quantities[key]['ij']
+    def test_indices_are_rejected(self, quantities):
+        with pytest.raises((ValueError, AssertionError)):
+            quantities['scalar']['ij']
+
+    def test_a_scalar_is_a_tensor(self, quantities):
+        assert isinstance(quantities['scalar'], Tensor)
 
     def test_a_scalar_matches_a_rank_zero_tensor(self, quantities):
         scalar, rank0 = quantities['scalar'], quantities['rank0']
@@ -69,12 +70,18 @@ class TestRankZeroInterface:
 
 class TestCallingConvention:
     def test_a_scalar_is_passed_by_value(self, quantities):
+        assert quantities['scalar'].addressing == AddressingMode.SCALAR
         assert quantities['scalar'].isPassedByValue()
-        assert quantities['immediate'].isPassedByValue()
 
     def test_a_tensor_is_passed_by_pointer(self, quantities):
+        assert quantities['rank0'].addressing != AddressingMode.SCALAR
         assert not quantities['rank0'].isPassedByValue()
         assert not quantities['matrix'].isPassedByValue()
+
+    def test_a_scalar_and_a_rank_zero_tensor_are_different(self, quantities):
+        # same name would collide in the signature, but they are not the same
+        # thing: one is passed by value, the other by pointer
+        assert Scalar('x') != Tensor('x', ())
 
     def test_a_scalar_is_not_a_tensor_argument(self, quantities):
         scalar, matrix = quantities['scalar'], quantities['matrix']
@@ -143,6 +150,15 @@ class TestScalingLowering:
         scalars = [pp.action.scalar for pp in kernel.cfg if pp.action is not None]
         assert 2.0 in scalars
 
+    def test_a_scalar_cannot_be_written(self, quantities):
+        scalar, rank0 = quantities['scalar'], quantities['rank0']
+        with pytest.raises(ValueError, match='passed by value'):
+            scalar[''] <= rank0['']
+
+    def test_a_rank_zero_tensor_can_be_written(self, quantities):
+        rank0, matrix = quantities['rank0'], quantities['matrix']
+        assert (rank0[''] <= yf.sum(matrix['ij'], 'ij')) is not None
+
     def test_nested_scalings_are_rejected(self, quantities):
         A = quantities['matrix']
         with pytest.raises(ValueError, match='Multiple multiplications'):
@@ -168,7 +184,7 @@ class TestScalingSemantics:
         A, B = quantities['matrix'], Tensor('B', (N, N))
         expr = 2.0 * (A['ik'] * B['kj'])
         symbol, term = expr.scalingOperands()
-        assert isinstance(symbol, ImmediateScalar) and symbol.data == 2.0
+        assert symbol == 2.0
         assert term is not None
 
     def test_the_operands_follow_a_replaced_child(self, quantities):

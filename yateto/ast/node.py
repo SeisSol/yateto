@@ -4,7 +4,7 @@ from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
 from .. import aspp
-from ..type import ScalarMixin, ImmediateScalar
+from ..type import AddressingMode, Tensor
 from .. import ops
 import numpy as np
 
@@ -79,12 +79,17 @@ class Node(ABC):
 
   @staticmethod
   def _scalarOperand(value):
-    """Wrap a scalar into a rank-0 operand."""
+    """Turn a scale factor into an operand.
+
+    A number stays a number: Elementwise carries non-node operands as templates,
+    and a literal needs neither storage nor a name. A named scalar becomes a
+    rank-0 operand.
+    """
     if isinstance(value, Node):
       return value
-    if not isinstance(value, ScalarMixin):
-      value = ImmediateScalar(float(value))
-    return value['']
+    if isinstance(value, Tensor):
+      return value['']
+    return float(value)
 
   def isScaling(self):
     """Whether this node multiplies a term by a by-value rank-0 quantity."""
@@ -352,7 +357,20 @@ class Assign(Op):
     else:
       super().__init__(lTerm, rTerm)
 
+    self._checkLeftTerm(self._children[0])
     self._condition = condition
+
+  @staticmethod
+  def _checkLeftTerm(child):
+    lhs = child.viewed()
+    if not isinstance(lhs, IndexedTensor):
+      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(lhs))
+    if lhs.tensor.isPassedByValue():
+      # a by-value operand has no storage to write back into; a rank-0 tensor
+      # does, and is the way to compute a scalar result inside a kernel
+      raise ValueError(
+        f'Cannot assign to "{lhs.name()}": it is passed by value. '
+        f'Use a rank-0 tensor if you need to compute the value inside a kernel.')
 
   def leftTerm(self):
     return self._children[0]
@@ -364,8 +382,7 @@ class Assign(Op):
     return self._condition
 
   def setChildren(self, children):
-    if not isinstance(children[0].viewed(), IndexedTensor):
-      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0].viewed()))
+    self._checkLeftTerm(children[0])
     super().setChildren(children)
 
   def nonZeroFlops(self):
@@ -641,23 +658,24 @@ class Elementwise(NAryOp, Op):
 
   def nonZeroFlops(self):
     scaling = self.scalingOperands()
-    if scaling is not None:
-      symbol, _ = scaling
-      if isinstance(symbol, ImmediateScalar) and symbol.data in (-1.0, 1.0):
-        return 0
+    if scaling is not None and scaling[0] in (-1.0, 1.0):
+      return 0
     return self.eqspp().count_nonzero()
 
   def scalingOperands(self):
-    """``(symbol, term)`` if this is a multiplication by a by-value rank-0 operand.
+    """``(factor, term)`` if this is a multiplication by a scale factor.
 
-    Such a product is lowered into the scale factor of a single program action
-    rather than into a loop, which is what lets it fold into a GEMM's alpha.
+    The factor is either a number or a by-value rank-0 tensor. Such a product is
+    lowered into the scale factor of a single program action rather than into a
+    loop, which is what lets it fold into a GEMM's alpha.
     """
     if self.optype != ops.Mul() or len(self.terms) != 2:
       return None
     for i, j in ((0, 1), (1, 0)):
       candidate = self.terms[i]
-      if isinstance(candidate, IndexedTensor) and isinstance(candidate.tensor, ScalarMixin):
+      if isinstance(candidate, (int, float)):
+        return candidate, self.terms[j]
+      if isinstance(candidate, IndexedTensor) and candidate.tensor.isPassedByValue():
         return candidate.tensor, self.terms[j]
     return None
 
@@ -668,6 +686,7 @@ class Elementwise(NAryOp, Op):
     _, old = self.scalingOperands()
     self._children[self._children.index(old)] = term
     self.indices = None
+    self._deduceIndicesIfPossible()
     return self
 
   def fillTerms(self, terms):

@@ -173,72 +173,6 @@ class Symbol(object):
   def getDatatype(self, arch):
     return arch.datatype if self.datatype is None else self.datatype
 
-class ScalarMixin:
-  """A rank-0 quantity.
-
-  Provides the same interface a rank-0 Tensor does -- shape (), a rank-0 memory
-  layout, a rank-0 sparsity pattern -- so that a scalar can appear as an operand
-  wherever a rank-0 tensor can. The one thing that stays different is the
-  calling convention: a scalar is handed over by value, a tensor by pointer.
-  """
-
-  PASSED_BY_VALUE = True
-
-  # a scalar is one dense entry; the layout is shared, it carries no state
-  _RANK0_SPP = aspp.dense(())
-  _RANK0_LAYOUT = None
-
-  @classmethod
-  def isPassedByValue(cls):
-    return cls.PASSED_BY_VALUE
-
-  def shape(self):
-    return ()
-
-  def memoryLayout(self):
-    if ScalarMixin._RANK0_LAYOUT is None:
-      ScalarMixin._RANK0_LAYOUT = DenseMemoryLayout.fromSpp(ScalarMixin._RANK0_SPP)
-    return ScalarMixin._RANK0_LAYOUT
-
-  def spp(self, groupSpp=True):
-    return ScalarMixin._RANK0_SPP
-
-  def values(self):
-    return None
-
-  def values_as_ndarray(self, dtype=float64):
-    return None
-
-  def is_compute_constant(self):
-    return False
-
-  def __getitem__(self, indexNames):
-    from .ast.node import IndexedTensor
-    if len(indexNames) != 0:
-      raise ValueError(f'A scalar carries no indices, got "{indexNames}".')
-    return IndexedTensor(self, indexNames)
-
-class ImmediateScalar(Symbol, ScalarMixin):
-  def __init__(self, data, datatype=None):
-    super().__init__(datatype)
-    self.data = data
-
-  # an immediate is a literal in the generated code, never a kernel argument
-  temporary = True
-  addressing = AddressingMode.SCALAR
-
-  def name(self):
-    return str(self.data)
-
-  def is_compute_constant(self):
-    return True
-
-  def values_as_ndarray(self, dtype=float64):
-    return np.array(self.data, dtype=dtype)
-
-  def __str__(self):
-    return str(self.data)
-
 class AbstractType(Symbol):
   def __init__(self, name, datatype):
     super().__init__(datatype)
@@ -309,15 +243,6 @@ class IdentifiedType(AbstractType):
   def __hash__(self):
     return hash(self._name)
 
-class Scalar(IdentifiedType, ScalarMixin):
-  def __init__(self, name, namespace=None, datatype=None):
-    super().__init__(name, namespace=namespace, datatype=datatype)
-    self.temporary = False
-    self.addressing = AddressingMode.SCALAR
-
-  def __hash__(self):
-    return hash(self._name)
-
 class Tensor(IdentifiedType):
   def __init__(self,
                name,
@@ -375,11 +300,9 @@ class Tensor(IdentifiedType):
 
     self.setMemoryLayout(memoryLayoutClass, alignStride)
 
-  PASSED_BY_VALUE = False
-
-  @classmethod
-  def isPassedByValue(cls):
-    return cls.PASSED_BY_VALUE
+  def isPassedByValue(self):
+    """Whether this tensor is handed over by value rather than by pointer."""
+    return self.addressing == AddressingMode.SCALAR
 
   def __hash__(self):
     # only over what cannot change: the sparsity pattern and the memory layout
@@ -447,6 +370,18 @@ class Tensor(IdentifiedType):
 
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)
+
+class Scalar(Tensor):
+  """A rank-0 tensor that is handed over by value.
+
+  Everything else about it is a tensor: it has a shape, a memory layout, a
+  sparsity pattern, and it is indexed with the empty index. Only the calling
+  convention differs, and that is what AddressingMode.SCALAR says.
+  """
+
+  def __init__(self, name, namespace=None, datatype=None):
+    super().__init__(name, (), namespace=namespace, datatype=datatype,
+                     addressing=AddressingMode.SCALAR)
 
 class Collection(object):
   def update(self, collection):

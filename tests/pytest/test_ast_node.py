@@ -122,8 +122,8 @@ class TestEinsumBuilding:
 class TestScaling:
     @staticmethod
     def scaleOf(expr):
-        symbol, _ = expr.scalingOperands()
-        return symbol.data
+        factor, _ = expr.scalingOperands()
+        return factor
 
     def test_lhs_scalar(self, square_tensors):
         A = square_tensors["A"]
@@ -224,13 +224,11 @@ class TestAssign:
 
     def test_assign_lhs_must_be_indexed_tensor(self, square_tensors):
         A, B, C = square_tensors["A"], square_tensors["B"], square_tensors["C"]
-        # The invariant ("first child of Assign must be an IndexedTensor")
-        # is enforced inside ``Assign.setChildren`` - i.e. when a later
-        # transformer pass rewrites the tree - not in the constructor.
-        # The DSL's ``__le__`` calls the constructor directly, so this
-        # expression is *accepted* at build time; the check fires only
-        # when a transformer tries to re-install children.
-        bad = (A["ij"] * B["ij"]) <= C["ij"]
+        # enforced both when the tree is built and when a transformer
+        # re-installs children
+        with pytest.raises(ValueError, match="must be an IndexedTensor"):
+            (A["ij"] * B["ij"]) <= C["ij"]
+        bad = A["ij"] <= C["ij"]
         assert isinstance(bad, Assign)
         with pytest.raises(ValueError, match="must be an IndexedTensor"):
             bad.setChildren([A["ij"] * B["ij"], C["ij"]])

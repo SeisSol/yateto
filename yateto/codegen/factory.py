@@ -111,8 +111,28 @@ class KernelFactory(object):
       return generate()
     if guard.isNever():
       return 0
+    self._checkGuardIsReadable(guard)
     with self._cpp.If(f'({guard.ccode()})'):
       return generate()
+
+  def _checkGuardIsReadable(self, guard):
+    """A guard emitted here is read on the host, so it has to live there.
+
+    On a device target a tensor argument is a pointer per batch element, which
+    the host cannot dereference -- and reading it as a plain pointer would
+    silently be true. A scalar is passed by value and is fine; a per-element
+    decision belongs in the kernel and goes through the external generator,
+    which receives the guard as data.
+    """
+    if self._target != 'gpu':
+      return
+    for var in guard.variables():
+      if not var.isPassedByValue():
+        raise NotImplementedError(
+          f'"{var}" guards a statement on a device target, but it is passed by '
+          f'pointer and cannot be read on the host. Use a Scalar for a decision '
+          f'that is uniform over the batch, or an external generator for one '
+          f'that is not.')
 
 class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target, attrs=None):
@@ -399,8 +419,9 @@ class UnitTestFactory(KernelFactory):
 class ExportGenerator:
   INTERFACE_VERSION = 1
 
-  def __init__(self, arch):
+  def __init__(self, arch, attrs=None):
     self.arch = arch
+    self.attrs = attrs or {}
 
   def generate(self, cpp, cache):
     pass

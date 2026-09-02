@@ -14,6 +14,11 @@ class Description(object):
     assert isinstance(optype, CommutativeMonoidMixin), \
       f'{optype} cannot be used as a reduction: it has no neutral element.'
 
+    if self.term.memoryLayout.isSparse() or self.result.memoryLayout.isSparse():
+      raise NotImplementedError(
+        'Reductions over sparse operands are not implemented yet: they would '
+        'have to be emitted by unrolling.')
+
     rA = loopRanges(self.term, self.result.indices)
     rB = loopRanges(self.result, self.result.indices)
     assert testLoopRangesAContainedInB(rA, rB)

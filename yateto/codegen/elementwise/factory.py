@@ -1,4 +1,3 @@
-from ...memory import CSCMemoryLayout
 from ..common import *
 from .generic import Generic
 
@@ -14,7 +13,10 @@ class Description(object):
     self.termTemplate = termTemplate
     self.nodeTermIndices = nodeTermIndices
 
-    self.isSparse = [isinstance(term.memoryLayout, CSCMemoryLayout) for term in terms]
+    # a sparse operand is emitted by unrolling, not by an address expression:
+    # its addressString is empty by design
+    self.isSparse = [term.memoryLayout.isSparse()
+                     for term in list(terms) + [self.result]]
 
     rR = loopRanges(self.result, self.result.indices)
 

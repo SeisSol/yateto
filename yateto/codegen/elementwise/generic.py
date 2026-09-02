@@ -39,7 +39,9 @@ class Generic(object):
   def generate(self, cpp, routineCache):
     d = self._descr
 
-    assert not any(d.isSparse), \
-      'Elementwise operations on CSC operands are not implemented yet.'
+    if any(d.isSparse):
+      raise NotImplementedError(
+        'Element-wise operations on sparse operands are not implemented yet: '
+        'they would have to be emitted by unrolling.')
 
     return self._generateDenseDense(cpp)

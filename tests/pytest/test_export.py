@@ -22,8 +22,8 @@ N = 4
 class Collector(ExportGenerator):
     """Records the descriptors instead of emitting anything."""
 
-    def __init__(self, arch):
-        super().__init__(arch)
+    def __init__(self, arch, attrs=None):
+        super().__init__(arch, attrs)
         self.operations = []
         self.tensors = []
 
@@ -43,8 +43,8 @@ def export(statements, target='gpu'):
     arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
     collector = {}
 
-    def make(a):
-        collector['it'] = Collector(a)
+    def make(a, attrs=None):
+        collector['it'] = Collector(a, attrs)
         return collector['it']
 
     generator = Generator(arch)

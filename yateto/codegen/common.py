@@ -71,6 +71,16 @@ class IndexedTensorDescription(TensorDescription):
         addressing = var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
+def scaleFactor(datatype, alpha):
+  """Spell a scale factor in the result's datatype.
+
+  A number becomes a literal of that type; a named scalar is a kernel argument
+  and is emitted by name, since it already carries its own type.
+  """
+  if isinstance(alpha, (int, float)):
+    return datatype.literal(alpha)
+  return str(alpha)
+
 # The prefix forLoops() puts in front of its loop variables. Any generator that
 # emits its own loops into the same scope has to use it as well.
 INDEX_PREFIX = '_'

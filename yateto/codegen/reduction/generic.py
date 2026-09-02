@@ -33,7 +33,7 @@ class Generic(object):
 
           # `add` accumulates into the target:
           #   target = target (op) alpha*reduction
-          scaled = accumulator if d.alpha == 1.0 else f'{datatype.literal(d.alpha)} * {accumulator}'
+          scaled = accumulator if d.alpha == 1.0 else f'{scaleFactor(datatype, d.alpha)} * {accumulator}'
           if d.add:
             cpp(f'{target} = {d.optype.callstr(target, scaled)};')
           else:

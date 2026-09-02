@@ -14,8 +14,7 @@ class Generic(object):
     else:
       # NOTE: format the scale factor in the result's datatype, so an int32
       #       result is not silently multiplied by a double literal
-      literal = (datatype or term.datatype).literal(alpha)
-      prefix = f'{literal} * {term.name}'
+      prefix = f'{scaleFactor(datatype or term.datatype, alpha)} * {term.name}'
     return '{}[{}]'.format(prefix, term.memoryLayout.addressString(term.indices))
 
   def generate(self, cpp, routineCache):

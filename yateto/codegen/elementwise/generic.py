@@ -9,7 +9,7 @@ class Generic(object):
     flops = 1
     # NOTE: format the scale factor in the *result's* datatype, so that e.g.
     #       an int32 result does not get multiplied by a double literal
-    scale = '' if alpha == 1.0 else f'{datatype.literal(alpha)} * '
+    scale = '' if alpha == 1.0 else f'{scaleFactor(datatype, alpha)} * '
     assign = '+=' if add else '='
 
     if alpha != 1.0: flops += 1

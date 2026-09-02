@@ -10,7 +10,7 @@ from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux
-from ..type import Scalar, Datatype
+from ..type import Scalar, ScalarMixin, Datatype
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
 CONSTEXPR = 'constexpr'
@@ -446,7 +446,7 @@ class UnitTestGenerator(KernelGenerator):
   def deduce_single_scalar(self, scalar):
     if scalar is None:
       return 1.0
-    elif isinstance(scalar, Scalar):
+    elif isinstance(scalar, ScalarMixin):
       return self._tensorNameS(scalar)
     else:
       return scalar

@@ -5,7 +5,7 @@ from ..memory import DenseMemoryLayout
 from .. import aspp
 from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
 from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise, reduction
-from ..type import Datatype, AddressingMode, Scalar
+from ..type import Datatype, AddressingMode, Scalar, ScalarMixin
 from ..controlflow.graph import Guard
 from ..ops import Add
 
@@ -511,7 +511,7 @@ class ExportFactory(KernelFactory):
           'constant': True
         }
       }
-    elif isinstance(scalar, Scalar):
+    elif isinstance(scalar, ScalarMixin):
       tensor = {
         'name': scalar.name(),
         'addressing': '',

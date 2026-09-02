@@ -1,7 +1,7 @@
 import collections
 from .. import ops
 from ..ast.visitor import Visitor
-from yateto import Scalar
+from ..type import ScalarMixin
 from .graph import *
 from ..memory import DenseMemoryLayout
 from ..ast.node import Permute, Node, Broadcast
@@ -184,7 +184,7 @@ class ScalarsSet(object):
     S = set()
     for pp in cfg:
       if pp.action:
-        if isinstance(pp.action.scalar, Scalar):
+        if isinstance(pp.action.scalar, ScalarMixin):
           S = S | {pp.action.scalar}
     return S
 

@@ -2,7 +2,7 @@ from ..ast.node import Node, FusedGEMMs, LoopOverGEMM
 from ..ast.indices import Indices
 from collections import OrderedDict
 from typing import Dict, List
-from ..type import Scalar
+from ..type import ScalarMixin
 
 class Variable(object):
   def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None, is_temporary=False, datatype=None):
@@ -25,6 +25,10 @@ class Variable(object):
 
   def resultCompatible(self, result):
     return result.memoryLayout().isCompatible(self.eqspp())
+
+  def isPassedByValue(self):
+    """Whether this operand is handed over by value rather than by pointer."""
+    return self.tensor is not None and self.tensor.isPassedByValue()
 
   def isGlobal(self):
     return self.tensor is not None and not self.tensor.temporary
@@ -86,6 +90,9 @@ class VariableView(object):
   @property
   def datatype(self):
     return self.variable.datatype
+
+  def isPassedByValue(self):
+    return self.variable.isPassedByValue()
 
   def viewed(self):
     return self.variable
@@ -384,7 +391,8 @@ class Guard:
       return 'true'
     if self.isNever():
       return 'false'
-    printvar = lambda var: f'{var}' if isinstance(var, Scalar) \
+    # a by-value operand is named directly, a by-pointer one is dereferenced
+    printvar = lambda var: f'{var}' if var.isPassedByValue() \
                            else f'{var}[{var.memoryLayout().addressString(Indices())}]'
     formatlit = lambda var, polarity: printvar(var) if polarity else f'!{printvar(var)}'
     return ' && '.join(f'({formatlit(var, polarity)})'

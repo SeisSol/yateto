@@ -1,10 +1,11 @@
 import re
+from copy import deepcopy
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
 from .. import aspp
-from .. import ops
 from ..type import ScalarMixin, ImmediateScalar
+from .. import ops
 import numpy as np
 
 class Node(ABC):
@@ -250,6 +251,26 @@ class IndexedTensor(Node):
   def __str__(self):
     return f'{self.tensor.name()}[{str(self.indices)}]'
 
+class NAryOp(Node):
+  """Mixin for operations whose indices are the merge of their operands'."""
+
+  def deduceIndices(self):
+    indices = deepcopy(self[0].indices)
+    for i in range(1, len(self)):
+      indices = indices.mergeStrict(self[i].indices)
+    if not all(child.indices <= indices for child in self):
+      raise ValueError(f'{type(self).__name__}: Indices do not match: ',
+                       *[child.indices for child in self])
+    self.indices = indices
+    return self.indices
+
+  def _deduceIndicesIfPossible(self):
+    # the tree is built bottom-up in some places (the contraction search) and
+    # top-down in others; deduce eagerly when the children already know theirs.
+    # An empty node is legal while a sum is still being assembled.
+    if len(self) > 0 and all(child.indices is not None for child in self):
+      self.deduceIndices()
+
 class Op(Node):
   def __init__(self, *args):
     super().__init__()
@@ -406,40 +427,6 @@ def _productContractionLoGSparsityPattern(node, *spps):
   einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
   return aspp.einsum(einsumDescription, spps[0], spps[1])
 
-class Product(BinOp):
-  def __init__(self, lTerm, rTerm):
-    super().__init__(lTerm, rTerm)
-    K = lTerm.indices & rTerm.indices
-    assert lTerm.indices.subShape(K) == rTerm.indices.subShape(K)
-
-    self.indices = lTerm.indices.merged(rTerm.indices - K)
-
-  def nonZeroFlops(self):
-    return self.eqspp().count_nonzero()
-
-  def computeSparsityPattern(self, *spps):
-    if len(spps) == 0:
-      spps = [node.eqspp() for node in self]
-    assert len(spps) == 2
-    return _productContractionLoGSparsityPattern(self, *spps)
-
-class IndexSum(UnaryOp):
-  def __init__(self, term, sumIndex):
-    super().__init__(term)
-    self.indices = term.indices - set([sumIndex])
-    self._sumIndex = term.indices.extract(sumIndex)
-
-  def nonZeroFlops(self):
-    return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
-
-  def sumIndex(self):
-    return self._sumIndex
-
-  def computeSparsityPattern(self, *spps):
-    assert len(spps) <= 1
-    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
-    return spp.indexSum(self.term().indices, self.indices)
-
 class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):
     super().__init__(lTerm, rTerm)
@@ -488,7 +475,7 @@ class LoopOverGEMM(BinOp):
     return len(x) == 0
 
   def nonZeroFlops(self):
-    p = Product(self.leftTerm(), self.rightTerm())
+    p = Elementwise(ops.Mul(), self.leftTerm(), self.rightTerm())
     p.setEqspp( p.computeSparsityPattern() )
     return 2*p.nonZeroFlops() - self.eqspp().count_nonzero()
 
@@ -615,7 +602,7 @@ class IfThenElse(Op):
     indices = self.indices if self.indices is not None else '<not deduced>'
     return f'{type(self).__name__}[{indices}]'
 
-class Elementwise(Op):
+class Elementwise(NAryOp, Op):
   def __init__(self, optype: ops.Operation, *terms):
     optype.checkArity(len(terms))
 
@@ -636,6 +623,7 @@ class Elementwise(Op):
         self.termTemplate[i] = term
 
     self.optype = optype
+    self._deduceIndicesIfPossible()
 
     # The indices are deduced by DeduceIndices, which is the first point at
     # which the children's indices are guaranteed to be known.
@@ -738,11 +726,12 @@ class Reduction(UnaryOp):
     indices = self.indices if self.indices is not None else '<not deduced>'
     return f'{type(self).__name__}({self.optype})[{indices}]'
 
-class Accumulate(Op):
+class Accumulate(NAryOp, Op):
   def __init__(self, optype, *operands):
     super().__init__(*operands)
 
     self.optype = optype
+    self._deduceIndicesIfPossible()
 
   def computeSparsityPattern(self, *spps):
     if len(spps) == 0:

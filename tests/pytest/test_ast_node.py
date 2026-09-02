@@ -23,7 +23,7 @@ This module checks that:
   must be an ``IndexedTensor``, associative operators absorb their peers, ...)
   are enforced,
 * the per-node sparsity-pattern / flop-count helpers are correct,
-* the specialised nodes used by the middle-end (``Product``, ``IndexSum``,
+* the specialised nodes used by the middle-end (``Elementwise``, ``Reduction``,
   ``Contraction``, ``LoopOverGEMM``, ``FusedGEMMs``, ``SliceView``,
   ``Permute``, ``Broadcast``) behave as advertised.
 """
@@ -45,11 +45,11 @@ from yateto.ast.node import (
     Einsum,
     FusedGEMMs,
     IndexedTensor,
-    IndexSum,
+    Reduction,
     LoopOverGEMM,
     Op,
     Permute,
-    Product,
+    Elementwise,
     SliceView,
     UnaryOp,
 )
@@ -276,35 +276,35 @@ class TestSliceView:
 
 
 # ---------------------------------------------------------------------------
-# Product / IndexSum / Contraction - the "lowered" Einsum
+# Elementwise / Reduction / Contraction - the "lowered" Einsum
 # ---------------------------------------------------------------------------
 
 
 class TestLoweredNodes:
     """After ``FindContractions``, ``Einsum`` is decomposed into
-    ``Product`` + ``IndexSum`` (or ``Contraction`` for binary cases).
+    ``Elementwise`` + ``Reduction`` (or ``Contraction`` for binary cases).
     The tests below construct them directly to pin down their contracts.
     """
 
     def test_product_merges_indices(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
         b = IndexedTensor(Tensor("B", (4, 5)), "jk")
-        prod = Product(a, b)
-        # Product keeps every dimension, including the shared "j".
+        prod = Elementwise(ops.Mul(), a, b)
+        # Elementwise keeps every dimension, including the shared "j".
         assert set(prod.indices) == {"i", "j", "k"}
 
     def test_product_rejects_mismatching_shared_dim(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
         b = IndexedTensor(Tensor("B", (9, 5)), "jk")  # j=9 vs j=4
         with pytest.raises(AssertionError):
-            Product(a, b)
+            Elementwise(ops.Mul(), a, b)
 
     def test_indexsum_drops_one_index(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
-        s = IndexSum(a, "j")
+        s = Reduction(ops.Add(), a, "j")
         assert str(s.indices) == "i"
         # The stored sumIndex knows its size.
-        assert s.sumIndex().indexSize("j") == 4
+        assert s.reductionIndex().indexSize("j") == 4
 
     def test_contraction_matmul(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
@@ -445,17 +445,25 @@ class TestPermuteBroadcast:
 class TestNodeAbstractInvariants:
     def test_unaryop_term_is_first_child(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
-        s = IndexSum(a, "j")  # a UnaryOp
+        s = Reduction(ops.Add(), a, "j")  # a UnaryOp
         assert s.term() is s[0]
         assert isinstance(s, UnaryOp)
 
-    def test_binop_left_and_right_term(self):
+    def test_nary_op_indexes_its_operands(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
         b = IndexedTensor(Tensor("B", (4, 5)), "jk")
-        p = Product(a, b)  # BinOp
-        assert p.leftTerm() is p[0]
-        assert p.rightTerm() is p[1]
-        assert isinstance(p, BinOp)
+        p = Elementwise(ops.Mul(), a, b)
+        assert p[0] is a
+        assert p[1] is b
+        assert list(p) == [a, b]
+
+    def test_a_product_merges_the_operand_indices(self):
+        a = IndexedTensor(Tensor("A", (3, 4)), "ij")
+        b = IndexedTensor(Tensor("B", (4, 5)), "jk")
+        # built bottom-up by the contraction search, so the indices are known
+        # right away rather than only after DeduceIndices
+        p = Elementwise(ops.Mul(), a, b)
+        assert set(str(p.indices)) == {"i", "j", "k"}
 
     def test_op_is_iterable_over_children(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]

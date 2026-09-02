@@ -4,10 +4,10 @@ from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
 from .. import aspp
 from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
-from . import copyscaleadd, indexsum, log, product, fused_gemms, elementwise, reduction
+from . import copyscaleadd, log, product, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, ScalarMixin
 from ..controlflow.graph import Guard
-from ..ops import Add
+from ..ops import Add, Mul
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -117,8 +117,8 @@ class OptimizedKernelFactory(KernelFactory):
       alpha = scalar,
       add = add,
       result = IndexedTensorDescription.fromNode(result, node),
-      leftTerm = IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()),
-      rightTerm = IndexedTensorDescription.fromNode(arguments[1], node.rightTerm()),
+      leftTerm = IndexedTensorDescription.fromNode(arguments[0], node[0]),
+      rightTerm = IndexedTensorDescription.fromNode(arguments[1], node[1]),
       loopIndices = node.loopIndices(),
       transA = node.transA(),
       transB = node.transB(),
@@ -132,30 +132,25 @@ class OptimizedKernelFactory(KernelFactory):
     generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
 
-  def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    assert len(arguments) == 1
-    description = indexsum.Description(
-      alpha = scalar,
-      add = add,
-      result = IndexedTensorDescription.fromNode(result, node),
-      term = IndexedTensorDescription.fromNode(arguments[0], node.term())
-    )
-    generator = indexsum.generator(self._arch, description, self._target)
-    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    # a binary product has its own backend, which can also unroll a CSC operand
+    if node.optype == Mul() and len(node) == 2:
+      return self._product(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
+    return self._elementwise(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
 
-  def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def _product(self, node, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = product.Description(
       alpha = scalar,
       add = add,
       result = IndexedTensorDescription.fromNode(result, node),
-      leftTerm = IndexedTensorDescription.fromNode(arguments[0], node.leftTerm()),
-      rightTerm = IndexedTensorDescription.fromNode(arguments[1], node.rightTerm())
+      leftTerm = IndexedTensorDescription.fromNode(arguments[0], node[0]),
+      rightTerm = IndexedTensorDescription.fromNode(arguments[1], node[1])
     )
     generator = product.generator(self._arch, description, self._target)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
 
-  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def _elementwise(self, node, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
     description = elementwise.Description(
       alpha = scalar,
       add = add,
@@ -251,7 +246,7 @@ class UnitTestFactory(KernelFactory):
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
-  def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def _product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     # the loops below run over node.indices, so the address strings have to be
     # built from those very indices
     resultTerm = self._formatTerm(result, node.indices)
@@ -262,6 +257,9 @@ class UnitTestFactory(KernelFactory):
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    if node.optype == Mul() and len(node) == 2:
+      return self._product(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
+
     resultTerm = self._formatTerm(result, node.indices)
 
     argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
@@ -582,7 +580,6 @@ class ExportFactory(KernelFactory):
     assert len(arguments) == 1
     result = self._nodeTensor(result, node)
     argnodes = [self._nodeTensor(arguments[0], node.term())]
-    optype = getattr(node, 'optype', Add())
 
     description = {
       'type': 'reduction',
@@ -593,20 +590,15 @@ class ExportFactory(KernelFactory):
         'alpha': self._scalarTensor(scalar),
         'add': add,
       },
-      'optype': str(optype)
+      'optype': str(node.optype)
     }
     return self.generator.add_operation(description)
 
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
-    argnodes = [self._nodeTensor(arguments[0], node.leftTerm()), self._nodeTensor(arguments[1], node.rightTerm())]
+    argnodes = [self._nodeTensor(arguments[0], node[0]), self._nodeTensor(arguments[1], node[1])]
     return self.handleLinear(self._nodeTensor(result, node), argnodes, condition, add, scalar, node.transA(), node.transB())
 
-  def create_IndexSum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return self.create_Reduction(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
-
-  def create_Product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return self.create_Elementwise(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]

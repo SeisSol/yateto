@@ -3,7 +3,7 @@ from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
 from .. import ops
-from .node import IndexedTensor, Op, Assign, Einsum, Product, IndexSum, Contraction, SliceView, Elementwise
+from .node import IndexedTensor, Op, Assign, Einsum, Reduction, Contraction, SliceView, Elementwise
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -90,26 +90,16 @@ class DeduceIndices(Transformer):
     node.indices = deduced.sorted()
     return node
 
-  def _mergeChildIndices(self, node, what):
-    # different operands may carry different index sets and different
-    # permutations of them, but the index sizes have to agree
-    indices = deepcopy(node[0].indices)
-    for i in range(1, len(node)):
-      indices = indices.mergeStrict(node[i].indices)
-    if not all(child.indices <= indices for child in node):
-      raise ValueError(f'{what}: Indices do not match: ', *[child.indices for child in node])
-    return indices
-
   def visit_Elementwise(self, node, bound):
     for child in node:
       self.visit(child, bound)
-    node.indices = self._mergeChildIndices(node, 'Elementwise')
+    node.deduceIndices()
     return node
 
   def visit_Accumulate(self, node, bound):
     for child in node:
       self.visit(child, bound)
-    node.indices = self._mergeChildIndices(node, 'Accumulate')
+    node.deduceIndices()
     return node
 
   def visit_Reduction(self, node, bound):
@@ -161,15 +151,33 @@ class StrengthReduction(Transformer):
     return minTree
 
 class FindContractions(Transformer):
-  def visit_IndexSum(self, node):
-    sumIndices = set(node.sumIndex())
+  """Folds a sum of products into a single Contraction.
+
+  Only the (*, +) ring is folded: that is the one the GEMM backends implement.
+  A reduction over any other operation -- a boolean semiring, say -- stays a
+  Reduction over an Elementwise and is generated as loops, which keeps a
+  non-arithmetic ring from being handed to BLAS.
+  """
+
+  @staticmethod
+  def isSummation(node):
+    return isinstance(node, Reduction) and node.optype == ops.Add()
+
+  @staticmethod
+  def isProduct(node):
+    return isinstance(node, Elementwise) and node.optype == ops.Mul() and len(node) == 2
+
+  def visit_Reduction(self, node):
+    if not self.isSummation(node):
+      return self.generic_visit(node)
+
+    sumIndices = set(node.sumIndexName())
     child = node.term()
-    while isinstance(child, IndexSum):
-      sumIndices = sumIndices.union(child.sumIndex())
+    while self.isSummation(child):
+      sumIndices = sumIndices.union(child.sumIndexName())
       child = child.term()
-    if isinstance(child, Product):
-      newNode = Contraction(node.indices, self.visit(child.leftTerm()), self.visit(child.rightTerm()), sumIndices)
-      return newNode
+    if self.isProduct(child):
+      return Contraction(node.indices, self.visit(child[0]), self.visit(child[1]), sumIndices)
     return node
 
 class SelectIndexPermutations(Transformer):

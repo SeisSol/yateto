@@ -26,8 +26,8 @@ from yateto.ast.node import (
     Contraction,
     Einsum,
     IndexedTensor,
-    IndexSum,
-    Product,
+    Reduction,
+    Elementwise,
 )
 from yateto.ast.transformer import (
     ComputeMemoryLayout,
@@ -138,7 +138,7 @@ class TestEquivalentSparsityPattern:
 
 
 # ---------------------------------------------------------------------------
-# StrengthReduction - lowers Einsum to Product(...) / IndexSum(...)
+# StrengthReduction - lowers Einsum to Elementwise(ops.Mul(), ...) / Reduction(ops.Add(), ...)
 # ---------------------------------------------------------------------------
 
 
@@ -150,15 +150,15 @@ class TestStrengthReduction:
         kernel = EquivalentSparsityPattern().visit(kernel)
         kernel = StrengthReduction(BoundingBoxCostEstimator).visit(kernel)
 
-        # Einsum is gone; the rhs is now a Product-under-IndexSum tree.
+        # Einsum is gone; the rhs is now a Elementwise-under-Reduction tree.
         def has(cls, node):
             if isinstance(node, cls):
                 return True
             return any(has(cls, c) for c in node)
 
         assert not has(Einsum, kernel)
-        assert has(Product, kernel)
-        assert has(IndexSum, kernel)
+        assert has(Elementwise, kernel)
+        assert has(Reduction, kernel)
 
     def test_costEstimator_is_a_class_not_an_instance(self, deduced, square_tensors):
         # ``StrengthReduction`` calls ``self._costEstimator()`` internally
@@ -182,7 +182,7 @@ class TestStrengthReduction:
         kernel = deduced(kernel)
         kernel = EquivalentSparsityPattern().visit(kernel)
         kernel = StrengthReduction(BoundingBoxCostEstimator).visit(kernel)
-        # The result should be a binary tree of Products + IndexSums
+        # The result should be a binary tree of Elementwises + Reductions
         # (i.e. Einsum has been fully split into pairwise GEMMs).
         from yateto.ast.node import Einsum as _E
         def has_einsum(node):
@@ -193,7 +193,7 @@ class TestStrengthReduction:
 
 
 # ---------------------------------------------------------------------------
-# FindContractions - fuses Product+IndexSum into a single Contraction node
+# FindContractions - fuses Elementwise+Reduction into a single Contraction node
 # ---------------------------------------------------------------------------
 
 

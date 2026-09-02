@@ -1,5 +1,6 @@
 import sys
-from .node import IndexSum, Product
+from .. import ops
+from .node import Reduction, Elementwise
 
 def strengthReduction(terms, target_indices, cost_estimator, split = 0):
   n = len(terms)
@@ -14,7 +15,7 @@ def strengthReduction(terms, target_indices, cost_estimator, split = 0):
       intersection = summationIndices & terms[i].indices
       if len(intersection) > 0:
         index = next(iter(intersection))
-        addTerm = IndexSum(terms[i], index)
+        addTerm = Reduction(ops.Add(), terms[i], index)
         selection = set(range(n)) - set([i])
         terms = [terms[i] for i in selection] + [addTerm]
         summationIndices -= set([index])
@@ -28,7 +29,7 @@ def strengthReduction(terms, target_indices, cost_estimator, split = 0):
   minCost = sys.maxsize
   for i in range(n):
     for j in range(max(i+1,split),n):
-      mulTerm = Product(terms[i], terms[j])
+      mulTerm = Elementwise(ops.Mul(), terms[i], terms[j])
       prodCost = cost_estimator.estimate(mulTerm)
       if best == None or prodCost < minCost:
         selection = set(range(n)) - set([i,j])

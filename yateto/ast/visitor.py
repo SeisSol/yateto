@@ -173,10 +173,7 @@ class FindIndexPermutations(Visitor):
     permutationVariants[node] = variants
     return permutationVariants
 
-  def visit_Product(self, node):
-    return self.allPermutationsNoCostNAryOp(node)
-
-  def visit_IndexSum(self, node):
+  def visit_Reduction(self, node):
     permutationVariants = self.findVariants(node)
     tV = permutationVariants[node.term()]
     minCost = LoGCost()
@@ -190,9 +187,6 @@ class FindIndexPermutations(Visitor):
     iterator = itertools.permutations(node.indices)
     permutationVariants[node] = {''.join(Cs): self.Variant(minCost, [minTind]) for Cs in iterator}
     return permutationVariants
-
-  def visit_Reduction(self, node):
-    return self.visit_IndexSum(node)
 
   def visit_Contraction(self, node):
     permutationVariants = self.findVariants(node)

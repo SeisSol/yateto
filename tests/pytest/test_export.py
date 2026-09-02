@@ -166,6 +166,37 @@ class TestExportedGuards:
         assert len(versions) == 2, 'the two values of `flag` must be distinguishable'
 
 
+class TestExportedScalars:
+    """A derived scalar reaches the external generator as a named operand; the
+    prologue that computes it runs before the routine call."""
+
+    def test_a_named_scalar_is_exported_by_name(self, tensors):
+        t = tensors
+        from yateto.type import Scalar
+        collector = export([t['out']['ij'] <= Scalar('alpha') * t['A']['ij']])
+        names = {arg['name'] for op in collector.operations for arg in op['args']}
+        assert 'alpha' in names
+
+    def test_a_derived_scalar_is_exported_by_name(self, tensors):
+        t = tensors
+        from yateto.type import Scalar
+        alpha, beta = Scalar('alpha'), Scalar('beta')
+        collector = export([t['out']['ij'] <= (alpha * beta) * t['A']['ij']])
+        names = {arg['name'] for op in collector.operations for arg in op['args']}
+        assert any(name.startswith('_s') for name in names), names
+        # the expression itself stays on the host; the generator sees one value
+        assert 'alpha' not in names and 'beta' not in names
+
+    def test_a_numeric_factor_is_exported_with_its_value(self, tensors):
+        t = tensors
+        collector = export([t['out']['ij'] <= 2.0 * t['A']['ij']])
+        # the operand is referenced by name; the value sits in its descriptor
+        names = {arg['name'] for op in collector.operations for arg in op['args']}
+        assert any(name.startswith('_scalar') for name in names), names
+        values = {d['name']: d.get('values') for d in collector.tensors}
+        assert any(v == {(): 2.0} for v in values.values()), values
+
+
 class TestExportedTensors:
     def test_every_operand_is_registered_as_a_tensor(self, tensors):
         t = tensors

@@ -12,7 +12,8 @@ import numpy as np
 import pytest
 
 from yateto import Tensor, Scalar
-from yateto.type import Collection, IdentifiedType
+from yateto.memory import DenseMemoryLayout
+from yateto.type import AddressingMode, Collection, IdentifiedType
 
 
 # ---------------------------------------------------------------------------
@@ -199,25 +200,35 @@ class TestTensorSparsity:
 
 
 class TestTensorIdentity:
-    def test_hash_is_name_based(self):
-        # The hash is built from the tensor name, so two tensors with the
-        # same name can be put in a set even if they live in different
-        # scopes.  This is what the codegen relies on.
-        assert hash(Tensor("A", (2, 2))) == hash(Tensor("A", (4, 4)))
+    def test_hash_covers_only_what_cannot_change(self):
+        # The sparsity pattern and the memory layout are set after
+        # construction, so hashing them would lose a tensor already sitting in
+        # a set.
+        t = Tensor("A", (2, 2))
+        before = hash(t)
+        t.setMemoryLayout(DenseMemoryLayout, alignStride=True)
+        assert hash(t) == before
+
+    def test_equal_tensors_hash_alike(self):
+        assert hash(Tensor("A", (2, 2))) == hash(Tensor("A", (2, 2)))
 
     def test_equality_by_name(self):
         t1 = Tensor("A", (2, 2))
         t2 = Tensor("A", (2, 2))
         assert t1 == t2
 
-    def test_equality_across_shapes_asserts(self):
-        # Yateto's ``__eq__`` asserts same shape/layout when names match -
-        # i.e. two tensors that share a name but differ structurally are
-        # detected as a bug in the user's code, not silently un-equal.
-        t1 = Tensor("A", (2, 2))
-        t2 = Tensor("A", (3, 3))
-        with pytest.raises(AssertionError):
-            t1 == t2
+    def test_shape_is_part_of_the_identity(self):
+        assert Tensor("A", (2, 2)) != Tensor("A", (3, 3))
+
+    def test_addressing_is_part_of_the_identity(self):
+        direct = Tensor("A", (2, 2), addressing=AddressingMode.DIRECT)
+        indirect = Tensor("A", (2, 2), addressing=AddressingMode.INDIRECT)
+        assert direct != indirect
+
+    def test_comparison_against_a_non_tensor(self):
+        # returning NotImplemented lets Python fall back rather than raise
+        assert (Tensor("A", (2, 2)) == None) is False
+        assert (Tensor("A", (2, 2)) == 3) is False
 
     def test_inequality_by_name(self):
         assert (Tensor("A", (2, 2)) == Tensor("B", (2, 2))) is False

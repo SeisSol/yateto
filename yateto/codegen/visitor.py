@@ -3,6 +3,7 @@ import operator
 from functools import reduce
 from io import StringIO
 from ..memory import DenseMemoryLayout
+from .. import aspp
 from ..controlflow.visitor import ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Variable
@@ -162,6 +163,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         tensors[base_name] = tensors[base_name] | {group}
       else:
         tensors[base_name] = {group}
+
 
   def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target):
     scalarsP = ScalarsSet().visit(cfg)

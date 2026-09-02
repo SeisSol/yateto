@@ -382,7 +382,10 @@ class Tensor(IdentifiedType):
     return cls.PASSED_BY_VALUE
 
   def __hash__(self):
-    return hash(self._name)
+    # only over what cannot change: the sparsity pattern and the memory layout
+    # are set after construction, and hashing them would lose a tensor that is
+    # already sitting in a set
+    return hash((self._name, self._shape, self.addressing))
 
   def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp, alignStride=alignStride)
@@ -436,10 +439,11 @@ class Tensor(IdentifiedType):
     return True if self._values else False
 
   def __eq__(self, other):
-    equal = self._name == other._name
-    if equal:
-      assert self._shape == other._shape and aspp.array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
-    return equal
+    if not isinstance(other, Tensor):
+      return NotImplemented
+    return self._name == other._name \
+       and self._shape == other._shape \
+       and self.addressing == other.addressing
 
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)

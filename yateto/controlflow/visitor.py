@@ -1,4 +1,5 @@
 import collections
+from .. import aspp
 from .. import ops
 from ..ast.visitor import Visitor
 from ..type import ScalarMixin, ImmediateScalar
@@ -21,6 +22,8 @@ class AST2ControlFlow(Visitor):
     # the guard a given version was produced under; reading it is only
     # meaningful where that guard held, so it is conjoined at every use
     self._definitionGuard = dict()
+    # name -> (tensor, datatype), so a name collision is reported where it happens
+    self._bound = dict()
 
   def cfg(self):
     return self._cfg + [ProgramPoint(None)]
@@ -151,7 +154,32 @@ class AST2ControlFlow(Visitor):
     return lVar
 
   def visit_IndexedTensor(self, node):
+    self._bindName(node.name(), node.tensor, node.datatype)
     return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype, is_temporary=node.tensor.temporary)
+
+  def _bindName(self, name, tensor, datatype):
+    """One name, one tensor: a name yields one declaration in the signature.
+
+    Checked here because this is where a name is first bound; further down the
+    variables are deduplicated by name and the second tensor is no longer
+    visible.
+    """
+    bound, boundType = self._bound.setdefault(name, (tensor, datatype))
+    if bound is tensor:
+      return
+    # the datatype comes from the node: by this point SetDatatype has resolved
+    # the ones that were left to the architecture
+    for what, mine, theirs in (('shape', tensor.shape(), bound.shape()),
+                               ('addressing', tensor.addressing, bound.addressing),
+                               ('datatype', datatype, boundType),
+                               ('memory layout', tensor.memoryLayout(), bound.memoryLayout())):
+      if mine != theirs:
+        raise ValueError(
+          f'"{name}" is used with two different {what}s ({mine} vs. {theirs}); '
+          f'one name yields one declaration.')
+    if not aspp.array_equal(tensor.spp(), bound.spp()):
+      raise ValueError(f'"{name}" is used with two different sparsity patterns; '
+                       f'one name yields one declaration.')
 
   def visit_IfThenElse(self, node):
     raise NotImplementedError(

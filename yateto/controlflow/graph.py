@@ -52,9 +52,12 @@ class Variable(object):
     return str(self)
 
   def __eq__(self, other):
-    isEq = self.name == other.viewed().name # and self._memoryLayout == other._memoryLayout
-    assert not isEq or (self.writable == other.viewed().writable and self._memoryLayout == other.viewed()._memoryLayout)
-    return isEq
+    # Two variables of the same name denote the same storage. Whether the
+    # tensors behind that name agree is a property of the kernel signature and
+    # is reported there, with the context needed for a useful message.
+    if not isinstance(other, (Variable, VariableView)):
+      return NotImplemented
+    return self.name == other.viewed().name
 
   def setWritable(self, name):
     if self.name == name:

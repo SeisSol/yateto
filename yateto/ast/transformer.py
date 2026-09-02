@@ -3,7 +3,7 @@ from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
 from .. import ops
-from .node import IndexedTensor, Op, Assign, Einsum, Product, IndexSum, Contraction, ScalarMultiplication, SliceView, Elementwise
+from .node import IndexedTensor, Op, Assign, Einsum, Product, IndexSum, Contraction, SliceView, Elementwise
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -224,11 +224,6 @@ class EquivalentSparsityPattern(Transformer):
 
   def visit_IndexedTensor(self, node):
     node.setEqspp(node.spp(self._groupSpp).copy())
-    return node
-
-  def visit_ScalarMultiplication(self, node):
-    self.generic_visit(node)
-    node.setEqspp(node.term().eqspp())
     return node
 
   def visit_Assign(self, node):

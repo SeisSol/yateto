@@ -2,7 +2,9 @@ import re
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
-from .. import aspp, ops
+from .. import aspp
+from .. import ops
+from ..type import ScalarMixin, ImmediateScalar
 import numpy as np
 
 class Node(ABC):
@@ -74,8 +76,24 @@ class Node(ABC):
     bcst = [1 if idx in indices else self.indices.indexSize(idx) for idx in self.indices]
     return reshaped.broadcast(bcst)
 
+  @staticmethod
+  def _scalarOperand(value):
+    """Wrap a scalar into a rank-0 operand."""
+    if isinstance(value, Node):
+      return value
+    if not isinstance(value, ScalarMixin):
+      value = ImmediateScalar(float(value))
+    return value['']
+
+  def isScaling(self):
+    """Whether this node multiplies a term by a by-value rank-0 quantity."""
+    return self.scalingOperands() is not None
+
+  def scalingOperands(self):
+    return None
+
   def _checkMultipleScalarMults(self):
-    if isinstance(self, ScalarMultiplication):
+    if self.isScaling():
       raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
 
   def _accumulate(self, other, optype):
@@ -107,14 +125,14 @@ class Node(ABC):
   def __mul__(self, other):
     if not isinstance(other, Node):
       self._checkMultipleScalarMults()
-      return ScalarMultiplication(other, self)
-    if isinstance(self, ScalarMultiplication):
+      return Elementwise(ops.Mul(), Node._scalarOperand(other), self)
+    if self.isScaling():
       other._checkMultipleScalarMults()
-      self.setTerm(self.term() * other)
+      self.setScaledTerm(self.scaledTerm() * other)
       return self
-    elif isinstance(other, ScalarMultiplication):
+    elif other.isScaling():
       self._checkMultipleScalarMults()
-      other.setTerm(self * other.term())
+      other.setScaledTerm(self * other.scaledTerm())
       return other
     return self._binOp(other, Einsum)
 
@@ -131,7 +149,7 @@ class Node(ABC):
 
   def __neg__(self):
     self._checkMultipleScalarMults()
-    return ScalarMultiplication(-1.0, self)
+    return Elementwise(ops.Mul(), Node._scalarOperand(-1.0), self)
 
   def __sub__(self, other):
     return self._accumulate(-other, ops.Add())
@@ -290,46 +308,6 @@ class Einsum(Op):
 class UnaryOp(Op):
   def term(self):
     return self._children[0]
-
-class ScalarMultiplication(UnaryOp):
-  def __init__(self, scalar, term):
-    super().__init__(term)
-    self._isConstant = isinstance(scalar, float) or isinstance(scalar, int)
-    self._scalar = float(scalar) if self._isConstant else scalar
-    self.setTerm(term)
-
-  def fixedIndexPermutation(self):
-    return self.term().fixedIndexPermutation()
-
-  def setTerm(self, term):
-    self._children[0] = term
-    if self.fixedIndexPermutation():
-      self.indices = self.term().indices
-    else:
-      self.indices = None
-
-  def name(self):
-    return str(self._scalar) if self._isConstant else self._scalar.name()
-
-  def is_constant(self):
-    return self._isConstant
-
-  def scalar(self):
-    return self._scalar
-
-  def computeSparsityPattern(self, *spps):
-    if len(spps) == 0:
-      return self.term().eqspp()
-    assert len(spps) == 1
-    return spps[0]
-
-  def nonZeroFlops(self):
-    if self._isConstant and self._scalar in [-1.0, 1.0]:
-      return 0
-    return self.eqspp().count_nonzero()
-
-  def __str__(self):
-    return '{}: {}'.format(super().__str__(), str(self._scalar))
 
 class BinOp(Op):
   def __init__(self, lTerm, rTerm):
@@ -658,13 +636,51 @@ class Elementwise(Op):
         self.termTemplate[i] = term
 
     self.optype = optype
-    self.terms = terms
 
     # The indices are deduced by DeduceIndices, which is the first point at
     # which the children's indices are guaranteed to be known.
 
+  @property
+  def terms(self):
+    """The operands in their original order, derived from the children.
+
+    Kept derived rather than stored: a transformer may replace a child (an
+    Einsum becomes a contraction tree, for instance), and a parallel list would
+    go stale the moment it does.
+    """
+    return tuple(self._children[index] if template is None else template
+                 for template, index in zip(self.termTemplate, self.nodeTermIndices))
+
   def nonZeroFlops(self):
+    scaling = self.scalingOperands()
+    if scaling is not None:
+      symbol, _ = scaling
+      if isinstance(symbol, ImmediateScalar) and symbol.data in (-1.0, 1.0):
+        return 0
     return self.eqspp().count_nonzero()
+
+  def scalingOperands(self):
+    """``(symbol, term)`` if this is a multiplication by a by-value rank-0 operand.
+
+    Such a product is lowered into the scale factor of a single program action
+    rather than into a loop, which is what lets it fold into a GEMM's alpha.
+    """
+    if self.optype != ops.Mul() or len(self.terms) != 2:
+      return None
+    for i, j in ((0, 1), (1, 0)):
+      candidate = self.terms[i]
+      if isinstance(candidate, IndexedTensor) and isinstance(candidate.tensor, ScalarMixin):
+        return candidate.tensor, self.terms[j]
+    return None
+
+  def scaledTerm(self):
+    return self.scalingOperands()[1]
+
+  def setScaledTerm(self, term):
+    _, old = self.scalingOperands()
+    self._children[self._children.index(old)] = term
+    self.indices = None
+    return self
 
   def fillTerms(self, terms):
     assert len(terms) == len(self)

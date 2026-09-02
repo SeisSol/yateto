@@ -238,8 +238,6 @@ class UnitTestFactory(KernelFactory):
 
     return self._conditional(condition, lambda: forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False))
 
-  def create_ScalarMultiplication(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return self.simple(result, arguments[0], condition, add, scalar, routineCache, gemm_cfg)
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.indices <= node.term().indices and node.term().indices <= node.indices

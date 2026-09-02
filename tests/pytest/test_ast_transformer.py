@@ -28,7 +28,6 @@ from yateto.ast.node import (
     IndexedTensor,
     IndexSum,
     Product,
-    ScalarMultiplication,
 )
 from yateto.ast.transformer import (
     ComputeMemoryLayout,

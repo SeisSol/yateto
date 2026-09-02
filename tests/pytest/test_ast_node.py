@@ -19,7 +19,7 @@ becomes
 This module checks that:
 
 * the DSL really produces the expected tree shape,
-* the tree's invariants (no nested ``ScalarMultiplication``, ``Assign`` lhs
+* the tree's invariants (no nested scaling, ``Assign`` lhs
   must be an ``IndexedTensor``, associative operators absorb their peers, ...)
   are enforced,
 * the per-node sparsity-pattern / flop-count helpers are correct,
@@ -34,8 +34,10 @@ import pytest
 from yateto import Tensor
 from yateto.ast.indices import Indices
 from yateto import ops
+from yateto.type import Scalar
 from yateto.ast.node import (
     Accumulate,
+    Elementwise,
     Assign,
     BinOp,
     Broadcast,
@@ -48,7 +50,6 @@ from yateto.ast.node import (
     Op,
     Permute,
     Product,
-    ScalarMultiplication,
     SliceView,
     UnaryOp,
 )
@@ -114,29 +115,42 @@ class TestEinsumBuilding:
 
 
 # ---------------------------------------------------------------------------
-# ScalarMultiplication - via ``*`` with a float/int
+# Scaling: Elementwise(Mul) with a rank-0 operand - via ``*`` with a float/int
 # ---------------------------------------------------------------------------
 
 
-class TestScalarMultiplication:
+class TestScaling:
+    @staticmethod
+    def scaleOf(expr):
+        symbol, _ = expr.scalingOperands()
+        return symbol.data
+
     def test_lhs_scalar(self, square_tensors):
         A = square_tensors["A"]
         expr = 2.0 * A["ij"]
-        assert isinstance(expr, ScalarMultiplication)
-        assert expr.is_constant()
-        assert expr.scalar() == 2.0
+        assert isinstance(expr, Elementwise) and expr.optype == ops.Mul()
+        assert expr.isScaling()
+        assert self.scaleOf(expr) == 2.0
 
     def test_rhs_scalar(self, square_tensors):
         A = square_tensors["A"]
         expr = A["ij"] * 2.0
-        assert isinstance(expr, ScalarMultiplication)
-        assert expr.scalar() == 2.0
+        assert expr.isScaling()
+        assert self.scaleOf(expr) == 2.0
 
     def test_negation(self, square_tensors):
         A = square_tensors["A"]
         expr = -A["ij"]
-        assert isinstance(expr, ScalarMultiplication)
-        assert expr.scalar() == -1.0
+        assert expr.isScaling()
+        assert self.scaleOf(expr) == -1.0
+
+    def test_a_named_scalar_also_scales(self, square_tensors):
+        A = square_tensors["A"]
+        expr = Scalar("alpha") * A["ij"]
+        assert expr.isScaling()
+        symbol, term = expr.scalingOperands()
+        assert isinstance(symbol, Scalar) and symbol.name() == "alpha"
+        assert term is not None
 
     def test_nested_scalar_mul_rejected(self, square_tensors):
         # ``k1 * (k2 * A)`` is disallowed by design - the user must
@@ -149,9 +163,9 @@ class TestScalarMultiplication:
     def test_scalar_times_einsum_preserves_einsum_child(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]
         expr = 2.0 * (A["ik"] * B["kj"])
-        assert isinstance(expr, ScalarMultiplication)
-        # The term inside is an Einsum, not a ScalarMultiplication.
-        assert isinstance(expr.term(), Einsum)
+        assert expr.isScaling()
+        # The scaled term is an Einsum, not another scaling.
+        assert isinstance(expr.scaledTerm(), Einsum)
 
     def test_nonZeroFlops_is_zero_for_pm_one(self, square_tensors, run_ast_pipeline):
         A = square_tensors["A"]
@@ -161,7 +175,7 @@ class TestScalarMultiplication:
         # Find the scalar-mul child (the rhs) and check its flops.
         rhs = ast.rightTerm()
         # ``-1.0`` is a free sign flip.
-        assert isinstance(rhs, ScalarMultiplication)
+        assert rhs.isScaling()
         assert rhs.nonZeroFlops() == 0
 
 
@@ -185,10 +199,10 @@ class TestAddBuilding:
     def test_sub_via_neg(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]
         expr = A["ij"] - B["ij"]
-        # ``a - b`` == ``a + (-b)``, i.e. an Accumulate with a ScalarMul(-1) child.
+        # ``a - b`` == ``a + (-b)``, i.e. an Accumulate whose second child scales by -1
         assert isinstance(expr, Accumulate) and expr.optype == ops.Add()
-        assert isinstance(expr[1], ScalarMultiplication)
-        assert expr[1].scalar() == -1.0
+        assert expr[1].isScaling()
+        assert TestScaling.scaleOf(expr[1]) == -1.0
 
     def test_add_with_non_node_raises(self, square_tensors):
         A = square_tensors["A"]

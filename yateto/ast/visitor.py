@@ -75,10 +75,11 @@ class FindTensors(Visitor):
     return tensors
 
   def visit_IndexedTensor(self, node):
-    if node.tensor is not None and node.tensor.temporary:
+    # by-value operands are scalars, not tensor arguments; they are collected
+    # separately by ScalarsSet
+    if node.tensor is None or node.tensor.temporary or node.tensor.isPassedByValue():
       return {}
-    else:
-      return {node.name(): node.tensor}
+    return {node.name(): node.tensor}
 
 class FindIndexPermutations(Visitor):
   class Variant(object):
@@ -154,15 +155,25 @@ class FindIndexPermutations(Visitor):
     permutationVariants[node] = variants
     return permutationVariants
 
-  def visit_ScalarMultiplication(self, node):
-    permutationVariants = self.visit(node.term())
-    permutationVariants[node] = {key: self.Variant(variant._cost, [key]) for key,variant in permutationVariants[node.term()].items()}
+  def visit_Elementwise(self, node):
+    scaling = node.scalingOperands()
+    if scaling is None:
+      return self.allPermutationsNoCostNAryOp(node)
+
+    # a scaling keeps the permutation of the term it scales; the rank-0 operand
+    # has only the empty one, but still needs an entry, since the choices are
+    # handed back to the children in order
+    term = scaling[1]
+    permutationVariants = self.findVariants(node)
+    variants = dict()
+    for key, variant in permutationVariants[term].items():
+      choices = [key if child is term else str(child.indices) for child in node]
+      variants[key] = self.Variant(variant._cost, choices)
+    assert variants, f'Could not find implementation for {node}.'
+    permutationVariants[node] = variants
     return permutationVariants
 
   def visit_Product(self, node):
-    return self.allPermutationsNoCostNAryOp(node)
-
-  def visit_Elementwise(self, node):
     return self.allPermutationsNoCostNAryOp(node)
 
   def visit_IndexSum(self, node):
@@ -318,12 +329,6 @@ class ComputeConstantExpression(Visitor):
     einsumDescription = '{}->{}'.format(einsumDescription, node.indices.tostring())
     return einsum(einsumDescription, *terms)
 
-  def visit_ScalarMultiplication(self, node):
-    assert node.is_constant() is not None, f'{self.__class__.__name__} may only be used when all involved scalars are constant.'
-    terms = self.generic_visit(node)
-    assert len(terms) == 1
-    return node.scalar() * terms[0]
-
   def visit_IndexedTensor(self, node):
     term = node.tensor.values_as_ndarray(self._dtype)
     assert term is not None, f'{self.__class__.__name__} may only be used when all involved tensors are constant.'
@@ -338,8 +343,18 @@ class ComputeConstantExpression(Visitor):
 
   def visit_Elementwise(self, node):
     terms = self.generic_visit(node)
-    permute = lambda indices, tensor: np.einsum(f'{indices.tostring()}->{node.indices.tostring()}', tensor)
-    aligned = [permute(child.indices, terms[i]) for i,child in enumerate(node)]
+    target = node.indices.tostring()
+
+    def align(indices, tensor):
+      # reorder the operand's own indices into the node's order, then give it a
+      # length-1 axis for every index it does not carry, so numpy broadcasts it
+      own = indices.tostring()
+      order = ''.join(idx for idx in target if idx in own)
+      tensor = np.einsum(f'{own}->{order}', tensor)
+      shape = tuple(tensor.shape[order.index(idx)] if idx in order else 1 for idx in target)
+      return tensor.reshape(shape)
+
+    aligned = [align(child.indices, terms[i]) for i,child in enumerate(node)]
     return node.optype.call(*node.fillTerms(aligned))
 
   def visit_Accumulate(self, node):

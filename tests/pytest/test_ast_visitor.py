@@ -15,7 +15,8 @@ import pytest
 
 from yateto import Tensor
 from yateto.ast.indices import Indices
-from yateto.ast.node import Add, Assign, Einsum, IndexedTensor, Product
+from yateto import ops
+from yateto.ast.node import Accumulate, Assign, Einsum, IndexedTensor, Product
 from yateto.ast.transformer import DeduceIndices
 from yateto.ast.visitor import (
     CachedVisitor,
@@ -71,7 +72,7 @@ class TestVisitorDispatch:
                 depth["cur"] -= 1
 
         DepthProbe().visit(A["ij"] + B["ij"])
-        # Add wraps two IndexedTensor leaves -> max depth 2.
+        # Accumulate wraps two IndexedTensor leaves -> max depth 2.
         assert depth["max"] == 2
 
     def test_cached_visitor_reuses_results(self, square_tensors):

@@ -1,4 +1,5 @@
 import collections
+from .. import ops
 from ..ast.visitor import Visitor
 from yateto import Scalar
 from .graph import *
@@ -75,10 +76,16 @@ class AST2ControlFlow(Visitor):
     ml = node.getMemoryLayout(var.memoryLayout())
     return VariableView(var, ml, node.eqspp())
 
-  def visit_Add(self, node):
+  def visit_Accumulate(self, node):
     variables = [self.visit(child) for child in node]
     assert len(variables) >= 1
 
+    assert node.optype == ops.Add(), \
+      f'{node} should have been folded into element-wise steps by FoldAccumulate.'
+
+    # A sum becomes a chain of accumulating stores rather than one n-ary
+    # operation: that is what lets a GEMM write into the result with beta = 1
+    # instead of into a temporary.
     variables.sort(key=lambda var: int(not var.writable) + int(not var.isGlobal()))
 
     tmp = self._nextTemporary(node)

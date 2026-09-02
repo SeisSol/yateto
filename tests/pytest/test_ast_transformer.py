@@ -19,8 +19,9 @@ import pytest
 from yateto import Tensor
 from yateto.ast.cost import BoundingBoxCostEstimator, ShapeCostEstimator
 from yateto.ast.indices import Indices
+from yateto import ops
 from yateto.ast.node import (
-    Add,
+    Accumulate,
     Assign,
     Contraction,
     Einsum,

@@ -57,6 +57,7 @@ class Kernel(object):
     return re.match(cls.VALID_NAME, name) is not None
 
   def prepareUntilUnitTest(self, arch):
+    self.ast = [FoldAccumulate().visit(ast) for ast in self.ast]
     self.ast = [DeduceIndices().visit(ast) for ast in self.ast]
     dtd = SetDatatype(arch)
     for ast in self.ast:

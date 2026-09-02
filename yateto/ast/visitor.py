@@ -5,6 +5,7 @@ import collections
 import itertools
 import re
 import os.path
+from .. import ops
 from .node import Op
 from .indices import LoGCost
 from .log import LoG
@@ -139,13 +140,17 @@ class FindIndexPermutations(Visitor):
     permutationVariants[node] = variants
     return permutationVariants
 
-  def visit_Add(self, node):
+  def visit_Accumulate(self, node):
+    if node.optype != ops.Add():
+      return self.allPermutationsNoCostNAryOp(node)
+    # a sum is lowered into a chain of accumulating stores, so the root and
+    # every operand may carry their own permutation
     permutationVariants = self.findVariants(node)
     iterator = itertools.permutations(node.indices)
     variants = dict()
     for Cs in iterator:
       variants.update( self.variantsFixedRootPermutation(node, ''.join(Cs), permutationVariants) )
-    assert variants, 'Could not find implementation for Add.'
+    assert variants, f'Could not find implementation for {node}.'
     permutationVariants[node] = variants
     return permutationVariants
 
@@ -158,9 +163,6 @@ class FindIndexPermutations(Visitor):
     return self.allPermutationsNoCostNAryOp(node)
 
   def visit_Elementwise(self, node):
-    return self.allPermutationsNoCostNAryOp(node)
-
-  def visit_Accumulate(self, node):
     return self.allPermutationsNoCostNAryOp(node)
 
   def visit_IndexSum(self, node):
@@ -315,11 +317,6 @@ class ComputeConstantExpression(Visitor):
     einsumDescription = ','.join(indices.tostring() for indices in childIndices)
     einsumDescription = '{}->{}'.format(einsumDescription, node.indices.tostring())
     return einsum(einsumDescription, *terms)
-
-  def visit_Add(self, node):
-    terms = self.generic_visit(node)
-    permute = lambda indices, tensor: tensor.transpose(tuple(indices.find(idx) for idx in node.indices))
-    return reduce(add, [permute(child.indices, terms[i]) for i,child in enumerate(node)])
 
   def visit_ScalarMultiplication(self, node):
     assert node.is_constant() is not None, f'{self.__class__.__name__} may only be used when all involved scalars are constant.'

@@ -2,7 +2,8 @@ import sys
 from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
-from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication, SliceView
+from .. import ops
+from .node import IndexedTensor, Op, Assign, Einsum, Product, IndexSum, Contraction, ScalarMultiplication, SliceView, Elementwise
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -15,6 +16,23 @@ class Transformer(Visitor):
     newChildren = [self.visit(child, **kwargs) for child in node]
     node.setChildren(newChildren)
     return node
+
+class FoldAccumulate(Transformer):
+  """Folds an n-ary accumulation into a chain of binary element-wise steps.
+
+  A sum is left alone: it is lowered into a chain of accumulating stores, which
+  is what lets a GEMM write into the result with beta = 1 rather than into a
+  temporary. Every other operation has no such lowering and becomes a fold.
+  """
+
+  def visit_Accumulate(self, node):
+    self.generic_visit(node)
+    if node.optype == ops.Add():
+      return node
+    folded = node[0]
+    for i in range(1, len(node)):
+      folded = Elementwise(node.optype, folded, node[i])
+    return folded
 
 class DeduceIndices(Transformer):
   def __init__(self, targetIndices: Union[str, Indices] = None):
@@ -70,32 +88,6 @@ class DeduceIndices(Transformer):
 
     deduced = g - contractions
     node.indices = deduced.sorted()
-    return node
-
-  def visit_Add(self, node, bound):
-    for child in node:
-      self.visit(child, bound)
-
-    # allow the following:
-    # * different addends may have different indices
-    # * different addends may have different permutations of said indices
-    # * but: different addends need to have the same index sizes
-    # Currently, the node[0] index order take precedence over later children
-
-    addIndices = deepcopy(node[0].indices)
-    for i in range(1, len(node)):
-      addIndices = addIndices.mergeStrict(node[i].indices)
-
-    ok = all(child.indices <= addIndices for child in node)
-    if not ok:
-      raise ValueError('Add: Indices do not match: ', *[child.indices for child in node])
-
-    node.indices = addIndices
-    return node
-
-  def visit_ScalarMultiplication(self, node, bound):
-    self.visit(node.term(), bound)
-    node.indices = deepcopy(node.term().indices)
     return node
 
   def _mergeChildIndices(self, node, what):
@@ -232,11 +224,6 @@ class EquivalentSparsityPattern(Transformer):
 
   def visit_IndexedTensor(self, node):
     node.setEqspp(node.spp(self._groupSpp).copy())
-    return node
-
-  def visit_Add(self, node):
-    self.generic_visit(node)
-    node.setEqspp( node.computeSparsityPattern() )
     return node
 
   def visit_ScalarMultiplication(self, node):

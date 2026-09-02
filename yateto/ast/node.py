@@ -78,6 +78,20 @@ class Node(ABC):
     if isinstance(self, ScalarMultiplication):
       raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
 
+  def _accumulate(self, other, optype):
+    """Flatten chains of the same operation into one n-ary Accumulate."""
+    matches = lambda node: isinstance(node, Accumulate) and node.optype == optype
+    if matches(self):
+      if matches(other):
+        self._children.extend(other._children)
+      else:
+        self._children.append(other)
+      return self
+    elif matches(other):
+      other._children.insert(0, self)
+      return other
+    return Accumulate(optype, self, other)
+
   def _binOp(self, other, opType):
     if isinstance(self, opType):
       if isinstance(other, opType):
@@ -110,7 +124,7 @@ class Node(ABC):
   def __add__(self, other):
     if not isinstance(other, Node):
       raise ValueError(f'Unsupported operation: Cannot add {self} to {other}.')
-    return self._binOp(other, Add)
+    return self._accumulate(other, ops.Add())
 
   def __radd__(self, other):
     return self.__add__(other)
@@ -120,7 +134,7 @@ class Node(ABC):
     return ScalarMultiplication(-1.0, self)
 
   def __sub__(self, other):
-    return self._binOp(-other, Add)
+    return self._accumulate(-other, ops.Add())
 
   def __le__(self, other):
     return Assign(self, other)
@@ -272,23 +286,6 @@ class Op(Node):
 class Einsum(Op):
   def nonZeroFlops(self):
     raise NotImplementedError
-
-class Add(Op):
-  def computeSparsityPattern(self, *spps):
-    if len(spps) == 0:
-      spps = [node.eqspp() for node in self]
-    permute_summand = lambda i: self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], False))
-    spp = permute_summand(0)
-    for i in range(1, len(spps)):
-      add_spp = permute_summand(i)
-      spp = aspp.add(spp, add_spp)
-    return spp
-
-  def nonZeroFlops(self):
-    nzFlops = 0
-    for child in self:
-      nzFlops += child.eqspp().count_nonzero()
-    return nzFlops - self.eqspp().count_nonzero()
 
 class UnaryOp(Op):
   def term(self):

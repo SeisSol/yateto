@@ -33,8 +33,9 @@ import pytest
 
 from yateto import Tensor
 from yateto.ast.indices import Indices
+from yateto import ops
 from yateto.ast.node import (
-    Add,
+    Accumulate,
     Assign,
     BinOp,
     Broadcast,
@@ -165,7 +166,7 @@ class TestScalarMultiplication:
 
 
 # ---------------------------------------------------------------------------
-# Add - via ``+``
+# Accumulate(Add) - via ``+``
 # ---------------------------------------------------------------------------
 
 
@@ -173,19 +174,19 @@ class TestAddBuilding:
     def test_add_creates_add_node(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]
         expr = A["ij"] + B["ij"]
-        assert isinstance(expr, Add)
+        assert isinstance(expr, Accumulate) and expr.optype == ops.Add()
 
     def test_add_flattens(self, square_tensors):
         A, B, C = square_tensors["A"], square_tensors["B"], square_tensors["C"]
         expr = A["ij"] + B["ij"] + C["ij"]
-        assert isinstance(expr, Add)
+        assert isinstance(expr, Accumulate) and expr.optype == ops.Add()
         assert len(expr) == 3
 
     def test_sub_via_neg(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]
         expr = A["ij"] - B["ij"]
-        # ``a - b`` == ``a + (-b)``, i.e. an Add with a ScalarMul(-1) child.
-        assert isinstance(expr, Add)
+        # ``a - b`` == ``a + (-b)``, i.e. an Accumulate with a ScalarMul(-1) child.
+        assert isinstance(expr, Accumulate) and expr.optype == ops.Add()
         assert isinstance(expr[1], ScalarMultiplication)
         assert expr[1].scalar() == -1.0
 

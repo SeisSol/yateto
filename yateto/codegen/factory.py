@@ -1,6 +1,6 @@
 import inspect
 import string
-from ..ast.indices import Indices, Range
+from ..ast.indices import BoundingBox, Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
@@ -537,7 +537,28 @@ class ExportFactory(KernelFactory):
     raise NotImplementedError(addressing)
 
   def _handleTensorDesc(self, tensorIndexed: IndexedTensorDescription):
+    """Describe one occurrence of a tensor.
+
+    Two coordinate systems meet here and they are not interchangeable. The
+    *storage* is what the tensor actually occupies; an address is formed in
+    it. The *logical* space is what the operand names, and for an operand
+    that names a slice the two differ by a shift. The equivalent sparsity
+    pattern lives in the logical space, so the bounding box derived from it
+    does too, and the shift is stated separately rather than folded in --
+    boxes are intersected across operands further down, which only means
+    anything if every operand contributes its box in the same space.
+    """
     ml = tensorIndexed.memoryLayout
+
+    # A view names a slice. Peel the views off to reach the storage, adding
+    # up the shift they impose on the way.
+    sliced = isinstance(ml, MemoryLayoutView)
+    offset = [0] * len(ml.shape())
+    while isinstance(ml, MemoryLayoutView):
+      offset = list(ml.relidx(offset))
+      ml = ml.base
+    ml = ml.storage()
+
     if isinstance(ml, DenseMemoryLayout):
       shape = list(ml.shape())
       shapeXt = [max(rng.stop - rng.start, shp) for rng, shp in zip(ml.bbox(), shape)]
@@ -559,12 +580,6 @@ class ExportFactory(KernelFactory):
         'type': 'spp',
         'entries': [list(entry) for entry in entries]
       }
-    elif isinstance(ml, MemoryLayoutView):
-      raise NotImplementedError(
-        f'{tensorIndexed.name} is named through a view, i.e. the operand is a '
-        f'slice of the tensor rather than the tensor. The shift from the '
-        f'view\'s index space to the storage is per reference, not per tensor, '
-        f'and nothing in the description carries it.')
     else:
       raise NotImplementedError(
         f'{tensorIndexed.name} has a {ml.__class__.__name__}, which the '
@@ -583,13 +598,44 @@ class ExportFactory(KernelFactory):
       'datatype': str(tensorIndexed.datatype),
       'storage': storage,
       'values': values,
+      # What the layout guarantees about the address of a column, in bytes.
+      # Zero is not "unaligned", it is "no promise" -- the receiving side
+      # decides what to do with a promise, and can make none out of nothing.
+      'alignment': self._alignment(tensorIndexed.memoryLayout),
       'flags': {
         'temporary': tensorIndexed.is_temporary,
         'constant': tensorIndexed.is_compute_constant
       }
     }
 
-    return self._handleTensor(tensor, spp, tensorIndexed.indices)
+    return self._handleTensor(tensor, spp, tensorIndexed.indices,
+                              self._logicalBox(tensorIndexed), offset, sliced)
+
+  def _alignment(self, memoryLayout):
+    """The alignment the layout promises for a column, in bytes.
+
+    A tensor without axes has no column and promises nothing; asking the
+    layout would read a bounding box that has no first dimension.
+    """
+    if len(memoryLayout.shape()) == 0:
+      return 0
+    return self._arch.alignment if memoryLayout.alignedStride() else 0
+
+  @staticmethod
+  def _logicalBox(tensorIndexed):
+    """The box this occurrence touches, in the space the operand names.
+
+    Derived from the equivalent sparsity pattern, which is what the whole
+    optimisation upstream of here computed: it is the range the operation
+    actually runs over, and it is regularly a good deal smaller than the
+    storage. A pattern with no non-zeros at all has no box; the pair is None
+    then, and whoever receives it falls back on the storage.
+    """
+    eqspp = tensorIndexed.eqspp
+    if eqspp is None or eqspp.ndim == 0 or eqspp.count_nonzero() == 0:
+      return None
+    box = BoundingBox.fromSpp(eqspp)
+    return [[rng.start for rng in box], [rng.stop for rng in box]]
 
   def _scalarTensor(self, scalar):
     if isinstance(scalar, (int, float)): # TODO numpy types
@@ -605,6 +651,8 @@ class ExportFactory(KernelFactory):
           'shape': (),
           'type': 'full'
         },
+        # a scalar is passed by value; there is no address to promise anything about
+        'alignment': 0,
         'values': {
           (): scalar
         },
@@ -623,6 +671,8 @@ class ExportFactory(KernelFactory):
           'shape': (),
           'type': 'full'
         },
+        # a scalar is passed by value; there is no address to promise anything about
+        'alignment': 0,
         'values': None,
         'flags': {
           'temporary': False,
@@ -634,17 +684,23 @@ class ExportFactory(KernelFactory):
 
     return self._handleTensor(tensor, (), ())
 
-  def _handleTensor(self, tensor, eqspp, indices):
+  def _handleTensor(self, tensor, eqspp, indices, bbox=None, offset=None,
+                    sliced=False):
     if tensor['name'] not in self.tensors:
       self.tensors[tensor['name']] = tensor
       self.generator.add_tensor(tensor)
     else:
       assert tensor == self.tensors[tensor['name']]
 
+    # `bbox`, `offset` and `sliced` belong to this occurrence, not to the
+    # tensor: two operands may name two different slices of the same thing.
     return {
       'name': tensor['name'],
       'spp': eqspp,
-      'indices': indices
+      'indices': indices,
+      'bbox': bbox,
+      'offset': list(offset) if offset is not None else None,
+      'sliced': sliced
     }
 
   def _handleCondition(self, condition):

@@ -1,4 +1,5 @@
 import collections
+import contextlib
 import operator
 from functools import reduce
 from io import StringIO
@@ -6,6 +7,7 @@ from ..memory import DenseMemoryLayout
 from .. import aspp
 from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
+from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
 from ..type import Tensor
 from .code import Cpp
@@ -504,6 +506,11 @@ class OptimizedKernelGenerator(KernelGenerator):
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
+  CASE_VAR = '_case'
+  #: How many condition assignments to enumerate at most. Every one costs a
+  #: full run of the kernel and of the reference, and a kernel guarded by
+  #: more conditions than this is rare enough to be covered by hand.
+  MAX_CASES = 16
   STREAM = '_stream'
   TMP_MEM = '_tmpMem'
   TMP_SIZE = 128 * 8
@@ -576,6 +583,32 @@ class UnitTestGenerator(KernelGenerator):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
 
+  @staticmethod
+  def _conditionVariables(cfg):
+    """The values the kernel's guards read, in a stable order.
+
+    A condition may be written inside the kernel, in which case its later
+    reads are a different value under the same variable; the variable is
+    what gets filled, so it is what is enumerated.
+    """
+    seen = {}
+    for pp in cfg:
+      action = pp.action
+      if action is None:
+        continue
+      guard = Guard.coerce(action.condition)
+      if guard.isAlways() or guard.isNever():
+        continue
+      for var in guard.variables():
+        seen.setdefault(str(var), var)
+    return [seen[name] for name in sorted(seen)]
+
+  @classmethod
+  def _conditionCases(cls, conditions):
+    if not conditions:
+      return 1
+    return min(2 ** len(conditions), cls.MAX_CASES)
+
   def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
     if target == 'gpu':
       if self._arch.backend in ['oneapi', 'acpp', 'hipsycl']:
@@ -612,100 +645,117 @@ class UnitTestGenerator(KernelGenerator):
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
+    conditions = self._conditionVariables(cfg)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
-      factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
+      # A guarded kernel is several kernels: which statements run depends on
+      # the conditions, and filling them from the usual pattern picks one
+      # assignment out of the 2^n there are. The whole body -- fill, run,
+      # reference, compare -- is repeated once per assignment instead, so a
+      # branch that is never taken in one case is taken in another. Every
+      # declaration is inside the loop, so each case starts from nothing.
+      cases = self._conditionCases(conditions)
+      # nullcontext, not an anonymous scope: a kernel with no guard gets the
+      # test it always got, down to the indentation
+      loop = cpp.For(f'int {self.CASE_VAR} = 0; {self.CASE_VAR} < {cases}; ++{self.CASE_VAR}') \
+             if cases > 1 else contextlib.nullcontext()
+      with loop:
+       factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
 
-      for i,scalar in enumerate(scalars):
-        cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
+       for i,scalar in enumerate(scalars):
+         cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
 
-      for var in variables:
-        factory.tensor(var.tensor, self._tensorName(var))
-        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
+       conditionBit = {str(var): i for i, var in enumerate(conditions)}
+       for var in variables:
+         bit = conditionBit.get(str(var))
+         factory.tensor(var.tensor, self._tensorName(var),
+                        caseVar=self.CASE_VAR if (bit is not None and cases > 1) else None,
+                        caseBit=bit)
+         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
 
-        shape = var.memoryLayout().shape()
-        cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
-            supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            dim=len(shape),
-            datatype=var.datatype.ctype(),
-            arch = self._arch,
-            utName=self._name(var),
-            viewName=self._viewName(var),
-            shape=', '.join([str(s) for s in shape]),
-            start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
-            stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
-          )
-        )
-        prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
-        cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
-            initNS = InitializerGenerator.INIT_NAMESPACE,
-            supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            groupTemplate=self._groupTemplate(var.tensor),
-            prefix=prefix,
-            baseName=var.tensor.baseName(),
-            name=self._tensorName(var),
-            viewName=self._viewName(var),
-            viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
-            createFun=InitializerGenerator.VIEW_FUN_NAME
-          )
-        )
-        cpp.emptyline()
+         shape = var.memoryLayout().shape()
+         cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
+             supportNS = SUPPORT_LIBRARY_NAMESPACE,
+             dim=len(shape),
+             datatype=var.datatype.ctype(),
+             arch = self._arch,
+             utName=self._name(var),
+             viewName=self._viewName(var),
+             shape=', '.join([str(s) for s in shape]),
+             start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
+             stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
+           )
+         )
+         prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
+         cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
+             initNS = InitializerGenerator.INIT_NAMESPACE,
+             supportNS = SUPPORT_LIBRARY_NAMESPACE,
+             groupTemplate=self._groupTemplate(var.tensor),
+             prefix=prefix,
+             baseName=var.tensor.baseName(),
+             name=self._tensorName(var),
+             viewName=self._viewName(var),
+             viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
+             createFun=InitializerGenerator.VIEW_FUN_NAME
+           )
+         )
+         cpp.emptyline()
 
-      kernelTensorName = self._tensorName
-      if device_test:
-        writable = dict()
-        for var in variables:
-          bn = var.tensor.baseNameWithNamespace()
-          writable[bn] = writable.get(bn, False) or var.writable
+       kernelTensorName = self._tensorName
+       if device_test:
+         writable = dict()
+         for var in variables:
+           bn = var.tensor.baseNameWithNamespace()
+           writable[bn] = writable.get(bn, False) or var.writable
 
-        kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
+         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
 
-        stream_new(self.STREAM)
-        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{Datatype.I8.ctype()}*', self.STREAM)
-        for var in variables:
-          data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
-          data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)
-        for var in variables:
-          data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
-          data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({var.datatype.ctype()}*)', self.STREAM)
-        stream_wait(self.STREAM)
-        cpp.emptyline()
+         stream_new(self.STREAM)
+         data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{Datatype.I8.ctype()}*', self.STREAM)
+         for var in variables:
+           data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
+           data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)
+         for var in variables:
+           data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+           data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({var.datatype.ctype()}*)', self.STREAM)
+         stream_wait(self.STREAM)
+         cpp.emptyline()
 
-      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
-      for var in scalars:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
-      for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
+       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+       for var in scalars:
+         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
+       for var in variables:
+         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
 
-      if device_test:
-        cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
-        cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
-        cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
+       if device_test:
+         cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
+         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
+         cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
 
-      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
-      cpp.emptyline()
+       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
+       cpp.emptyline()
 
-      if device_test:
-        stream_wait(self.STREAM)
-        for var in variables:
-          if var.writable:
-            data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
-        stream_wait(self.STREAM)
-        data_free(self.TMP_MEM, self.STREAM)
-        for var in variables:
-          data_free(self._devPtrTensorName(var), self.STREAM)
-          data_free(self._devTensorName(var), self.STREAM)
-        stream_wait(self.STREAM)
-        stream_delete(self.STREAM)
-        cpp.emptyline()
+       if device_test:
+         stream_wait(self.STREAM)
+         for var in variables:
+           if var.writable:
+             data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+         stream_wait(self.STREAM)
+         data_free(self.TMP_MEM, self.STREAM)
+         for var in variables:
+           data_free(self._devPtrTensorName(var), self.STREAM)
+           data_free(self._devTensorName(var), self.STREAM)
+         stream_wait(self.STREAM)
+         stream_delete(self.STREAM)
+         cpp.emptyline()
 
-      super().generate(cpp, cfg, factory, None, gemm_cfg)
+       super().generate(cpp, cfg, factory, None, gemm_cfg)
 
-      for var in variables:
-        if var.writable:
-          factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout(), datatype=var.datatype))
+       for var in variables:
+         if var.writable:
+           factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout(), datatype=var.datatype))
 
-      factory.freeTmp()
+       factory.freeTmp()
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'

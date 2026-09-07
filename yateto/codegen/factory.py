@@ -390,12 +390,24 @@ class UnitTestFactory(KernelFactory):
       self._cpp('if (refNorm == 0.0) { refNorm = 1.0; }')
       self._cpp(self._testFramework.assertLessThan('sqrt(error/refNorm)', epsMult*self._arch.epsilon))
 
-  def tensor(self, node, resultName, maxValue = 512, scale = 1 / 512):
+  def tensor(self, node, resultName, maxValue = 512, scale = 1 / 512,
+             caseVar = None, caseBit = None):
     ml = node.memoryLayout()
     size = ml.requiredReals()
 
     datatype = node.getDatatype(self._arch)
     span = self._valueSpan(datatype, maxValue)
+
+    if caseVar is not None:
+      # A condition the kernel is guarded by. Its value is what distinguishes
+      # one run of the test from the next, so it comes from the case index
+      # rather than from the filling pattern -- which would pick one
+      # assignment and never leave it.
+      self.temporary(resultName, size, datatype)
+      with self._cpp.For(f'int i = 0; i < {size}; ++i'):
+        self._cpp(f'{resultName}[i] = (({caseVar} >> {caseBit}) & 1) != 0;')
+      self._rand += 1
+      return
 
     spp = node.spp()
     isDense = spp.count_nonzero() == size

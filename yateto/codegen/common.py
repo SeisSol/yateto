@@ -120,9 +120,14 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX
   return flops
 
 def loopRanges(term: IndexedTensorDescription, loopIndices):
-  overlap = set(loopIndices) & set(term.indices)
+  # NOTE: the term's own index order decides the insertion order here, and that
+  #       order reaches the generated code as the nesting of the unrolled loops
+  #       (Generic._generateUnroll). Iterating an intersection of two sets would
+  #       hand back an order that PYTHONHASHSEED varies between runs.
+  wanted = set(loopIndices)
   bbox = BoundingBox.fromSpp(term.eqspp)
-  return {index: bbox[term.indices.find(index)] for index in overlap}
+  return {index: bbox[position] for position, index in enumerate(term.indices)
+          if index in wanted}
 
 def testLoopRangesEqual(A, B):
   overlap = A.keys() & B.keys()

@@ -167,8 +167,6 @@ class Generic(object):
     In = set(B) & set(C)
     Ik = set(A) & set(B)
 
-    toBeUnrolled = d.loopRanges.keys()
-
     unrollNeeded = set()
     if d.leftTerm.memoryLayout.isSparse():
       unrollNeeded |= set(d.leftTerm.indices)
@@ -177,6 +175,10 @@ class Generic(object):
     if d.result.memoryLayout.isSparse():
       unrollNeeded |= set(d.result.indices)
 
-    toBeUnrolled &= unrollNeeded
+    # NOTE: the unrolled indices are nested loops in the emitted code, so their
+    #       order is part of the output. Filtering the loop ranges keeps that
+    #       order; intersecting a key view with a set hands back a set, which
+    #       enumerates in an order PYTHONHASHSEED varies between runs.
+    toBeUnrolled = [index for index in d.loopRanges if index in unrollNeeded]
 
-    return self._generateUnroll(cpp, routineCache, gemm_cfg, {}, list(toBeUnrolled))
+    return self._generateUnroll(cpp, routineCache, gemm_cfg, {}, toBeUnrolled)

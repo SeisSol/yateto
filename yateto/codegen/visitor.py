@@ -191,7 +191,9 @@ class OptimizedKernelGenerator(KernelGenerator):
         tensors[base_name] = {group}
 
   def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target, attrs=None):
-    scalarsP = ScalarsSet().visit(cfg)
+    # NOTE: sorted, because these become the kernel's scalar members and a set
+    #       enumerates in an order PYTHONHASHSEED varies between runs.
+    scalarsP = sorted(ScalarsSet().visit(cfg), key=str)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     writable = dict()

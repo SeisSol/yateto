@@ -449,7 +449,16 @@ class UnitTestFactory(KernelFactory):
     return value
 
 class ExportGenerator:
-  INTERFACE_VERSION = 1
+  #: What this yateto sends, raised whenever a field is added that an
+  #: exporter ignoring it would get *wrong* rather than merely miss.
+  #:
+  #: 2: an occurrence states the bounding box it touches, the shift a slicing
+  #:    operand imposes and whether it is a slice at all, and a tensor states
+  #:    the alignment its layout promises. An exporter that ignores the box
+  #:    runs every operation over the whole storage; for an assignment that
+  #:    writes over entries the operation was never meant to touch. Sparse
+  #:    layouts are also described now, by their entries, rather than refused.
+  INTERFACE_VERSION = 2
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -493,7 +502,26 @@ class ExportFactory(KernelFactory):
         f'accept kernel attributes: it cannot be told whether a kernel takes '
         f'batch flags, and this yateto no longer generates them unconditionally. '
         f'Update the exporter.')
-    return generator(arch, attrs=(attrs.as_dict() if attrs is not None else {}))
+
+    exporter = generator(arch, attrs=(attrs.as_dict() if attrs is not None else {}))
+
+    # Asked of the exporter, not of whatever produced it: a factory function
+    # is a perfectly good way to register one, and it carries no version.
+    # An exporter that predates the field speaks the first one. A newer
+    # exporter is fine -- the fields it knows and this yateto does not send
+    # simply do not appear -- but an older one drops the ones it needs.
+    spoken = getattr(exporter, 'INTERFACE_VERSION', 1)
+    if spoken < ExportGenerator.INTERFACE_VERSION:
+      raise RuntimeError(
+        f'routine exporter {exporter.__class__.__name__} speaks interface '
+        f'version {spoken}, this yateto sends '
+        f'{ExportGenerator.INTERFACE_VERSION}. An exporter that ignores the '
+        f'per-occurrence bounding box runs every operation over the whole '
+        f'storage instead of the range it was given, which for an assignment '
+        f'writes over entries the operation was never meant to touch. Update '
+        f'the exporter rather than this check.')
+
+    return exporter
 
   def __init__(self, generator, cpp, arch, target, attrs=None):
     super().__init__(cpp, arch, target, attrs)

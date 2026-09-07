@@ -2,7 +2,7 @@ import inspect
 import string
 from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
-from ..memory import DenseMemoryLayout
+from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
 from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
 from . import copyscaleadd, log, product, fused_gemms, elementwise, reduction
@@ -537,17 +537,38 @@ class ExportFactory(KernelFactory):
     raise NotImplementedError(addressing)
 
   def _handleTensorDesc(self, tensorIndexed: IndexedTensorDescription):
-    if isinstance(tensorIndexed.memoryLayout, DenseMemoryLayout):
-      shape = list(tensorIndexed.memoryLayout.shape())
-      shapeXt = [max(rng.stop - rng.start, shp) for rng, shp in zip(tensorIndexed.memoryLayout.bbox(), shape)]
+    ml = tensorIndexed.memoryLayout
+    if isinstance(ml, DenseMemoryLayout):
+      shape = list(ml.shape())
+      shapeXt = [max(rng.stop - rng.start, shp) for rng, shp in zip(ml.bbox(), shape)]
       storage = {
         'shape': shapeXt,
         'type': 'bbox',
-        'start': [rng.start for rng in tensorIndexed.memoryLayout.bbox()],
-        'sizes': [rng.stop - rng.start for rng in tensorIndexed.memoryLayout.bbox()]
+        'start': [rng.start for rng in ml.bbox()],
+        'sizes': [rng.stop - rng.start for rng in ml.bbox()]
       }
+    elif isinstance(ml, (CSCMemoryLayout, PatternMemoryLayout)):
+      shape = list(ml.shape())
+      entries = ml.entries(*[Range(0, extent) for extent in shape])
+      # sorted by the address the layout gives them: the receiving side
+      # numbers the entries in the order they arrive, and that numbering has
+      # to be the storage order or every address disagrees
+      entries.sort(key=ml.address)
+      storage = {
+        'shape': shape,
+        'type': 'spp',
+        'entries': [list(entry) for entry in entries]
+      }
+    elif isinstance(ml, MemoryLayoutView):
+      raise NotImplementedError(
+        f'{tensorIndexed.name} is named through a view, i.e. the operand is a '
+        f'slice of the tensor rather than the tensor. The shift from the '
+        f'view\'s index space to the storage is per reference, not per tensor, '
+        f'and nothing in the description carries it.')
     else:
-      assert False
+      raise NotImplementedError(
+        f'{tensorIndexed.name} has a {ml.__class__.__name__}, which the '
+        f'description has no storage kind for.')
 
     # 0-d safe: rank-0 tensors (condition variables, scalar reduction results)
     # have a sparsity pattern too, but numpy refuses nonzero() on 0-d arrays

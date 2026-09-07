@@ -395,26 +395,58 @@ class UnitTestFactory(KernelFactory):
     size = ml.requiredReals()
 
     datatype = node.getDatatype(self._arch)
+    span = self._valueSpan(datatype, maxValue)
 
     spp = node.spp()
     isDense = spp.count_nonzero() == size
     if isDense:
-      self.temporary(resultName, size, node.getDatatype(self._arch))
+      self.temporary(resultName, size, datatype)
       with self._cpp.For(f'int i = 0; i < {size}; ++i'):
-        if datatype.isBool():
-          # alternate, so that both branches of a guard get exercised;
-          # `(i + r) % maxValue + 1` is never zero and would be all-true
-          self._cpp(f'{resultName}[i] = ((i + {self._rand}) % 2) == 0;')
-        else:
-          self._cpp(f'{resultName}[i] = static_cast<{datatype.ctype()}>((i + {self._rand}) % {maxValue} + 1);')
+        self._cpp(f'{resultName}[i] = {self._valueExpression(datatype, "i", span, scale)};')
     else:
       memory = [datatype.literal(0)]*size
       nz = spp.nonzero()
       for entry in zip(*nz):
         addr = ml.address(entry)
-        memory[addr] = datatype.literal(((addr + self._rand) % maxValue)+1.0)
+        memory[addr] = datatype.literal(self._value(datatype, addr, span, scale))
       self.temporary(resultName, size, datatype, memory=memory)
     self._rand += 1
+
+  def _valueSpan(self, datatype, maxValue):
+    """How many distinct values the filling pattern may cycle through.
+
+    A narrow integer cannot hold `maxValue`, and the pattern would wrap into
+    the negatives (or trap, depending on the conversion).
+    """
+    if datatype.isBool():
+      return 2
+    _, hi = datatype.limits()
+    return maxValue if hi is None else min(maxValue, int(hi))
+
+  def _value(self, datatype, offset, span, scale):
+    """The value the entry at `offset` is filled with, as a Python value."""
+    if datatype.isBool():
+      # alternate, so that both branches of a guard get exercised; a pattern
+      # that is never zero would be all-true
+      return ((offset + self._rand) % 2) == 0
+    value = float((offset + self._rand) % span) + 1.0
+    if datatype.isFloat():
+      # Keep the magnitude at or below one. A chain of contractions multiplies
+      # the operand magnitude once per factor, while the reference is compared
+      # against a fixed relative epsilon -- with values of order `span` the
+      # single-precision runs of the longer examples sit close to that bound.
+      return value * scale
+    return value
+
+  def _valueExpression(self, datatype, offsetVar, span, scale):
+    """The same value as `_value`, as C++ over a loop variable."""
+    ctype = datatype.ctype()
+    if datatype.isBool():
+      return f'(({offsetVar} + {self._rand}) % 2) == 0'
+    value = f'static_cast<{ctype}>(({offsetVar} + {self._rand}) % {span} + 1)'
+    if datatype.isFloat():
+      return f'{value} * static_cast<{ctype}>({scale})'
+    return value
 
 class ExportGenerator:
   INTERFACE_VERSION = 1

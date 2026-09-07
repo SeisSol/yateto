@@ -452,6 +452,10 @@ class ExportGenerator:
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
+  #: 5: an occurrence may state `offset_from`, a shift along an axis that is
+  #:    only known once the kernel runs. An exporter that ignores it reads
+  #:    the same slice every time.
+  #:
   #: 4: `add` is a mask over the destination's axes rather than a bool. An
   #:    exporter reading it as one gets the common case right by accident and
   #:    a rank-0 destination wrong: the empty mask accumulates, and `bool([])`
@@ -468,7 +472,7 @@ class ExportGenerator:
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 4
+  INTERFACE_VERSION = 5
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -742,7 +746,7 @@ class ExportFactory(KernelFactory):
     return self._handleTensor(tensor, [])
 
   def _handleTensor(self, tensor, indices, bbox=None, offset=None,
-                    sliced=False):
+                    sliced=False, offsetFrom=None):
     if tensor['name'] not in self.tensors:
       self.tensors[tensor['name']] = tensor
     else:
@@ -755,11 +759,18 @@ class ExportFactory(KernelFactory):
     #       narrows a loop, and a sparse layout states its entries once, on
     #       the tensor. For the `indices` example that list was 25 MiB of the
     #       25.7 MiB description.
+    #
+    # `offset_from` is the same shift, for an axis whose slice is only known
+    # once the kernel runs: an entry names a rank-0 integer tensor whose value
+    # is added to `offset` on that axis. That is how one of several matrices
+    # gets selected -- a family is a tensor with one axis more, and that axis
+    # is addressed rather than iterated, which is what an offset already is.
     return {
       'name': tensor['name'],
       'indices': [str(index) for index in indices],
       'bbox': bbox,
       'offset': self._ints(offset) if offset is not None else None,
+      'offset_from': offsetFrom,
       'sliced': sliced
     }
 

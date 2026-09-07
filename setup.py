@@ -4,7 +4,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 
-install_requires = ['numpy']
+install_requires = ['numpy>=1.20']
 
 extras = {'with_gpu_support': ['gemmforge==0.0.202']}
 
@@ -23,7 +23,7 @@ setup(
         "License :: OSI Approved :: BSD 3-Clause License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.5',
+    python_requires='>=3.10',
     install_requires=install_requires,
     extras_require=extras,
 )

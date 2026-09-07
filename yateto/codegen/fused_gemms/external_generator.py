@@ -12,7 +12,8 @@ class FusedGemms:
     self._arch = arch
     self._descr = descr
     self._attrs = attrs if attrs is not None else KernelAttributes()
-    self._batch_aux = BatchedOperationsAux(self._arch.typename)
+    self._datatype = self._descr[0].node.datatype
+    self._batch_aux = BatchedOperationsAux()
     self._cache = {}
     self._tmp_matrices = {}
 
@@ -40,7 +41,7 @@ class FusedGemms:
 
     context = Context(arch=self._arch.name,
                       backend=self._arch.backend,
-                      fp_type=FloatingPointType.str2enum(self._arch.typename))
+                      fp_type=FloatingPointType.str2enum(self._datatype.ctype()))
 
     chainforge_generator = ChainForgeGenerator(gemm_list, context)
     chainforge_generator.register()
@@ -124,7 +125,7 @@ class FusedGemms:
     offset_name_map = {}
     for name, matrix in self._cache.items():
       if matrix.direction == DataFlowDirection.SOURCE:
-        ptr_type = f'{self._arch.typename} {Addressing.addr2ptr_type(matrix.addressing)}'
+        ptr_type = f'{self._datatype.ctype()} {Addressing.addr2ptr_type(matrix.addressing)}'
         mat_name_map[name] = f'const_cast<{ptr_type}>({name})'
       else:
         mat_name_map[name] = name

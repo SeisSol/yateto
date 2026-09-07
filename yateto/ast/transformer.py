@@ -2,7 +2,8 @@ import sys
 from copy import deepcopy
 from typing import Union
 from .visitor import Visitor, PrettyPrinter, ComputeSparsityPattern, ComputeIndexSet
-from .node import IndexedTensor, Op, Assign, Einsum, Add, Product, IndexSum, Contraction, ScalarMultiplication, SliceView
+from .. import ops
+from .node import IndexedTensor, Op, Assign, Einsum, Reduction, Contraction, SliceView, Elementwise
 from .indices import Indices
 from .log import LoG
 from . import opt
@@ -15,6 +16,23 @@ class Transformer(Visitor):
     newChildren = [self.visit(child, **kwargs) for child in node]
     node.setChildren(newChildren)
     return node
+
+class FoldAccumulate(Transformer):
+  """Folds an n-ary accumulation into a chain of binary element-wise steps.
+
+  A sum is left alone: it is lowered into a chain of accumulating stores, which
+  is what lets a GEMM write into the result with beta = 1 rather than into a
+  temporary. Every other operation has no such lowering and becomes a fold.
+  """
+
+  def visit_Accumulate(self, node):
+    self.generic_visit(node)
+    if node.optype == ops.Add():
+      return node
+    folded = node[0]
+    for i in range(1, len(node)):
+      folded = Elementwise(node.optype, folded, node[i])
+    return folded
 
 class DeduceIndices(Transformer):
   def __init__(self, targetIndices: Union[str, Indices] = None):
@@ -34,16 +52,16 @@ class DeduceIndices(Transformer):
       elif isinstance(self._targetIndices, Indices):
         node.indices = self._targetIndices
       else:
-        raise ValueError('Target indices type ({}) is not supported.'.format(self._targetIndices.__class__.__name__))
+        raise ValueError(f'Target indices type ({self._targetIndices.__class__.__name__}) is not supported.')
       if not (node.indices <= oldIndices and oldIndices <= node.indices):
-        raise ValueError('Target index dimensions do not match: {} != {}'.format(node.indices.__repr__(), oldIndices.__repr__()))
+        raise ValueError(f'Target index dimensions do not match: {node.indices.__repr__()} != {oldIndices.__repr__()}')
 
     return node
 
   def visit_IndexedTensor(self, node, bound):
     if set(node.indices) > bound:
       free = node.indices - bound
-      raise ValueError('The indices {} are not bound in {}.'.format(free.__repr__(), node))
+      raise ValueError(f'The indices {free.__repr__()} are not bound in {node}.')
     return node
 
   def visit_Einsum(self, node, bound):
@@ -72,30 +90,24 @@ class DeduceIndices(Transformer):
     node.indices = deduced.sorted()
     return node
 
-  def visit_Add(self, node, bound):
+  def visit_Elementwise(self, node, bound):
     for child in node:
       self.visit(child, bound)
-
-    # allow the following:
-    # * different addends may have different indices
-    # * different addends may have different permutations of said indices
-    # * but: different addends need to have the same index sizes
-    # Currently, the node[0] index order take precedence over later children
-
-    addIndices = deepcopy(node[0].indices)
-    for i in range(1, len(node)):
-      addIndices = addIndices.mergeStrict(node[i].indices)
-
-    ok = all(child.indices <= addIndices for child in node)
-    if not ok:
-      raise ValueError('Add: Indices do not match: ', *[child.indices for child in node])
-
-    node.indices = addIndices
+    node.deduceIndices()
     return node
 
-  def visit_ScalarMultiplication(self, node, bound):
-    self.visit(node.term(), bound)
-    node.indices = deepcopy(node.term().indices)
+  def visit_Accumulate(self, node, bound):
+    for child in node:
+      self.visit(child, bound)
+    node.deduceIndices()
+    return node
+
+  def visit_Reduction(self, node, bound):
+    # `bound` holds plain index names; sumIndexName() is one of those, whereas
+    # reductionIndices() yields Indices objects
+    subbound = bound | set(node.sumIndexName())
+    self.visit(node.term(), subbound)
+    node.deduceIndices()
     return node
 
   def visit_SliceView(self, node, bound):
@@ -122,7 +134,7 @@ class DeduceIndices(Transformer):
 
     node.indices = lhs.indices
     if not (rhs.indices <= lhs.indices):
-      raise ValueError('Index dimensions do not match: {} != {}'.format(lhs.indices.__repr__(), rhs.indices.__repr__()))
+      raise ValueError(f'Index dimensions do not match: {lhs.indices.__repr__()} != {rhs.indices.__repr__()}')
 
     return node
 
@@ -139,15 +151,33 @@ class StrengthReduction(Transformer):
     return minTree
 
 class FindContractions(Transformer):
-  def visit_IndexSum(self, node):
-    sumIndices = set(node.sumIndex())
+  """Folds a sum of products into a single Contraction.
+
+  Only the (*, +) ring is folded: that is the one the GEMM backends implement.
+  A reduction over any other operation -- a boolean semiring, say -- stays a
+  Reduction over an Elementwise and is generated as loops, which keeps a
+  non-arithmetic ring from being handed to BLAS.
+  """
+
+  @staticmethod
+  def isSummation(node):
+    return isinstance(node, Reduction) and node.optype == ops.Add()
+
+  @staticmethod
+  def isProduct(node):
+    return isinstance(node, Elementwise) and node.optype == ops.Mul() and len(node) == 2
+
+  def visit_Reduction(self, node):
+    if not self.isSummation(node):
+      return self.generic_visit(node)
+
+    sumIndices = set(node.sumIndexName())
     child = node.term()
-    while isinstance(child, IndexSum):
-      sumIndices = sumIndices.union(child.sumIndex())
+    while self.isSummation(child):
+      sumIndices = sumIndices.union(child.sumIndexName())
       child = child.term()
-    if isinstance(child, Product):
-      newNode = Contraction(node.indices, self.visit(child.leftTerm()), self.visit(child.rightTerm()), sumIndices)
-      return newNode
+    if self.isProduct(child):
+      return Contraction(node.indices, self.visit(child[0]), self.visit(child[1]), sumIndices)
     return node
 
 class SelectIndexPermutations(Transformer):
@@ -204,17 +234,27 @@ class EquivalentSparsityPattern(Transformer):
     node.setEqspp(node.spp(self._groupSpp).copy())
     return node
 
-  def visit_Add(self, node):
+  def visit_Assign(self, node):
     self.generic_visit(node)
     node.setEqspp( node.computeSparsityPattern() )
     return node
 
-  def visit_ScalarMultiplication(self, node):
+  def visit_Elementwise(self, node):
     self.generic_visit(node)
-    node.setEqspp(node.term().eqspp())
+    node.setEqspp( node.computeSparsityPattern() )
     return node
 
-  def visit_Assign(self, node):
+  def visit_Reduction(self, node):
+    self.generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+
+  def visit_Accumulate(self, node):
+    self.generic_visit(node)
+    node.setEqspp( node.computeSparsityPattern() )
+    return node
+
+  def visit_IfThenElse(self, node):
     self.generic_visit(node)
     node.setEqspp( node.computeSparsityPattern() )
     return node
@@ -266,3 +306,64 @@ class ComputeMemoryLayout(Transformer):
 
   def visit_IndexedTensor(self, node):
     return node
+
+class SetDatatype(Transformer):
+  """Propagates datatypes bottom-up through the AST.
+
+  `arch` is only needed on the first pass (before the tensors' datatypes have
+  been resolved); afterwards the IndexedTensor nodes already carry their type.
+  """
+
+  def __init__(self, arch=None):
+    self.arch = arch
+
+  def _childTypes(self, node):
+    return [child.datatype for child in node]
+
+  def generic_visit(self, node):
+    super().generic_visit(node)
+    assert len(node) > 0, f'Cannot deduce a datatype for the childless node {node}.'
+    types = self._childTypes(node)
+    assert all(t == types[0] for t in types), \
+      f'Mismatching operand datatypes in {node}: {[str(t) for t in types]}'
+    node.datatype = types[0]
+    return node
+
+  def visit_IndexedTensor(self, node):
+    super().generic_visit(node)
+    if self.arch is not None:
+      node.datatype = node.tensor.getDatatype(self.arch)
+    return node
+
+  def visit_Elementwise(self, node):
+    super().generic_visit(node)
+    node.datatype = node.optype.datatypeResult(self._childTypes(node))
+    return node
+
+  def visit_Reduction(self, node):
+    super().generic_visit(node)
+    node.datatype = node.optype.datatypeResult(self._childTypes(node))
+    return node
+
+  def visit_Accumulate(self, node):
+    super().generic_visit(node)
+    node.datatype = node.optype.datatypeResult(self._childTypes(node))
+    return node
+
+  def visit_IfThenElse(self, node):
+    super().generic_visit(node)
+    assert node[0].datatype == node[1].datatype, \
+      f'Both branches of {node} must have the same datatype.'
+    node.datatype = node[0].datatype
+    return node
+
+  def visit_Assign(self, node):
+    super().generic_visit(node)
+    node.datatype = node[0].datatype
+    return node
+
+# backwards-compatible aliases (SetDatatype1/2 only differed in `arch`)
+SetDatatype1 = SetDatatype
+
+def SetDatatype2():
+  return SetDatatype()

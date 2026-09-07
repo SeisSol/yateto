@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 from yateto import *
-from yateto.ast.node import Add
+from yateto import ops
+from yateto.ast.node import Accumulate
 
 def add(g):
   M = 32
@@ -26,7 +27,7 @@ def add(g):
 
   # #103.1
   # allow one-element sum accumulations
-  _(B['ij'] <= Add() + A['ij'])
+  _(B['ij'] <= Accumulate(ops.Add()) + A['ij'])
 
   # #103.2
   # prevent overriding a global variable when action merging

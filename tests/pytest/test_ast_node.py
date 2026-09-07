@@ -19,11 +19,11 @@ becomes
 This module checks that:
 
 * the DSL really produces the expected tree shape,
-* the tree's invariants (no nested ``ScalarMultiplication``, ``Assign`` lhs
+* the tree's invariants (no nested scaling, ``Assign`` lhs
   must be an ``IndexedTensor``, associative operators absorb their peers, ...)
   are enforced,
 * the per-node sparsity-pattern / flop-count helpers are correct,
-* the specialised nodes used by the middle-end (``Product``, ``IndexSum``,
+* the specialised nodes used by the middle-end (``Elementwise``, ``Reduction``,
   ``Contraction``, ``LoopOverGEMM``, ``FusedGEMMs``, ``SliceView``,
   ``Permute``, ``Broadcast``) behave as advertised.
 """
@@ -33,8 +33,11 @@ import pytest
 
 from yateto import Tensor
 from yateto.ast.indices import Indices
+from yateto import ops
+from yateto.type import Scalar
 from yateto.ast.node import (
-    Add,
+    Accumulate,
+    Elementwise,
     Assign,
     BinOp,
     Broadcast,
@@ -42,12 +45,11 @@ from yateto.ast.node import (
     Einsum,
     FusedGEMMs,
     IndexedTensor,
-    IndexSum,
+    Reduction,
     LoopOverGEMM,
     Op,
     Permute,
-    Product,
-    ScalarMultiplication,
+    Elementwise,
     SliceView,
     UnaryOp,
 )
@@ -113,44 +115,57 @@ class TestEinsumBuilding:
 
 
 # ---------------------------------------------------------------------------
-# ScalarMultiplication - via ``*`` with a float/int
+# Scaling: Elementwise(Mul) with a rank-0 operand - via ``*`` with a float/int
 # ---------------------------------------------------------------------------
 
 
-class TestScalarMultiplication:
+class TestScaling:
+    @staticmethod
+    def scaleOf(expr):
+        factor, _ = expr.scalingOperands()
+        return factor
+
     def test_lhs_scalar(self, square_tensors):
         A = square_tensors["A"]
         expr = 2.0 * A["ij"]
-        assert isinstance(expr, ScalarMultiplication)
-        assert expr.is_constant()
-        assert expr.scalar() == 2.0
+        assert isinstance(expr, Elementwise) and expr.optype == ops.Mul()
+        assert expr.isScaling()
+        assert self.scaleOf(expr) == 2.0
 
     def test_rhs_scalar(self, square_tensors):
         A = square_tensors["A"]
         expr = A["ij"] * 2.0
-        assert isinstance(expr, ScalarMultiplication)
-        assert expr.scalar() == 2.0
+        assert expr.isScaling()
+        assert self.scaleOf(expr) == 2.0
 
     def test_negation(self, square_tensors):
         A = square_tensors["A"]
         expr = -A["ij"]
-        assert isinstance(expr, ScalarMultiplication)
-        assert expr.scalar() == -1.0
+        assert expr.isScaling()
+        assert self.scaleOf(expr) == -1.0
 
-    def test_nested_scalar_mul_rejected(self, square_tensors):
-        # ``k1 * (k2 * A)`` is disallowed by design - the user must
-        # pre-fold scalars into a single coefficient.  This keeps the AST
-        # unambiguous and the code generator simple.
+    def test_a_named_scalar_also_scales(self, square_tensors):
         A = square_tensors["A"]
-        with pytest.raises(ValueError, match="Multiple multiplications"):
-            2.0 * (3.0 * A["ij"])
+        expr = Scalar("alpha") * A["ij"]
+        assert expr.isScaling()
+        symbol, term = expr.scalingOperands()
+        assert isinstance(symbol, Scalar) and symbol.name() == "alpha"
+        assert term is not None
+
+    def test_nested_scalar_mul_collapses(self, square_tensors):
+        A = square_tensors["A"]
+        # two factors become one; the term underneath is untouched
+        expr = 2.0 * (3.0 * A["ij"])
+        assert self.scaleOf(expr) == 6.0
+        assert isinstance(expr.scaledTerm(), IndexedTensor)
+
 
     def test_scalar_times_einsum_preserves_einsum_child(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]
         expr = 2.0 * (A["ik"] * B["kj"])
-        assert isinstance(expr, ScalarMultiplication)
-        # The term inside is an Einsum, not a ScalarMultiplication.
-        assert isinstance(expr.term(), Einsum)
+        assert expr.isScaling()
+        # The scaled term is an Einsum, not another scaling.
+        assert isinstance(expr.scaledTerm(), Einsum)
 
     def test_nonZeroFlops_is_zero_for_pm_one(self, square_tensors, run_ast_pipeline):
         A = square_tensors["A"]
@@ -160,12 +175,12 @@ class TestScalarMultiplication:
         # Find the scalar-mul child (the rhs) and check its flops.
         rhs = ast.rightTerm()
         # ``-1.0`` is a free sign flip.
-        assert isinstance(rhs, ScalarMultiplication)
+        assert rhs.isScaling()
         assert rhs.nonZeroFlops() == 0
 
 
 # ---------------------------------------------------------------------------
-# Add - via ``+``
+# Accumulate(Add) - via ``+``
 # ---------------------------------------------------------------------------
 
 
@@ -173,21 +188,21 @@ class TestAddBuilding:
     def test_add_creates_add_node(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]
         expr = A["ij"] + B["ij"]
-        assert isinstance(expr, Add)
+        assert isinstance(expr, Accumulate) and expr.optype == ops.Add()
 
     def test_add_flattens(self, square_tensors):
         A, B, C = square_tensors["A"], square_tensors["B"], square_tensors["C"]
         expr = A["ij"] + B["ij"] + C["ij"]
-        assert isinstance(expr, Add)
+        assert isinstance(expr, Accumulate) and expr.optype == ops.Add()
         assert len(expr) == 3
 
     def test_sub_via_neg(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]
         expr = A["ij"] - B["ij"]
-        # ``a - b`` == ``a + (-b)``, i.e. an Add with a ScalarMul(-1) child.
-        assert isinstance(expr, Add)
-        assert isinstance(expr[1], ScalarMultiplication)
-        assert expr[1].scalar() == -1.0
+        # ``a - b`` == ``a + (-b)``, i.e. an Accumulate whose second child scales by -1
+        assert isinstance(expr, Accumulate) and expr.optype == ops.Add()
+        assert expr[1].isScaling()
+        assert TestScaling.scaleOf(expr[1]) == -1.0
 
     def test_add_with_non_node_raises(self, square_tensors):
         A = square_tensors["A"]
@@ -209,13 +224,11 @@ class TestAssign:
 
     def test_assign_lhs_must_be_indexed_tensor(self, square_tensors):
         A, B, C = square_tensors["A"], square_tensors["B"], square_tensors["C"]
-        # The invariant ("first child of Assign must be an IndexedTensor")
-        # is enforced inside ``Assign.setChildren`` - i.e. when a later
-        # transformer pass rewrites the tree - not in the constructor.
-        # The DSL's ``__le__`` calls the constructor directly, so this
-        # expression is *accepted* at build time; the check fires only
-        # when a transformer tries to re-install children.
-        bad = (A["ij"] * B["ij"]) <= C["ij"]
+        # enforced both when the tree is built and when a transformer
+        # re-installs children
+        with pytest.raises(ValueError, match="must be an IndexedTensor"):
+            (A["ij"] * B["ij"]) <= C["ij"]
+        bad = A["ij"] <= C["ij"]
         assert isinstance(bad, Assign)
         with pytest.raises(ValueError, match="must be an IndexedTensor"):
             bad.setChildren([A["ij"] * B["ij"], C["ij"]])
@@ -261,35 +274,35 @@ class TestSliceView:
 
 
 # ---------------------------------------------------------------------------
-# Product / IndexSum / Contraction - the "lowered" Einsum
+# Elementwise / Reduction / Contraction - the "lowered" Einsum
 # ---------------------------------------------------------------------------
 
 
 class TestLoweredNodes:
     """After ``FindContractions``, ``Einsum`` is decomposed into
-    ``Product`` + ``IndexSum`` (or ``Contraction`` for binary cases).
+    ``Elementwise`` + ``Reduction`` (or ``Contraction`` for binary cases).
     The tests below construct them directly to pin down their contracts.
     """
 
     def test_product_merges_indices(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
         b = IndexedTensor(Tensor("B", (4, 5)), "jk")
-        prod = Product(a, b)
-        # Product keeps every dimension, including the shared "j".
+        prod = Elementwise(ops.Mul(), a, b)
+        # Elementwise keeps every dimension, including the shared "j".
         assert set(prod.indices) == {"i", "j", "k"}
 
     def test_product_rejects_mismatching_shared_dim(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
         b = IndexedTensor(Tensor("B", (9, 5)), "jk")  # j=9 vs j=4
         with pytest.raises(AssertionError):
-            Product(a, b)
+            Elementwise(ops.Mul(), a, b)
 
     def test_indexsum_drops_one_index(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
-        s = IndexSum(a, "j")
+        s = Reduction(ops.Add(), a, "j")
         assert str(s.indices) == "i"
         # The stored sumIndex knows its size.
-        assert s.sumIndex().indexSize("j") == 4
+        assert s.reductionIndex().indexSize("j") == 4
 
     def test_contraction_matmul(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
@@ -430,17 +443,25 @@ class TestPermuteBroadcast:
 class TestNodeAbstractInvariants:
     def test_unaryop_term_is_first_child(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
-        s = IndexSum(a, "j")  # a UnaryOp
+        s = Reduction(ops.Add(), a, "j")  # a UnaryOp
         assert s.term() is s[0]
         assert isinstance(s, UnaryOp)
 
-    def test_binop_left_and_right_term(self):
+    def test_nary_op_indexes_its_operands(self):
         a = IndexedTensor(Tensor("A", (3, 4)), "ij")
         b = IndexedTensor(Tensor("B", (4, 5)), "jk")
-        p = Product(a, b)  # BinOp
-        assert p.leftTerm() is p[0]
-        assert p.rightTerm() is p[1]
-        assert isinstance(p, BinOp)
+        p = Elementwise(ops.Mul(), a, b)
+        assert p[0] is a
+        assert p[1] is b
+        assert list(p) == [a, b]
+
+    def test_a_product_merges_the_operand_indices(self):
+        a = IndexedTensor(Tensor("A", (3, 4)), "ij")
+        b = IndexedTensor(Tensor("B", (4, 5)), "jk")
+        # built bottom-up by the contraction search, so the indices are known
+        # right away rather than only after DeduceIndices
+        p = Elementwise(ops.Mul(), a, b)
+        assert set(str(p.indices)) == {"i", "j", "k"}
 
     def test_op_is_iterable_over_children(self, square_tensors):
         A, B = square_tensors["A"], square_tensors["B"]

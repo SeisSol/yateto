@@ -1,5 +1,6 @@
 from typing import List
 from abc import ABC, abstractmethod
+from .type import Datatype, TypeFlavor
 from enum import IntEnum
 import operator
 
@@ -71,31 +72,41 @@ class GemmTool(ABC):
     return True
 
   @abstractmethod
-  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     pass
 
   @abstractmethod
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     pass
 
-class BLASlike(GemmTool):
-  def __init__(self, operation_name: str, includes: List[str], c_code_init: str = ''):
-    super().__init__(operation_name, includes)
-    self.c_code_init = c_code_init
+  # shortcut for legacy reasons
+  @classmethod
+  def _equalType(cls, datatypeA, datatypeB, datatypeC, types=(Datatype.F32, Datatype.F64)):
+    return datatypeA == datatypeC and datatypeB == datatypeC and datatypeC in types
 
-  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+class BLASlike(GemmTool):
+  def __init__(self, prefix, includes: List[str], c_code_init: str = ''):
+    super().__init__(prefix, includes)
+    self.c_code_init = c_code_init
+    self.prefix = prefix
+
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     return Preference.MODERATE
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
-    return (sparseA.dense and sparseB.dense and target == 'cpu')
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
+    return (sparseA.dense and sparseB.dense and target == 'cpu' and self._equalType(datatypeA, datatypeB, datatypeC))
 
   def bool2Trans(self, trans):
     return 'Cblas{}Trans'.format('' if trans else 'No')
 
   def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
-           alignedA, alignedC, prefetchName):
+           alignedA, alignedC, datatypeA, datatypeB, datatypeC, prefetchName):
+    precision = {
+      Datatype.F32: 's',
+      Datatype.F64: 'd'
+    }[datatypeC]
     parameters = [
       'CblasColMajor',
       self.bool2Trans(transA),
@@ -104,39 +115,43 @@ class BLASlike(GemmTool):
       alpha, A, ldA,
       B, ldB,
       beta, C, ldC]
-    return '{}({});'.format(self.operation_name, ', '.join(str(p) for p in parameters))
+    return '{}_{}gemm({});'.format(self.prefix, precision, ', '.join(str(p) for p in parameters))
 
 class MKL(BLASlike):
   def __init__(self, arch):
     self._arch = arch
-    super().__init__('cblas_{}gemm'.format(arch.precision.lower()), ['mkl_cblas.h'])
+    super().__init__('cblas', ['mkl_cblas.h'])
 
   def archSupported(self):
     return self._arch.host_name.lower() in {'snb', 'hsw', 'skx', 'knl'} or self._arch.host_name.lower().startswith('avx')
 
 class OpenBLAS(BLASlike):
   def __init__(self, arch):
-    super().__init__('cblas_{}gemm'.format(arch.precision.lower()), ['cblas.h'])
+    super().__init__('cblas', ['cblas.h'])
 
 class BLIS(BLASlike):
   def __init__(self, arch):
-    super().__init__('bli_{}gemm'.format(arch.precision.lower()), ['blis.h'], '{0} _blis_alpha; {0} _blis_beta;'.format(arch.typename))
-    self._typename = arch.typename
+    super().__init__('bli', ['blis.h'])
 
   def bool2Trans(self, trans):
     return 'BLIS{}TRANSPOSE'.format('_' if trans else '_NO_')
 
   def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
-           alignedA, alignedC, prefetchName):
-    init = '_blis_alpha = {}; _blis_beta = {};'.format(alpha, beta)
+           alignedA, alignedC, datatypeA, datatypeB, datatypeC, prefetchName):
+    precision = {
+      Datatype.F32: 's',
+      Datatype.F64: 'd'
+    }[datatypeC]
+    initA = f'{datatypeC.ctype()} _blis_alpha = {alpha};'
+    initB = f'{datatypeC.ctype()} _blis_beta = {beta};'
     parameters = [
       self.bool2Trans(transA),
       self.bool2Trans(transB),
       M, N, K,
-      '&_blis_alpha', 'const_cast<{}*>({})'.format(self._typename, A), 1, ldA,
-      'const_cast<{}*>({})'.format(self._typename, B), 1, ldB,
+      '&_blis_alpha', f'const_cast<{datatypeA.ctype()}*>({A})', 1, ldA,
+      f'const_cast<{datatypeB.ctype()}*>({B})', 1, ldB,
       '&_blis_beta', C, 1, ldC]
-    return '{} {}({});'.format(init, self.operation_name, ', '.join(str(p) for p in parameters))
+    return '{{ {}{} {}_{}gemm({}); }}'.format(initA, initB, self.prefix, precision, ', '.join(str(p) for p in parameters))
 
 class Eigen(BLASlike):
   def __init__(self, arch):
@@ -144,8 +159,11 @@ class Eigen(BLASlike):
     self._arch = arch
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
-    return (sparseA.dense and sparseB.dense and target == 'cpu')
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
+    # Eigen::Map needs one scalar type across A, B and C
+    return (sparseA.dense and sparseB.dense and target == 'cpu'
+            and datatypeA == datatypeB == datatypeC
+            and datatypeC.isFloat())
 
   def bool2Trans(self, trans):
     return '.transpose()' if trans else ''
@@ -156,7 +174,7 @@ class Eigen(BLASlike):
   def align(self, ld, allow):
     aligned = 'Unaligned'
     if self._arch.checkAlignment(ld) and self._arch.alignment in [16,32,64,128] and allow:
-      aligned = 'Aligned{}'.format(self._arch.alignment)
+      aligned = f'Aligned{self._arch.alignment}'
     return aligned
 
   def matrixType(self, prec, dims, ld, aligned):
@@ -179,7 +197,7 @@ class Eigen(BLASlike):
     return f"Map<Matrix<{prec}, {m}, {n}>, Eigen::{align}, {stride}>"
 
   def call(self, transA, transB, M, N, K, alpha, A, ldA, B, ldB, beta, C, ldC,
-           alignedA, alignedC, prefetchName):
+           alignedA, alignedC, datatypeA, datatypeB, datatypeC, prefetchName):
     AxB = '{alpha}_mapA{transA}*_mapB{transB}'.format(
             alpha=str(alpha) + '*' if alpha != 1.0 else '',
             transA=self.bool2Trans(transA), transB=self.bool2Trans(transB),
@@ -196,15 +214,18 @@ class Eigen(BLASlike):
   using Eigen::Matrix;
   using Eigen::Map;
   using Eigen::Stride;
-  {matA} _mapA(const_cast<{prec}*>({A}));
-  {matB} _mapB(const_cast<{prec}*>({B}));
+  {matA} _mapA(const_cast<{precA}*>({A}));
+  {matB} _mapB(const_cast<{precB}*>({B}));
   {matC} _mapC({C});
   {code}
 }}
-    """.format(prec=self._arch.typename, M=M, N=N,
-               matA=self.matrixType(self._arch.typename, self.sizeTrans(M,K,transA), ldA, alignedA),
-               matB=self.matrixType(self._arch.typename, self.sizeTrans(K,N,transB), ldB, False),
-               matC=self.matrixType(self._arch.typename, (M, N), ldC, alignedC),
+    """.format(precA=datatypeA.ctype(TypeFlavor.EIGEN),
+               precB=datatypeB.ctype(TypeFlavor.EIGEN),
+               precC=datatypeC.ctype(TypeFlavor.EIGEN),
+               M=M, N=N,
+               matA=self.matrixType(datatypeA.ctype(TypeFlavor.EIGEN), self.sizeTrans(M,K,transA), ldA, alignedA),
+               matB=self.matrixType(datatypeB.ctype(TypeFlavor.EIGEN), self.sizeTrans(K,N,transB), ldB, False),
+               matC=self.matrixType(datatypeC.ctype(TypeFlavor.EIGEN), (M, N), ldC, alignedC),
                A=A, B=B, C=C, code=code)
     return code
 
@@ -234,7 +255,7 @@ class LIBXSMM_JIT(CodeGenerator):
     self._threshold = threshold
     self._arch = arch
 
-  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     if (m*n*k)**(1./3.) <= self._threshold:
       return Preference.HIGH
     return Preference.LOW
@@ -244,13 +265,13 @@ class LIBXSMM_JIT(CodeGenerator):
     return self._arch.host_name.lower() in supported_set
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     # Note:
     # Libxsmm falls back to blas for transA and more general alpha/beta
     # See e.g. here:
     # https://libxsmm.readthedocs.io/en/latest/libxsmm_qna/#what-is-a-small-matrix-multiplication
     # https://github.com/hfp/libxsmm/issues/396#issuecomment-674741063
-    return self.archSupported() and sparseA.dense and sparseB.dense and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
+    return self.archSupported() and sparseA.dense and sparseB.dense and (not transA) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu' and self._equalType(datatypeA, datatypeB, datatypeC) # TODO: no, there's more
 
 class LIBXSMM(CodeGenerator):
   def __init__(self, arch, cmd: str = 'libxsmm_gemm_generator', threshold: int = 128):
@@ -262,12 +283,10 @@ class LIBXSMM(CodeGenerator):
     return self._arch.host_name.lower() in supported_set
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
-    # LIBXSMM bakes the pattern into the generated kernel, so any granularity is
-    # fine; it just cannot take both operands sparse at once.
-    return self.archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu'
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
+    return self.archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu' and (self._equalType(datatypeA, datatypeB, datatypeC) or (self._equalType(datatypeA, datatypeB, datatypeC, (Datatype.I16,)) and not sparseA and not sparseB))
 
-  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     if sparseA:
       return Preference.LOW
     if sparseB:
@@ -286,7 +305,7 @@ class PSpaMM(CodeGenerator):
     return self._arch.host_name.lower() in supported_set
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     # NOTE: PSpaMM 0.3.0+ supports SIMD-aligned block sparsity in A (which is currently covered by sparseA + alignedA)
     # also, it supports for AVX512/10 and SVE unaligned matmuls in 0.3.1
     noAlign = self._arch.host_name.lower() in {'thunderx2t99', 'knl', 'skx', 'a64fx', 'bergamo', 'turin', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'avx10-128', 'avx10-256', 'avx10-512'}
@@ -297,9 +316,9 @@ class PSpaMM(CodeGenerator):
       return False
     alignment = (not sparseA.dense) and alignedA \
              or sparseA.dense and (noAlign or alignedA)
-    return self.archSupported() and (alignedC or noAlign) and alignment and (not transA and not transB) and target == 'cpu'
+    return self.archSupported() and (alignedC or noAlign) and alignment and (not transA and not transB) and target == 'cpu' and self._equalType(datatypeA, datatypeB, datatypeC, [Datatype.BF16, Datatype.F16, Datatype.F32, Datatype.F64])
 
-  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     if sparseB:
       return Preference.HIGH
     if sparseA and alignedA:
@@ -325,10 +344,10 @@ class GemmForge(CodeGenerator):
     return self._arch.backend.lower() in {'cuda', 'hip', 'oneapi', 'acpp', 'hipsycl'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
-    return self.archSupported() and not (sparseA or sparseB) and target == 'gpu'
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
+    return self.archSupported() and not (sparseA or sparseB) and target == 'gpu' and self._equalType(datatypeA, datatypeB, datatypeC)
 
-  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     if sparseA and sparseB:
       return Preference.LOWEST
     if not transA:
@@ -342,15 +361,15 @@ class tinytc(CodeGenerator):
     super().__init__('', [], '', arch)
     self._arch = arch
 
-  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC):
+  def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     return Preference.HIGHEST
 
   def archSupported(self):
       return self._arch.backend.lower() in {'oneapi'}
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                beta, alignedA, alignedC, target):
-    return self.archSupported() and not (sparseA or sparseB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'gpu'
+                beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
+    return self.archSupported() and not (sparseA or sparseB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'gpu' and self._equalType(datatypeA, datatypeB, datatypeC) # TODO: really?
 
 
 class GeneratorCollection(object):
@@ -359,13 +378,13 @@ class GeneratorCollection(object):
     self.selected = set()
 
   def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
-                  beta, alignedA, alignedC, target):
+                  beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     tools = dict()
     for gemmTool in reversed(self.gemmTools):
       if gemmTool.supported(m, n, k, sparseA, sparseB, transA, transB, alpha,
-                            beta, alignedA, alignedC, target):
+                            beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
         tools[gemmTool.preference(m, n, k, sparseA, sparseB, transA, transB, alpha, beta,
-                                  alignedA, alignedC)] = gemmTool
+                                  alignedA, alignedC, datatypeA, datatypeB, datatypeC, target)] = gemmTool
 
     select = None
     if tools:

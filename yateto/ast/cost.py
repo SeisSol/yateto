@@ -1,5 +1,6 @@
 from .indices import BoundingBox
-from .node import IndexSum
+from .. import ops
+from .node import Reduction
 from abc import ABC, abstractmethod
 
 
@@ -16,18 +17,29 @@ class CostEstimator(ABC):
   def generic_estimate(self, node):
     pass
 
+def isProduct(node):
+  """A binary multiplication -- the shape a contraction is built from."""
+  return node.optype == ops.Mul() and len(node) == 2
+
+def isSummation(node):
+  return node.optype == ops.Add()
+
 class ShapeCostEstimator(CostEstimator):
   def generic_estimate(self, node):
     return 0
 
-  def estimate_Product(self, node):
+  def estimate_Elementwise(self, node):
+    if not isProduct(node):
+      return self.generic_estimate(node)
     cost = 1
     for size in node.shape():
       cost *= size
     return cost
 
-  def estimate_IndexSum(self, node):
-    cost = node.sumIndex().shape()[0] - 1
+  def estimate_Reduction(self, node):
+    if not isSummation(node):
+      return self.generic_estimate(node)
+    cost = node.reductionIndex().shape()[0] - 1
     for size in node.indices.shape():
       cost *= size
     return cost
@@ -54,11 +66,13 @@ class BoundingBoxCostEstimator(CachedCostEstimator):
     self._cache[node] = node.boundingBox()
     return 0
 
-  def estimate_Product(self, node):
-    lbb = self._cache[node.leftTerm()]
-    rbb = self._cache[node.rightTerm()]
-    lind = node.leftTerm().indices
-    rind = node.rightTerm().indices
+  def estimate_Elementwise(self, node):
+    if not isProduct(node):
+      return self.generic_estimate(node)
+    lbb = self._cache[node[0]]
+    rbb = self._cache[node[1]]
+    lind = node[0].indices
+    rind = node[1].indices
     ranges = list()
     for index in node.indices:
       if index in lind and index in rind:
@@ -76,9 +90,11 @@ class BoundingBoxCostEstimator(CachedCostEstimator):
 
     return bb.size()
 
-  def estimate_IndexSum(self, node):
+  def estimate_Reduction(self, node):
+    if not isSummation(node):
+      return self.generic_estimate(node)
     tbb = self._cache[node.term()]
-    pos = node.term().indices.find(str(node.sumIndex()))
+    pos = node.term().indices.find(node.sumIndexName())
     bb = BoundingBox([r for i,r in enumerate(tbb) if i != pos])
     self._cache[node] = bb
     return tbb.size() - bb.size()
@@ -102,8 +118,8 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     return result
 
   def _get_terms(self, node):
-    left_indices = node.leftTerm().indices
-    right_indices = node.rightTerm().indices
+    left_indices = node[0].indices
+    right_indices = node[1].indices
     common_indices = left_indices & right_indices
 
     if len(left_indices) == 0 or left_indices[0] in common_indices:
@@ -111,12 +127,14 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
       # tensor product along the leading dimension.
       # In other words, LoG will try to swap terms
       # in the future
-      return node.rightTerm(), node.leftTerm()
+      return node[1], node[0]
     else:
-      return node.leftTerm(), node.rightTerm()
+      return node[0], node[1]
 
-  def estimate_Product(self, node):
-    cost = super().estimate_Product(node)
+  def estimate_Elementwise(self, node):
+    if not isProduct(node):
+      return super().estimate_Elementwise(node)
+    cost = super().estimate_Elementwise(node)
     left_term, right_term = self._get_terms(node)
 
     # NOTE: the case rank-0 tensor product rank-0 tensor is currently ill-supported here,
@@ -135,21 +153,23 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
       extra_cost += rbb.size()
 
     if node.indices[self._lead_dim] != left_term.indices[self._lead_dim]:
-      if not node.leftTerm in self._loaded_to_gpu_cache[node]:
+      if left_term not in self._loaded_to_gpu_cache[node]:
         self._loaded_to_gpu_cache[node].add(left_term)
         lbb = self._cache[left_term]
         extra_cost += lbb.size()
     return cost + extra_cost
 
-  def estimate_IndexSum(self, node):
-    cost = super().estimate_IndexSum(node)
+  def estimate_Reduction(self, node):
+    if not isSummation(node):
+      return super().estimate_Reduction(node)
+    cost = super().estimate_Reduction(node)
 
     # Note: we cannot derive the dimension along which we
     # are going to apply parallelization directly from
-    # the IndexSum. Therefore we need to find a next Product
+    # the reduction. Therefore we need to find the next product
     # term and look at the left term
     child = node.term()
-    while isinstance(child, IndexSum):
+    while isinstance(child, Reduction) and isSummation(child):
       child = child.term()
 
     left_term, _ = self._get_terms(child)
@@ -172,12 +192,16 @@ class ExactCost(CachedCostEstimator):
     self._cache[node] = node.eqspp()
     return 0
 
-  def estimate_Product(self, node):
-    spp = node.computeSparsityPattern(self._cache[node.leftTerm()], self._cache[node.rightTerm()])
+  def estimate_Elementwise(self, node):
+    if not isProduct(node):
+      return self.generic_estimate(node)
+    spp = node.computeSparsityPattern(self._cache[node[0]], self._cache[node[1]])
     self._cache[node] = spp
     return spp.count_nonzero()
 
-  def estimate_IndexSum(self, node):
+  def estimate_Reduction(self, node):
+    if not isSummation(node):
+      return self.generic_estimate(node)
     termSpp = self._cache[node.term()]
     spp = node.computeSparsityPattern(termSpp)
     self._cache[node] = spp

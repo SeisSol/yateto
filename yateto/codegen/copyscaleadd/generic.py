@@ -5,14 +5,16 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
 
-  def _formatTerm(self, alpha, term, entry):
+  def _formatTerm(self, alpha, term, entry, datatype=None):
     prefix = ''
     if alpha == 0.0:
       return ''
     if alpha == 1.0:
       prefix = term.name
     else:
-      prefix = f'{alpha} * {term.name}'
+      # NOTE: format the scale factor in the result's datatype, so an int32
+      #       result is not silently multiplied by a double literal
+      prefix = f'{scaleFactor(datatype or term.datatype, alpha)} * {term.name}'
 
     if entry is None:
       return f'{prefix}[{term.memoryLayout.addressString(term.indices)}]'
@@ -28,10 +30,10 @@ class Generic(object):
 
     if d.beta == 0.0:
       if d.term.memoryLayout.isSparse():
-        initializeWithZero(cpp, self._arch, d.result)
+        initializeWithZero(cpp, d.result)
       else:
         writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
-        initializeWithZero(cpp, self._arch, d.result, writeBB)
+        initializeWithZero(cpp, d.result, writeBB)
 
 
     class CopyScaleAddBody(object):
@@ -54,7 +56,7 @@ class Generic(object):
           flop += 1
         elif d.beta != 0.0:
           raise NotImplementedError
-        cpp( f'{self._formatTerm(1.0, d.result, s.resultEntry)} {op} {self._formatTerm(alpha, d.term, s.termEntry)};' )
+        cpp( f'{self._formatTerm(1.0, d.result, s.resultEntry)} {op} {self._formatTerm(alpha, d.term, s.termEntry, d.result.datatype)};' )
 
         return flop
 

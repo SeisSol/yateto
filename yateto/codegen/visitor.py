@@ -1,16 +1,19 @@
 import collections
+import contextlib
 import operator
 from functools import reduce
 from io import StringIO
 from ..memory import DenseMemoryLayout
-from ..controlflow.visitor import ScalarsSet, SortedGlobalsList, SortedPrefetchList
+from .. import aspp
+from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
+from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
 from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux, KernelAttributes
-from ..type import Scalar
+from ..type import Scalar, Tensor, Datatype
 
 import numpy as np
 
@@ -69,6 +72,18 @@ class KernelGenerator(object):
     else:
       return self.deduce_single_scalar(action.scalar)
 
+  def _generateScalarPrologue(self, cpp, cfg):
+    """Compute every scalar-only expression up front.
+
+    They read nothing the kernel produces, so hoisting them here means they are
+    evaluated once, before any kernel or external routine call, rather than per
+    statement. A guarded statement gets its factor computed regardless of the
+    guard, which only matters for an expression that can trap.
+    """
+    for scalar in DerivedScalarsList().visit(cfg):
+      datatype = scalar.getDatatype(self._arch)
+      cpp(f'{datatype.ctype()} const {scalar.name()} = {scalar.expression.ccode(self._arch)};')
+
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
     hwFlops = 0
     # temporary memory required (per element in case of gpu)
@@ -76,28 +91,31 @@ class KernelGenerator(object):
     #       an provided by the user
     required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
+    self._generateScalarPrologue(cpp, cfg)
     if factory.allocateTemporary():
       localPtrs = set()
       for pp in cfg:
         localPtrs.update(pp.bufferMap.keys())
-      if localPtrs:
-        cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
+      for localPtr in sorted(localPtrs, key=str):
+        cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
     for pp in cfg:
       if factory.allocateTemporary():
         for buf, size in pp.initBuffer.items():
-          required_tmp_mem += size * self._arch.bytesPerReal
+          required_tmp_mem += size
           bufname = self._bufferName(buf)
-          factory.temporary(bufname, size)
+          # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
+          factory.temporary(bufname, size, None)
         for local, buf in pp.bufferMap.items():
-          cpp('{} = {};'.format(local, self._bufferName(buf)))
+          # buffers are untyped storage; each pointer is cast to its own type
+          cpp(f'{local} = reinterpret_cast<{local.datatype.ctype()}*>({self._bufferName(buf)});')
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)
         if action.isRHSExpression():
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
-          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
+          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
-          hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache, gemm_cfg)
+          hwFlops += factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg)
     return hwFlops, required_tmp_mem
 
 class OptimizedKernelGenerator(KernelGenerator):
@@ -142,6 +160,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                  function,
                  tmp_mem_size,
                  is_compute_constant_tensors,
+                 datatype,
                  target,
                  attrs):
 
@@ -157,6 +176,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       self.function = function
       self.tmp_mem_size = tmp_mem_size
       self.is_compute_constant_tensors = is_compute_constant_tensors
+      self.datatype = datatype
       self.target = target
       self.attrs = attrs
 
@@ -173,12 +193,15 @@ class OptimizedKernelGenerator(KernelGenerator):
         tensors[base_name] = {group}
 
   def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target, attrs=None):
-    scalarsP = ScalarsSet().visit(cfg)
+    # NOTE: sorted, because these become the kernel's scalar members and a set
+    #       enumerates in an order PYTHONHASHSEED varies between runs.
+    scalarsP = sorted(ScalarsSet().visit(cfg), key=str)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     writable = dict()
     is_compute_constant_tensors = dict()
     scalars = collections.OrderedDict()
+    datatype = dict()
 
     inConstTensors = {}
     inTensors = {}
@@ -186,9 +209,12 @@ class OptimizedKernelGenerator(KernelGenerator):
 
     for scalar in scalarsP:
       self.KernelOutline._addTensor(scalar, scalars)
+      datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
     for var in variables:
       self.KernelOutline._addTensor(var.tensor, tensors)
       bn = var.tensor.baseNameWithNamespace()
+
+      datatype[bn] = var.datatype
 
       if bn in writable:
         if var.writable:
@@ -241,6 +267,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                               function,
                               tmp_memory,
                               is_compute_constant_tensors,
+                              datatype,
                               target,
                               attrs)
 
@@ -249,7 +276,12 @@ class OptimizedKernelGenerator(KernelGenerator):
     for key, value in koEntries.items():
       if key not in entries:
         entries[key] = value
-      else:
+      elif entries[key] != value:
+        if isinstance(value, Datatype) or isinstance(entries[key], Datatype):
+          # NOTE: Datatype is a plain Enum; `|` would raise an opaque TypeError
+          raise ValueError(
+            f'Conflicting datatypes for "{key}" across the kernels of a family: '
+            f'{entries[key]} vs. {value}.')
         entries[key] = entries[key] | value
 
 
@@ -259,6 +291,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     writable = dict()
     scalars = collections.OrderedDict()
     is_compute_constant_tensors = dict()
+    datatype = dict()
     for ko in kernelOutlines:
       if ko:
         self._addFromKO(ko.scalars, scalars)
@@ -266,6 +299,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         self._addFromKO(ko.writable, writable)
         self._addFromKO(ko.prefetch, prefetch)
         self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
+        self._addFromKO(ko.datatype, datatype)
 
     target = kernelOutlines[-1].target
     is_same_target = True
@@ -326,13 +360,15 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         if target == 'gpu':
           # LinearAllocatorT controls external extra mem. allocated on gpu for tmp. variables
-          header(f'yateto::LinearAllocatorT<{self._arch.typename}> linearAllocator;')
+          # the buffers are declared as int8_t*, and char and int8_t are
+          # distinct types, so the allocator has to hand out int8_t* as well
+          header(f'yateto::LinearAllocatorT<{Datatype.I8.ctype()}> linearAllocator;')
 
         header.emptyline()
 
-        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, target):
+        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, datatype, target):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
-          typ = self._arch.typename
+          typ = datatype.ctype()
           ptr_type = '**' if not is_constant and target == 'gpu' else '*'
           if not writable:
             typ += ' const'
@@ -341,11 +377,11 @@ class OptimizedKernelGenerator(KernelGenerator):
             container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
             header(f'{class_name}::{container_type} {base_name};')
           else:
-            header(f'{typ}{ptr_type} {base_name}{{}};')
+            header(f'{typ}{ptr_type} {base_name}{"{"}nullptr{"}"};')
 
-        def scalarArgs(base_name_with_namespace, groups):
+        def scalarArgs(base_name_with_namespace, datatype, groups):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
-          typ = self._arch.typename
+          typ = datatype.ctype()
           if len(next(iter(groups))) > 0:
             class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
             container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}>'
@@ -355,12 +391,14 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         for baseName, groups in scalars.items():
           scalarArgs(baseName,
+                     datatype[baseName],
                      groups)
         for baseName, groups in tensors.items():
           kernelArgs(baseName,
                      groups,
                      writable[baseName],
                      is_compute_constant_tensors[baseName],
+                     datatype[baseName],
                      target)
         header.emptyline()
 
@@ -392,7 +430,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         if len(prefetch) > 0:
           with header.Struct(self.PREFETCHSTRUCT_NAME):
             for baseName, groups in prefetch.items():
-              kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
+              kernelArgs(baseName, groups, writable=False, is_constant=False, datatype=self._arch.datatype, target='any')
           header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
           header.emptyline()
 
@@ -468,6 +506,11 @@ class OptimizedKernelGenerator(KernelGenerator):
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
+  CASE_VAR = '_case'
+  #: How many condition assignments to enumerate at most. Every one costs a
+  #: full run of the kernel and of the reference, and a kernel guarded by
+  #: more conditions than this is rare enough to be covered by hand.
+  MAX_CASES = 16
   STREAM = '_stream'
   TMP_MEM = '_tmpMem'
   TMP_SIZE = 128 * 8
@@ -478,7 +521,7 @@ class UnitTestGenerator(KernelGenerator):
   def deduce_single_scalar(self, scalar):
     if scalar is None:
       return 1.0
-    elif isinstance(scalar, Scalar):
+    elif isinstance(scalar, Tensor):
       return self._tensorNameS(scalar)
     else:
       return scalar
@@ -506,7 +549,7 @@ class UnitTestGenerator(KernelGenerator):
     elif writable[var.tensor.baseNameWithNamespace()]:
       return self._devPtrTensorName(var)
     else:
-      return f'const_cast<{self._arch.typename} const**>({self._devPtrTensorName(var)})'
+      return f'const_cast<{var.datatype.ctype()} const**>({self._devPtrTensorName(var)})'
 
   @classmethod
   def _nameS(cls, var):
@@ -539,6 +582,32 @@ class UnitTestGenerator(KernelGenerator):
   def _groupIndex(self, var):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
+
+  @staticmethod
+  def _conditionVariables(cfg):
+    """The values the kernel's guards read, in a stable order.
+
+    A condition may be written inside the kernel, in which case its later
+    reads are a different value under the same variable; the variable is
+    what gets filled, so it is what is enumerated.
+    """
+    seen = {}
+    for pp in cfg:
+      action = pp.action
+      if action is None:
+        continue
+      guard = Guard.coerce(action.condition)
+      if guard.isAlways() or guard.isNever():
+        continue
+      for var in guard.variables():
+        seen.setdefault(str(var), var)
+    return [seen[name] for name in sorted(seen)]
+
+  @classmethod
+  def _conditionCases(cls, conditions):
+    if not conditions:
+      return 1
+    return min(2 ** len(conditions), cls.MAX_CASES)
 
   def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
     if target == 'gpu':
@@ -576,99 +645,117 @@ class UnitTestGenerator(KernelGenerator):
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
+    conditions = self._conditionVariables(cfg)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
-      factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
+      # A guarded kernel is several kernels: which statements run depends on
+      # the conditions, and filling them from the usual pattern picks one
+      # assignment out of the 2^n there are. The whole body -- fill, run,
+      # reference, compare -- is repeated once per assignment instead, so a
+      # branch that is never taken in one case is taken in another. Every
+      # declaration is inside the loop, so each case starts from nothing.
+      cases = self._conditionCases(conditions)
+      # nullcontext, not an anonymous scope: a kernel with no guard gets the
+      # test it always got, down to the indentation
+      loop = cpp.For(f'int {self.CASE_VAR} = 0; {self.CASE_VAR} < {cases}; ++{self.CASE_VAR}') \
+             if cases > 1 else contextlib.nullcontext()
+      with loop:
+       factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
 
-      for i,scalar in enumerate(scalars):
-        cpp('{} {} = {};'.format(self._arch.typename, self._tensorNameS(scalar), float(i+2)))
+       for i,scalar in enumerate(scalars):
+         cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
 
-      for var in variables:
-        factory.tensor(var.tensor, self._tensorName(var))
-        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
+       conditionBit = {str(var): i for i, var in enumerate(conditions)}
+       for var in variables:
+         bit = conditionBit.get(str(var))
+         factory.tensor(var.tensor, self._tensorName(var),
+                        caseVar=self.CASE_VAR if (bit is not None and cases > 1) else None,
+                        caseBit=bit)
+         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
 
-        shape = var.memoryLayout().shape()
-        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
-            supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            dim=len(shape),
-            arch = self._arch,
-            utName=self._name(var),
-            viewName=self._viewName(var),
-            shape=', '.join([str(s) for s in shape]),
-            start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
-            stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
-          )
-        )
-        prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
-        cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
-            initNS = InitializerGenerator.INIT_NAMESPACE,
-            supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            groupTemplate=self._groupTemplate(var.tensor),
-            prefix=prefix,
-            baseName=var.tensor.baseName(),
-            name=self._tensorName(var),
-            viewName=self._viewName(var),
-            viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
-            createFun=InitializerGenerator.VIEW_FUN_NAME
-          )
-        )
-        cpp.emptyline()
+         shape = var.memoryLayout().shape()
+         cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
+             supportNS = SUPPORT_LIBRARY_NAMESPACE,
+             dim=len(shape),
+             datatype=var.datatype.ctype(),
+             arch = self._arch,
+             utName=self._name(var),
+             viewName=self._viewName(var),
+             shape=', '.join([str(s) for s in shape]),
+             start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
+             stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
+           )
+         )
+         prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
+         cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
+             initNS = InitializerGenerator.INIT_NAMESPACE,
+             supportNS = SUPPORT_LIBRARY_NAMESPACE,
+             groupTemplate=self._groupTemplate(var.tensor),
+             prefix=prefix,
+             baseName=var.tensor.baseName(),
+             name=self._tensorName(var),
+             viewName=self._viewName(var),
+             viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
+             createFun=InitializerGenerator.VIEW_FUN_NAME
+           )
+         )
+         cpp.emptyline()
 
-      kernelTensorName = self._tensorName
-      if device_test:
-        writable = dict()
-        for var in variables:
-          bn = var.tensor.baseNameWithNamespace()
-          writable[bn] = writable.get(bn, False) or var.writable
+       kernelTensorName = self._tensorName
+       if device_test:
+         writable = dict()
+         for var in variables:
+           bn = var.tensor.baseNameWithNamespace()
+           writable[bn] = writable.get(bn, False) or var.writable
 
-        kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
+         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
 
-        stream_new(self.STREAM)
-        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{self._arch.typename}*', self.STREAM)
-        for var in variables:
-          data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{self._arch.typename}*', self.STREAM)
-          data_malloc(self._devPtrTensorName(var), f'sizeof({self._arch.typename}*)', f'{self._arch.typename}**', self.STREAM)
-        for var in variables:
-          data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
-          data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({self._arch.typename}*)', self.STREAM)
-        stream_wait(self.STREAM)
-        cpp.emptyline()
+         stream_new(self.STREAM)
+         data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{Datatype.I8.ctype()}*', self.STREAM)
+         for var in variables:
+           data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
+           data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)
+         for var in variables:
+           data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+           data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({var.datatype.ctype()}*)', self.STREAM)
+         stream_wait(self.STREAM)
+         cpp.emptyline()
 
-      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
-      for var in scalars:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
-      for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
+       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+       for var in scalars:
+         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
+       for var in variables:
+         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
 
-      if device_test:
-        cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
-        cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
-        cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
+       if device_test:
+         cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
+         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
+         cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
 
-      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
-      cpp.emptyline()
+       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
+       cpp.emptyline()
 
-      if device_test:
-        stream_wait(self.STREAM)
-        for var in variables:
-          if var.writable:
-            data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
-        stream_wait(self.STREAM)
-        data_free(self.TMP_MEM, self.STREAM)
-        for var in variables:
-          data_free(self._devPtrTensorName(var), self.STREAM)
-          data_free(self._devTensorName(var), self.STREAM)
-        stream_wait(self.STREAM)
-        stream_delete(self.STREAM)
-        cpp.emptyline()
+       if device_test:
+         stream_wait(self.STREAM)
+         for var in variables:
+           if var.writable:
+             data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+         stream_wait(self.STREAM)
+         data_free(self.TMP_MEM, self.STREAM)
+         for var in variables:
+           data_free(self._devPtrTensorName(var), self.STREAM)
+           data_free(self._devTensorName(var), self.STREAM)
+         stream_wait(self.STREAM)
+         stream_delete(self.STREAM)
+         cpp.emptyline()
 
-      super().generate(cpp, cfg, factory, None, gemm_cfg)
+       super().generate(cpp, cfg, factory, None, gemm_cfg)
 
-      for var in variables:
-        if var.writable:
-          factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout()))
+       for var in variables:
+         if var.writable:
+           factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout(), datatype=var.datatype))
 
-      factory.freeTmp()
+       factory.freeTmp()
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'
@@ -688,18 +775,18 @@ class InitializerGenerator(object):
   class TensorView(object):
     ARGUMENT_NAME = 'values'
 
+    def __init__(self, datatype):
+      self._datatype = datatype
+
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
-      return '::{}::{}<{},{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename, constStr)
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim},{self._datatype.ctype()},{arch.uintTypename},{constStr}>'
 
-    @classmethod
-    def arguments(cls, arch, const):
-      if const:
-        return '{} const* {}'.format(arch.typename, cls.ARGUMENT_NAME)
-      else:
-        return '{} * {}'.format(arch.typename, cls.ARGUMENT_NAME)
+    def arguments(self, const):
+      conststr = ' const*' if const else '*'
+      return f'{self._datatype.ctype()}{conststr} {self.ARGUMENT_NAME}'
 
-    def generate(cpp, group, memLayout, arch, index, const):
+    def generate(cpp, group, memLayout):
       raise NotImplementedError
 
     def listToInitializerList(self, lst):
@@ -708,10 +795,10 @@ class InitializerGenerator(object):
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
 
     def formatArray(self, numberType, name, values, declarationOnly):
-      lhs = '{} {}[]'.format(numberType, name)
+      lhs = f'{numberType} {name}[]'
       if declarationOnly:
         return ''
-      return '{} {} = {};'.format(MODIFIERS, lhs, self.listToInitializerList(values))
+      return f'{MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
 
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
@@ -737,7 +824,7 @@ class InitializerGenerator(object):
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
-      return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename, constStr)
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{self._datatype.ctype()},{arch.uintTypename},{constStr}>'
 
     def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {}, {});'.format(
@@ -773,9 +860,9 @@ class InitializerGenerator(object):
 
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
-    self._numberType = '{} const'.format(self._arch.uintTypename)
-    self._realType = '{} const'.format(self._arch.typename)
-    self._realPtrType = self._realType + '*'
+    self._numberType = f'{self._arch.uintTypename} const'
+    self._realType = lambda datatype: f'{datatype.ctype()} const'
+    self._realPtrType = lambda datatype: self._realType(datatype) + '*'
     self._scalarCollect = collections.OrderedDict()
     self._collect = collections.OrderedDict()
     for tensor in tensors:
@@ -810,13 +897,14 @@ class InitializerGenerator(object):
     maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}
     self._groupSizeScalar = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndexScalar.items()}
 
-  def _tensorViewGenerator(self, memoryLayout):
+  def _tensorViewGenerator(self, tensor):
+    memoryLayout = tensor.memoryLayout()
     memLayoutMap = {
       'DenseMemoryLayout': self.DenseTensorView,
       'CSCMemoryLayout': self.CSCMatrixView,
       'PatternMemoryLayout': self.PatternTensorView
     }
-    return memLayoutMap[type(memoryLayout).__name__]()
+    return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch))
 
   def iterate_collect(self):
     cur_namespace = ''
@@ -944,47 +1032,52 @@ class InitializerGenerator(object):
     if declarationOnly:
       for group,tensor in tensors.items():
         ml = tensor.memoryLayout()
-        tv = self._tensorViewGenerator(ml)
+        tv = self._tensorViewGenerator(tensor)
         tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
       valueNames = dict()
       for group,tensor in tensors.items():
         values = tensor.values()
         memLayout = tensor.memoryLayout()
+        datatype = tensor.getDatatype(self._arch)
         if values is not None:
-          memory = ['0.']*memLayout.requiredReals()
+          memory = [datatype.literal(0)]*memLayout.requiredReals()
           for idx,x in values.items():
-            memory[memLayout.address(idx)] = x
-          valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, index(group))
-          valueNames[group] = ['&{}[0]'.format(valuesName)]
-          cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))
+            memory[memLayout.address(idx)] = datatype.literal(x)
+          valuesName = f'{name}{self.VALUES_BASENAME}{index(group)}'
+          valueNames[group] = [f'&{valuesName}[0]']
+          cpp('{} {}[] = {{{}}};'.format(self._realType(datatype), valuesName, ', '.join(memory)))
       if len(valueNames) > 1:
-        self._array(cpp, self._realPtrType, name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
+        _,prototensor = next(iter(tensors.items()))
+        datatype = prototensor.getDatatype(self._arch)
+        self._array(cpp, self._realPtrType(datatype), name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
     else:
       with cpp.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          tv = self._tensorViewGenerator(tensor)
           tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, False)
 
         nValueArrays = 0
         for group,tensor in tensors.items():
           values = tensor.values()
+          datatype = tensor.getDatatype(self._arch)
           if values is not None:
-            name = '{}{}'.format(self.VALUES_BASENAME, index(group))
+            name = f'{self.VALUES_BASENAME}{index(group)}'
             aligned = ''
             if tensor.memoryLayout().alignedStride():
-              aligned = ' __attribute__((aligned({})))'.format(self._arch.cacheline)
-            cpp('{} {} {}[]{};'.format(STATIC, self._realType, name, aligned))
+              aligned = f' __attribute__((aligned({self._arch.cacheline})))'
+            cpp(f'{STATIC} {self._realType(datatype)} {name}[]{aligned};')
             nValueArrays += 1
         if nValueArrays > 1:
-          cpp('{} {} {}[];'.format(STATIC, self._realPtrType, self.VALUES_BASENAME))
+          cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')
 
         cpp.emptyline()
-        viewArgs = self.TensorView.arguments(self._arch, False)
-        viewArgsConst = self.TensorView.arguments(self._arch, True)
         if len(groupSize) == 0:
-          ml = next(iter(tensors.values())).memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          prototensor = next(iter(tensors.values()))
+          ml = prototensor.memoryLayout()
+          tv = self._tensorViewGenerator(prototensor)
+          viewArgs = tv.arguments(False)
+          viewArgsConst = tv.arguments(True)
           with cpp.Struct(self.VIEW_STRUCT_NAME):
             cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch, False)};')
             cpp(f'using {self.VIEW_TYPE_NAME_CONST} = {tv.typename(len(ml.shape()), self._arch, True)};')
@@ -999,7 +1092,9 @@ class InitializerGenerator(object):
       if len(groupSize) > 0:
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          tv = self._tensorViewGenerator(tensor)
+          viewArgs = tv.arguments(False)
+          viewArgsConst = tv.arguments(True)
           typename = tv.typename(len(ml.shape()), self._arch, False)
           typenameConst = tv.typename(len(ml.shape()), self._arch, True)
           special = ','.join(str(g) for g in group)

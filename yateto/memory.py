@@ -78,8 +78,12 @@ class MemoryLayout(ABC):
 
     assert writeBB in self._bbox
     re = [range(r.start, r.stop) for r in self._bbox]
-    we = [range(w.start, w.stop) for w in writeBB]
-    return [self.address(e) for e in set(itertools.product(*re)) - set(itertools.product(*we)) if self.hasValue(e)]
+    we = set(itertools.product(*[range(w.start, w.stop) for w in writeBB]))
+    # NOTE: iterate the read box, rather than differencing two sets. A set of
+    #       tuples enumerates in hash order, which PYTHONHASHSEED varies from
+    #       run to run, and these addresses end up as generated code.
+    return [self.address(e) for e in itertools.product(*re)
+            if e not in we and self.hasValue(e)]
 
   def relranges(self):
     starts = [0] * len(self._shape)
@@ -199,8 +203,8 @@ class DenseMemoryLayout(MemoryLayout):
 
     assert writeBB in self._bbox
     re = [range(r.start, r.stop) for r in self._bbox]
-    we = [range(w.start, w.stop) for w in writeBB]
-    return [self.address(e) for e in set(itertools.product(*re)) - set(itertools.product(*we))]
+    we = set(itertools.product(*[range(w.start, w.stop) for w in writeBB]))
+    return [self.address(e) for e in itertools.product(*re) if e not in we]
 
   def stride(self):
     return self._stride

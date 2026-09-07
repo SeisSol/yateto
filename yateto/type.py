@@ -1,10 +1,183 @@
 import re
-from .ast.node import Node, IndexedTensor
 from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
 from . import aspp
+from enum import Enum
+import math
 
-class AbstractType(object):
+import numpy as np
+
+class TypeFlavor(Enum):
+  """Selects the spelling of a datatype for a given consumer."""
+  DEFAULT = 0
+  EIGEN = 1
+
+class Datatype(Enum):
+  BOOL = 0
+  I8 = 1
+  I16 = 2
+  I32 = 3
+  I64 = 4
+  F32 = 5
+  F64 = 6
+  F16 = 7
+  BF16 = 8
+  F128 = 9
+
+  def __str__(self):
+    return {
+      Datatype.BOOL: 'bool',
+      Datatype.I8: 'i8',
+      Datatype.I16: 'i16',
+      Datatype.I32: 'i32',
+      Datatype.I64: 'i64',
+      Datatype.F32: 'f32',
+      Datatype.F64: 'f64',
+      Datatype.F128: 'f128',
+      Datatype.F16: 'f16',
+      Datatype.BF16: 'bf16',
+    }[self]
+
+  def ctype(self, flavor=TypeFlavor.DEFAULT):
+    if flavor == TypeFlavor.EIGEN:
+      # Eigen has its own scalar wrappers for the non-standard FP formats
+      eigen = {
+        Datatype.F16: 'Eigen::half',
+        Datatype.BF16: 'Eigen::bfloat16',
+      }
+      if self in eigen:
+        return eigen[self]
+    return {
+      Datatype.BOOL: 'bool',
+      Datatype.I8: 'int8_t',
+      Datatype.I16: 'int16_t',
+      Datatype.I32: 'int32_t',
+      Datatype.I64: 'int64_t',
+      Datatype.F32: 'float',
+      Datatype.F64: 'double',
+      Datatype.F16: 'yateto::f16_ty',
+      Datatype.BF16: 'yateto::bf16_ty',
+      Datatype.F128: 'yateto::f128_ty',
+    }[self]
+
+  def isFloat(self):
+    return self in (Datatype.F16, Datatype.BF16, Datatype.F32, Datatype.F64, Datatype.F128)
+
+  def isInteger(self):
+    return self in (Datatype.I8, Datatype.I16, Datatype.I32, Datatype.I64)
+
+  def isBool(self):
+    return self == Datatype.BOOL
+
+  def bits(self):
+    return 1 if self == Datatype.BOOL else 8 * self.size()
+
+  def limits(self):
+    """(lowest, max) representable value; None for the FP types (use infinity there)."""
+    if self == Datatype.BOOL:
+      return (False, True)
+    if self.isInteger():
+      return (-2**(self.bits() - 1), 2**(self.bits() - 1) - 1)
+    return (None, None)
+
+  def nptype(self):
+    # NOTE: np.bool was removed in numpy 1.24, np.float128 does not exist on all
+    #       platforms (e.g. macOS/arm64, Windows). Hence the guarded lookups.
+    return {
+      Datatype.BOOL: np.bool_,
+      Datatype.I8: np.int8,
+      Datatype.I16: np.int16,
+      Datatype.I32: np.int32,
+      Datatype.I64: np.int64,
+      Datatype.F32: np.float32,
+      Datatype.F64: np.float64,
+      Datatype.F16: np.float16,
+      Datatype.BF16: np.float32, # NYI
+      Datatype.F128: getattr(np, 'float128', np.longdouble),
+    }[self]
+
+  def size(self):
+    # unpacked size
+    return {
+      Datatype.BOOL: 1,
+      Datatype.I8: 1,
+      Datatype.I16: 2,
+      Datatype.I32: 4,
+      Datatype.I64: 8,
+      Datatype.F32: 4,
+      Datatype.F64: 8,
+      Datatype.F16: 2,
+      Datatype.BF16: 2,
+      Datatype.F128: 16,
+    }[self]
+
+  def safeint(self, value):
+    # allow inf/-inf to be treated as int: saturate at the type's own limits
+    lo, hi = self.limits()
+    if lo is None:
+      lo, hi = -2**63, 2**63 - 1
+    if value != value: # NaN
+      return 0
+    return int(max(lo, min(hi, value)))
+
+  def literal(self, value):
+    # Non-finite values have no literal spelling in C/C++; route them through
+    # <limits> instead. For the integer types they saturate.
+    if isinstance(value, float) and not math.isfinite(value):
+      ctype = self.ctype()
+      if math.isnan(value):
+        if self.isFloat():
+          return f'std::numeric_limits<{ctype}>::quiet_NaN()'
+        return self.literal(0)
+      if self.isFloat():
+        sign = '-' if value < 0 else ''
+        return f'{sign}std::numeric_limits<{ctype}>::infinity()'
+      if self.isBool():
+        return 'true' if value > 0 else 'false'
+      # integers: saturate
+      return f'std::numeric_limits<{ctype}>::{"max" if value > 0 else "lowest"}()'
+
+    # (note: the extra lambda mapping is needed to prevent type errors)
+    return {
+      Datatype.BOOL: lambda value: 'true' if value else 'false',
+      Datatype.I8: lambda value: f'static_cast<int8_t>({self.safeint(value)}LL)',
+      Datatype.I16: lambda value: f'static_cast<int16_t>({self.safeint(value)}LL)',
+      Datatype.I32: lambda value: f'static_cast<int32_t>({self.safeint(value)}LL)',
+      Datatype.I64: lambda value: f'static_cast<int64_t>({self.safeint(value)}LL)',
+      Datatype.F32: lambda value: f'{float(value):.16}f',
+      Datatype.F64: lambda value: f'{float(value):.16}',
+      Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
+      Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
+      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({value!r}q)',
+    }[self](value)
+
+class AddressingMode(Enum):
+  DIRECT = 0
+  STRIDED = 1
+  INDIRECT = 2
+  SCALAR = 3
+
+  def pointer_type(self):
+    return {
+      AddressingMode.DIRECT: '*',
+      AddressingMode.STRIDED: '*',
+      AddressingMode.INDIRECT: '**',
+      AddressingMode.SCALAR: '',
+    }[self]
+
+class Symbol(object):
+  def __init__(self, datatype):
+    # datatype == None is treated as datatype == arch.datatype
+    self.datatype = datatype
+
+  def getDatatype(self, arch):
+    return arch.datatype if self.datatype is None else self.datatype
+
+class AbstractType(Symbol):
+  def __init__(self, name, datatype):
+    super().__init__(datatype)
+    self._name = name
+
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
@@ -15,17 +188,18 @@ class AbstractType(object):
 class IdentifiedType(AbstractType):
   BASE_NAME = r'[a-zA-Z]\w*'
   GROUP_INDEX = r'(0|[1-9]\d*)'
-  GROUP_INDICES = r'\(({0}(,{0})*)\)'.format(GROUP_INDEX)
-  VALID_NAME = r'^{}({})?$'.format(BASE_NAME, GROUP_INDICES)
+  GROUP_INDICES = rf'\(({GROUP_INDEX}(,{GROUP_INDEX})*)\)'
+  VALID_NAME = rf'^{BASE_NAME}({GROUP_INDICES})?$'
 
-  def __init__(self, name, namespace=None):
+  def __init__(self, name, namespace=None, datatype=None):
+    super().__init__(name, datatype)
     if not self.isValidName(name):
-      raise ValueError('Invalid name (must match regexp {}): {}'.format(self.VALID_NAME, name))
+      raise ValueError(f'Invalid name (must match regexp {self.VALID_NAME}): {name}')
 
     self._name = name
     self.namespace = namespace
 
-    self.datatype = None # TODO
+    self.datatype = datatype
 
   def __str__(self):
     return self._name
@@ -69,13 +243,6 @@ class IdentifiedType(AbstractType):
   def __hash__(self):
     return hash(self._name)
 
-class Scalar(IdentifiedType):
-  def __init__(self, name, namespace=None):
-    super().__init__(name, namespace=namespace)
-
-  def __hash__(self):
-    return hash(self._name)
-
 class Tensor(IdentifiedType):
   def __init__(self,
                name,
@@ -84,8 +251,10 @@ class Tensor(IdentifiedType):
                memoryLayoutClass=DenseMemoryLayout,
                alignStride=False,
                namespace=None,
+               datatype=None,
+               addressing=None,
                temporary=False):
-    super().__init__(name, namespace=namespace)
+    super().__init__(name, namespace=namespace, datatype=datatype)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
 
@@ -93,11 +262,14 @@ class Tensor(IdentifiedType):
       raise ValueError('shape must not contain entries smaller than 1')
 
     if not self.isValidName(name):
-      raise ValueError('Tensor name invalid (must match regexp {}): {}'.format(self.VALID_NAME, name))
+      raise ValueError(f'Tensor name invalid (must match regexp {self.VALID_NAME}): {name}')
 
     self._name = name
     self._shape = shape
     self._values = None
+
+    # default addressing mode. If not given, deduce it
+    self.addressing = addressing
 
     self.temporary = temporary
 
@@ -128,8 +300,15 @@ class Tensor(IdentifiedType):
 
     self.setMemoryLayout(memoryLayoutClass, alignStride)
 
+  def isPassedByValue(self):
+    """Whether this tensor is handed over by value rather than by pointer."""
+    return self.addressing == AddressingMode.SCALAR
+
   def __hash__(self):
-    return hash(self._name)
+    # only over what cannot change: the sparsity pattern and the memory layout
+    # are set after construction, and hashing them would lose a tensor that is
+    # already sitting in a set
+    return hash((self._name, self._shape, self.addressing))
 
   def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp, alignStride=alignStride)
@@ -147,6 +326,7 @@ class Tensor(IdentifiedType):
     self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
 
   def __getitem__(self, indexNames):
+    from .ast.node import IndexedTensor
     return IndexedTensor(self, indexNames)
 
   def shape(self):
@@ -185,13 +365,169 @@ class Tensor(IdentifiedType):
     return True if self._values else False
 
   def __eq__(self, other):
-    equal = self._name == other._name
-    if equal:
-      assert self._shape == other._shape and aspp.array_equal(self._spp, other._spp) and self._memoryLayout == other._memoryLayout
-    return equal
+    if not isinstance(other, Tensor):
+      return NotImplemented
+    return self._name == other._name \
+       and self._shape == other._shape \
+       and self.addressing == other.addressing
 
   def __str__(self):
     return '{}: {}'.format(self._name, self._shape)
+
+class ScalarExpression:
+  """A computation over scalars, evaluated before any kernel call.
+
+  Its leaves are named scalars and numbers, never tensor reads, so it depends on
+  nothing the kernel produces and can be hoisted to the top of the kernel.
+  """
+
+  def __init__(self, optype, *operands):
+    optype.checkArity(len(operands))
+    self.optype = optype
+    self.operands = operands
+
+  def scalars(self):
+    """The named scalars this expression reads."""
+    found = set()
+    for operand in self.operands:
+      if isinstance(operand, ScalarExpression):
+        found |= operand.scalars()
+      elif isinstance(operand, Tensor):
+        found.add(operand)
+    return found
+
+  def datatype(self, arch):
+    from .ops import promote
+    types = []
+    for operand in self.operands:
+      if isinstance(operand, ScalarExpression):
+        types.append(operand.datatype(arch))
+      elif isinstance(operand, Tensor):
+        types.append(operand.getDatatype(arch))
+    return promote(types) if types else arch.datatype
+
+  def ccode(self, arch):
+    def spell(operand):
+      if isinstance(operand, ScalarExpression):
+        return operand.ccode(arch)
+      if isinstance(operand, Tensor):
+        return operand.name()
+      return self.datatype(arch).literal(operand)
+    return self.optype.callstr(*[spell(operand) for operand in self.operands])
+
+  def _key(self):
+    return (self.optype, tuple(o._key() if isinstance(o, ScalarExpression) else o
+                               for o in self.operands))
+
+  def __eq__(self, other):
+    return isinstance(other, ScalarExpression) and self._key() == other._key()
+
+  def __hash__(self):
+    return hash(self._key())
+
+  def __repr__(self):
+    return f'{self.optype}({", ".join(repr(o) for o in self.operands)})'
+
+
+class Scalar(Tensor):
+  """A rank-0 tensor that is handed over by value.
+
+  Everything else about it is a tensor: it has a shape, a memory layout, a
+  sparsity pattern, and it is indexed with the empty index. Only the calling
+  convention differs, and that is what AddressingMode.SCALAR says.
+  """
+
+  def __init__(self, name, namespace=None, datatype=None):
+    super().__init__(name, (), namespace=namespace, datatype=datatype,
+                     addressing=AddressingMode.SCALAR)
+
+  def __str__(self):
+    # a scalar spells itself as its name: it is a value in the generated code,
+    # and its shape carries nothing worth printing
+    return self.name()
+
+  # Arithmetic between scalars builds a ScalarExpression. Against a tensor node
+  # NotImplemented lets Python fall back to the node's reflected operator, which
+  # knows how to turn this into a scale factor.
+  @staticmethod
+  def _combine(optype, left, right):
+    from .ast.node import Node
+    if isinstance(left, Node) or isinstance(right, Node):
+      return NotImplemented
+    return derivedScalar(optype, left, right)
+
+  def __mul__(self, other):
+    from . import ops
+    return self._combine(ops.Mul(), self, other)
+  __rmul__ = __mul__
+
+  def __add__(self, other):
+    from . import ops
+    return self._combine(ops.Add(), self, other)
+  __radd__ = __add__
+
+  def __sub__(self, other):
+    from . import ops
+    negated = self._combine(ops.Mul(), -1.0, other)
+    return negated if negated is NotImplemented else self._combine(ops.Add(), self, negated)
+
+  def __rsub__(self, other):
+    from . import ops
+    return self._combine(ops.Add(), other, -self)
+
+  def __truediv__(self, other):
+    from . import ops
+    return self._combine(ops.Div(), self, other)
+
+  def __rtruediv__(self, other):
+    from . import ops
+    return self._combine(ops.Div(), other, self)
+
+  def __neg__(self):
+    from . import ops
+    return derivedScalar(ops.Mul(), -1.0, self)
+
+
+class DerivedScalar(Scalar):
+  """A scalar computed from other scalars before the kernel runs.
+
+  Temporary, so it is not part of the kernel signature: the caller does not set
+  it, the kernel computes it in its prologue.
+  """
+
+  # internal name; a user tensor cannot start with an underscore, so these
+  # cannot collide with one
+  BASE_NAME = r'_s\d+'
+  VALID_NAME = r'^_s\d+$'
+
+  _counter = 0
+
+  def __init__(self, expression):
+    DerivedScalar._counter += 1
+    super().__init__(f'_s{DerivedScalar._counter}')
+    self.temporary = True
+    self.expression = expression
+
+  def getDatatype(self, arch):
+    return self.expression.datatype(arch) if self.datatype is None else self.datatype
+
+  def dependencies(self):
+    return self.expression.scalars()
+
+
+def derivedScalar(optype, *operands):
+  """Combine scalars into one derived scalar.
+
+  A derived operand contributes its expression rather than itself, so every
+  derived scalar reads only named scalars and numbers -- there is never a chain
+  of them to order in the prologue.
+  """
+  flattened = [o.expression if isinstance(o, DerivedScalar) else o for o in operands]
+  expression = ScalarExpression(optype, *flattened)
+  # the same expression yields the same scalar, so it is computed once
+  return _derivedCache.setdefault(expression, DerivedScalar(expression))
+
+_derivedCache = dict()
 
 class Collection(object):
   def update(self, collection):

@@ -4,6 +4,7 @@ An exporter is registered under a target name and replaces the built-in factory
 for that target.
 """
 
+import json
 import os
 import tempfile
 
@@ -20,19 +21,18 @@ N = 4
 
 
 class Collector(ExportGenerator):
-    """Records the descriptors instead of emitting anything."""
+    """Records the description instead of emitting anything."""
 
     def __init__(self, arch, attrs=None):
         super().__init__(arch, attrs)
+        self.kernel = None
         self.operations = []
         self.tensors = []
 
-    def add_operation(self, description):
-        self.operations.append(description)
-        return 0
-
-    def add_tensor(self, description):
-        self.tensors.append(description)
+    def add_kernel(self, description):
+        self.kernel = description
+        self.operations = description["operations"]
+        self.tensors = description["tensors"]
 
     def generate(self, cpp, cache):
         pass
@@ -194,7 +194,8 @@ class TestExportedScalars:
         names = {arg['name'] for op in collector.operations for arg in op['args']}
         assert any(name.startswith('_scalar') for name in names), names
         values = {d['name']: d.get('values') for d in collector.tensors}
-        assert any(v == {(): 2.0} for v in values.values()), values
+        assert any(v == {'kind': 'entries', 'data': [[[], 2.0]]}
+                   for v in values.values()), values
 
 
 class TestExportedTensors:
@@ -220,3 +221,42 @@ class TestExportedTensors:
         flags = {d['name']: d['flags']['temporary'] for d in collector.tensors}
         assert any(flags.values()), 'the intermediate reduction result is temporary'
         assert flags['A'] is False
+
+
+class TestTheDescriptionIsData:
+    """A kernel arrives as one object, and that object is data.
+
+    It is written out and read back by the host-side tooling, so anything in
+    it that only Python understands -- an `Indices`, a tuple used as a dict
+    key -- is a field that tooling cannot carry.
+    """
+
+    def test_a_kernel_arrives_as_one_description(self, tensors):
+        A, B, out = tensors['A'], tensors['B'], tensors['out']
+        collector = export([out['ij'] <= A['ik'] * B['kj']])
+        assert collector.kernel is not None
+        assert set(collector.kernel) == {'version', 'tensors', 'operations'}
+        assert collector.kernel['version'] == ExportGenerator.INTERFACE_VERSION
+
+    def test_the_description_survives_a_round_trip_through_json(self, tensors):
+        A, B, out = tensors['A'], tensors['B'], tensors['out']
+        collector = export([
+            out['ij'] <= A['ik'] * B['kj'],
+            out['ij'] <= 2.0 * A['ij'] + B['ij'],
+        ])
+        assert json.loads(json.dumps(collector.kernel)) == collector.kernel
+
+    def test_an_index_is_a_name(self, tensors):
+        A, B, out = tensors['A'], tensors['B'], tensors['out']
+        collector = export([out['ij'] <= A['ik'] * B['kj']])
+        for operation in collector.operations:
+            for ref in [operation['result']] + operation['args']:
+                assert all(isinstance(index, str) for index in ref['indices'])
+
+    def test_every_tensor_an_operation_names_is_in_the_description(self, tensors):
+        A, B, out = tensors['A'], tensors['B'], tensors['out']
+        collector = export([out['ij'] <= A['ik'] * B['kj']])
+        known = {tensor['name'] for tensor in collector.tensors}
+        for operation in collector.operations:
+            for ref in [operation['result']] + operation['args']:
+                assert ref['name'] in known

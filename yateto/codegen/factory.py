@@ -452,13 +452,18 @@ class ExportGenerator:
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
+  #: 3: a kernel arrives as one description rather than as a call per tensor
+  #:    and per operation, and the description is data -- it survives
+  #:    `json.dumps`, so it can be recorded, replayed and compared without
+  #:    running yateto again.
+  #:
   #: 2: an occurrence states the bounding box it touches, the shift a slicing
   #:    operand imposes and whether it is a slice at all, and a tensor states
   #:    the alignment its layout promises. An exporter that ignores the box
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 2
+  INTERFACE_VERSION = 3
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -467,13 +472,13 @@ class ExportGenerator:
   def generate(self, cpp, cache):
     pass
 
-  def add_linear_operation(self, dest, ops, target, permute, add):
-    pass
+  def add_kernel(self, description):
+    """The whole kernel, as data.
 
-  def add_operation(self, description):
-    pass
-
-  def add_tensor(self, description):
+    ``{'version': int, 'tensors': [...], 'operations': [...]}``. Everything
+    in it is a str, a number, a bool, None, a list or a dict, so it can be
+    written out and read back.
+    """
     pass
 
 class ExportFactory(KernelFactory):
@@ -527,10 +532,25 @@ class ExportFactory(KernelFactory):
     super().__init__(cpp, arch, target, attrs)
     self.generator = generator
     self.tensors = {}
+    self.operations = []
     self.scalarcounter = 0
 
   def post_generate(self, routine_cache):
+    self.generator.add_kernel({
+      'version': ExportGenerator.INTERFACE_VERSION,
+      # dict order is insertion order, and a tensor is inserted the first
+      # time an operation names it, so this is the order they are met in
+      'tensors': list(self.tensors.values()),
+      'operations': self.operations,
+    })
     self.generator.generate(self._cpp, routine_cache)
+
+  def _emit(self, description):
+    self.operations.append(description)
+    # The flop count used to come back from here and be added to the
+    # kernel's `hwFlops`. Nothing is built yet at this point, so there is
+    # nothing to count; the exporter that cared already returned zero.
+    return 0
 
   def allocateTemporary(self):
     return False
@@ -591,10 +611,10 @@ class ExportFactory(KernelFactory):
       shape = list(ml.shape())
       shapeXt = [max(rng.stop - rng.start, shp) for rng, shp in zip(ml.bbox(), shape)]
       storage = {
-        'shape': shapeXt,
+        'shape': self._ints(shapeXt),
         'type': 'bbox',
-        'start': [rng.start for rng in ml.bbox()],
-        'sizes': [rng.stop - rng.start for rng in ml.bbox()]
+        'start': self._ints(rng.start for rng in ml.bbox()),
+        'sizes': self._ints(rng.stop - rng.start for rng in ml.bbox())
       }
     elif isinstance(ml, (CSCMemoryLayout, PatternMemoryLayout)):
       shape = list(ml.shape())
@@ -604,20 +624,17 @@ class ExportFactory(KernelFactory):
       # to be the storage order or every address disagrees
       entries.sort(key=ml.address)
       storage = {
-        'shape': shape,
+        'shape': self._ints(shape),
         'type': 'spp',
-        'entries': [list(entry) for entry in entries]
+        'entries': [self._ints(entry) for entry in entries]
       }
     else:
       raise NotImplementedError(
         f'{tensorIndexed.name} has a {ml.__class__.__name__}, which the '
         f'description has no storage kind for.')
 
-    # 0-d safe: rank-0 tensors (condition variables, scalar reduction results)
-    # have a sparsity pattern too, but numpy refuses nonzero() on 0-d arrays
-    spp = aspp.nonzeroIndices(tensorIndexed.eqspp)
-
-    values = None if tensorIndexed.values is None else list(tensorIndexed.values)
+    values = (None if tensorIndexed.values is None
+              else {'kind': 'flat', 'data': [float(v) for v in tensorIndexed.values]})
 
     tensor = {
       'name': tensorIndexed.name,
@@ -636,8 +653,18 @@ class ExportFactory(KernelFactory):
       }
     }
 
-    return self._handleTensor(tensor, spp, tensorIndexed.indices,
+    return self._handleTensor(tensor, tensorIndexed.indices,
                               self._logicalBox(tensorIndexed), offset, sliced)
+
+  @staticmethod
+  def _ints(values):
+    """Plain integers.
+
+    Indices and bounds arrive as numpy scalars, which are numbers everywhere
+    except where the description is written out -- `json` refuses an
+    `int64` -- so they are made ordinary here rather than at every use.
+    """
+    return [int(value) for value in values]
 
   def _alignment(self, memoryLayout):
     """The alignment the layout promises for a column, in bytes.
@@ -663,7 +690,8 @@ class ExportFactory(KernelFactory):
     if eqspp is None or eqspp.ndim == 0 or eqspp.count_nonzero() == 0:
       return None
     box = BoundingBox.fromSpp(eqspp)
-    return [[rng.start for rng in box], [rng.stop for rng in box]]
+    return [ExportFactory._ints(rng.start for rng in box),
+            ExportFactory._ints(rng.stop for rng in box)]
 
   def _scalarTensor(self, scalar):
     if isinstance(scalar, (int, float)): # TODO numpy types
@@ -673,17 +701,14 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': name,
         'addressing': '',
-        'eqspp': (),
         'datatype': str(self._arch.datatype),
         'storage': {
-          'shape': (),
+          'shape': [],
           'type': 'full'
         },
         # a scalar is passed by value; there is no address to promise anything about
         'alignment': 0,
-        'values': {
-          (): scalar
-        },
+        'values': {'kind': 'entries', 'data': [[[], scalar]]},
         'flags': {
           'temporary': False,
           'constant': True
@@ -693,10 +718,9 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': scalar.name(),
         'addressing': '',
-        'eqspp': (),
         'datatype': str(scalar.getDatatype(self._arch)),
         'storage': {
-          'shape': (),
+          'shape': [],
           'type': 'full'
         },
         # a scalar is passed by value; there is no address to promise anything about
@@ -710,24 +734,27 @@ class ExportFactory(KernelFactory):
     else:
       assert False
 
-    return self._handleTensor(tensor, (), ())
+    return self._handleTensor(tensor, [])
 
-  def _handleTensor(self, tensor, eqspp, indices, bbox=None, offset=None,
+  def _handleTensor(self, tensor, indices, bbox=None, offset=None,
                     sliced=False):
     if tensor['name'] not in self.tensors:
       self.tensors[tensor['name']] = tensor
-      self.generator.add_tensor(tensor)
     else:
       assert tensor == self.tensors[tensor['name']]
 
     # `bbox`, `offset` and `sliced` belong to this occurrence, not to the
     # tensor: two operands may name two different slices of the same thing.
+    # NOTE: the full list of non-zero indices used to travel with every
+    #       reference and nothing ever read it -- the bounding box is what
+    #       narrows a loop, and a sparse layout states its entries once, on
+    #       the tensor. For the `indices` example that list was 25 MiB of the
+    #       25.7 MiB description.
     return {
       'name': tensor['name'],
-      'spp': eqspp,
-      'indices': indices,
+      'indices': [str(index) for index in indices],
       'bbox': bbox,
-      'offset': list(offset) if offset is not None else None,
+      'offset': self._ints(offset) if offset is not None else None,
       'sliced': sliced
     }
 
@@ -764,7 +791,7 @@ class ExportFactory(KernelFactory):
       },
       'optype': str(node.optype)
     }
-    return self.generator.add_operation(description)
+    return self._emit(description)
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
@@ -782,7 +809,7 @@ class ExportFactory(KernelFactory):
       },
       'optype': str(node.optype)
     }
-    return self.generator.add_operation(description)
+    return self._emit(description)
 
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
@@ -844,4 +871,4 @@ class ExportFactory(KernelFactory):
       },
       # 'optype': node.optype
     }
-    return self.generator.add_operation(description)
+    return self._emit(description)

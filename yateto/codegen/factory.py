@@ -452,6 +452,11 @@ class ExportGenerator:
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
+  #: 4: `add` is a mask over the destination's axes rather than a bool. An
+  #:    exporter reading it as one gets the common case right by accident and
+  #:    a rank-0 destination wrong: the empty mask accumulates, and `bool([])`
+  #:    says it does not.
+  #:
   #: 3: a kernel arrives as one description rather than as a call per tensor
   #:    and per operation, and the description is data -- it survives
   #:    `json.dumps`, so it can be recorded, replayed and compared without
@@ -463,7 +468,7 @@ class ExportGenerator:
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 3
+  INTERFACE_VERSION = 4
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -758,6 +763,20 @@ class ExportFactory(KernelFactory):
       'sliced': sliced
     }
 
+  @staticmethod
+  def _addMask(dest, add):
+    """Which of the destination's axes the accumulated value spans.
+
+    `False` for an operation that overwrites. Otherwise the axes, stated the
+    way `target` states an operand's, because that is the same question: a
+    value spanning fewer axes than the destination is broadcast over the rest,
+    and indexing it by an axis it does not have reads somewhere else entirely.
+    A bare `True` could not say which, so it had to mean "all of them".
+    """
+    if not add:
+      return False
+    return list(range(len(dest['indices'])))
+
   def _handleCondition(self, condition):
     """A guard exports as a flat conjunction of literals.
 
@@ -787,7 +806,7 @@ class ExportFactory(KernelFactory):
       'condition': self._handleCondition(condition),
       'linear': {
         'alpha': self._scalarTensor(scalar),
-        'add': add,
+        'add': self._addMask(result, add),
       },
       'optype': str(node.optype)
     }
@@ -805,7 +824,7 @@ class ExportFactory(KernelFactory):
       'condition': self._handleCondition(condition),
       'linear': {
         'alpha': self._scalarTensor(scalar),
-        'add': add,
+        'add': self._addMask(result, add),
       },
       'optype': str(node.optype)
     }
@@ -867,7 +886,7 @@ class ExportFactory(KernelFactory):
       'target': target,
       'linear': {
         'alpha': self._scalarTensor(scalar),
-        'add': add,
+        'add': self._addMask(dest, add),
       },
       # 'optype': node.optype
     }

@@ -145,3 +145,38 @@ class TestStaysCorrect:
         mean = Scalar('mean')
         body = emit([C['ij'] <= yf.add(mean * A['ij'], yf.sqrt(B['ij']))])
         assert 'mean' in body
+
+
+class TestExport:
+    """The pass shapes loops, so it stays out of the graph that is exported."""
+
+    @staticmethod
+    def _cfg(exported):
+        from yateto.ast.cost import BoundingBoxCostEstimator
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        generator.add('k', C['ij'] <= yf.maximum(yf.sqrt(yf.add(A['ij'], B['ij'])),
+                                                 B['ij']))
+        kernel = generator.kernels()[0]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kernel.prepareUntilUnitTest(generator._arch)
+            kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, False, exported)
+        return kernel.cfg
+
+    @staticmethod
+    def _fused(cfg):
+        from yateto.ast.node import FusedElementwise
+        return any(pp.action is not None and pp.action.isRHSExpression()
+                   and isinstance(pp.action.term.node, FusedElementwise)
+                   for pp in cfg)
+
+    def test_the_emitted_graph_is_fused(self):
+        assert self._fused(self._cfg(frozenset()))
+
+    def test_the_exported_graph_is_not(self):
+        """An exporter writes no loops -- it hands the operations to a
+        generator that decides for itself -- and has no reading for a fused
+        node."""
+        assert not self._fused(self._cfg(frozenset({'cpu'})))

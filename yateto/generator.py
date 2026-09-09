@@ -75,7 +75,7 @@ class Kernel(object):
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
 
-  def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool):
+  def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool, exported=frozenset()):
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
@@ -116,7 +116,12 @@ class Kernel(object):
     if self.target == 'gpu' and enableFusedGemm:
       self.cfg = FindFusedGemms().visit(self.cfg)
       self.cfg = LivenessAnalysis().visit(self.cfg)
-    if self.target == 'cpu':
+    if self.target == 'cpu' and self.target not in exported:
+      # Not when the graph is exported rather than emitted. Fusing decides how
+      # the loops run, and that belongs to whoever writes them; an exporter
+      # writes none, it hands the operations to a generator that decides for
+      # itself. It also has no reading for a fused node, and should not need
+      # one to describe an operation.
       self.cfg = FindFusedElementwise().visit(self.cfg)
 
   def prefetch(self):
@@ -194,9 +199,9 @@ class KernelFamily(object):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest(arch)
 
-  def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
+  def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool, exported=frozenset()):
     for kernel in self._kernels.values():
-      kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
+      kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm, exported)
 
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
@@ -356,10 +361,10 @@ class Generator(object):
     print('Optimizing ASTs...')
     for kernel in self._kernels:
       print(f'{kernel.name} ({len(kernel.ast)} AST(s))')
-      kernel.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
+      kernel.prepareUntilCodeGen(cost_estimator, enableFusedGemm, frozenset(routine_exporters))
     for family in self._kernelFamilies.values():
       print(f'{family.name} ({sum(len(kernel.ast) for kernel in family.kernels())} AST(s))')
-      family.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
+      family.prepareUntilCodeGen(cost_estimator, enableFusedGemm, frozenset(routine_exporters))
 
     # Create mapping from namespace to kernel/family
     kernel_dict = {}

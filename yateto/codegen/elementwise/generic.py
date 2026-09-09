@@ -5,14 +5,17 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
 
-  def _affine(self, add, alpha, datatype):
+  def _affine(self, add, alpha):
+    """(flops, assigner) for `result <op>= alpha * value`.
+
+    `alpha` is the expression to scale by, or None where there is nothing to
+    scale by -- it has already been formatted, so it cannot be compared to one.
+    """
     flops = 1
-    # NOTE: format the scale factor in the *result's* datatype, so that e.g.
-    #       an int32 result does not get multiplied by a double literal
-    scale = '' if alpha == 1.0 else f'{scaleFactor(datatype, alpha)} * '
+    scale = '' if alpha is None else f'{alpha} * '
     assign = '+=' if add else '='
 
-    if alpha != 1.0: flops += 1
+    if alpha is not None: flops += 1
     if add: flops += 1
 
     return flops, lambda left, right: f'{left} {assign} {scale}{right};'
@@ -24,16 +27,20 @@ class Generic(object):
       writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
       initializeWithZero(cpp, d.result, writeBB)
 
-    flops, assigner = self._affine(d.add, d.alpha, d.result.datatype)
+    # NOTE: read the factor in the *result's* datatype, so that e.g. an int32
+    #       result does not get multiplied by a double literal
+    trivial = d.alpha == 1.0
+    with hoisted(cpp, d.result.datatype, d.alpha, '_alpha') as alpha:
+      flops, assigner = self._affine(d.add, None if trivial else alpha)
 
-    class ElementwiseBody(object):
-      def __call__(s):
-        args = [f'{arg.name}[{arg.memoryLayout.addressString(arg.indices)}]' for arg in d.terms]
-        opstr = d.optype.callstr(*d.fillTerms(args))
-        resultstr = f'{d.result.name}[{d.result.memoryLayout.addressString(d.result.indices)}]'
-        cpp(assigner(resultstr, opstr))
-        return flops
-    return forLoops(cpp, d.result.indices, d.loopRanges, ElementwiseBody())
+      class ElementwiseBody(object):
+        def __call__(s):
+          args = [f'{arg.name}[{arg.memoryLayout.addressString(arg.indices)}]' for arg in d.terms]
+          opstr = d.optype.callstr(*d.fillTerms(args))
+          resultstr = f'{d.result.name}[{d.result.memoryLayout.addressString(d.result.indices)}]'
+          cpp(assigner(resultstr, opstr))
+          return flops
+      return forLoops(cpp, d.result.indices, d.loopRanges, ElementwiseBody())
 
   def _generateUnrolled(self, cpp):
     """One statement per non-zero of the result.
@@ -48,7 +55,8 @@ class Generic(object):
     if not d.add:
       initializeWithZero(cpp, d.result)
 
-    flops, assigner = self._affine(d.add, d.alpha, d.result.datatype)
+    flops, assigner = self._affine(
+        d.add, None if d.alpha == 1.0 else scaleFactor(d.result.datatype, d.alpha))
 
     # where each operand's indices sit in the result's, and its pattern
     positions = [d.result.indices.positions(term.indices, sort=False) for term in d.terms]

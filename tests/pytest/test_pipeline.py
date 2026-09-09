@@ -183,3 +183,60 @@ class TestKernelFamily:
         # branch the Broadcast codegen is broken (see TestKnownBugs).
         for kernel in g.kernels():
             kernel.prepareUntilUnitTest(arch)
+
+
+class TestLoopShape:
+    """What the emitted loop nest looks like, which the compiler is sensitive to."""
+
+    @staticmethod
+    def _emit(statements, arch=None):
+        import pathlib
+        import tempfile
+        from yateto import useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        arch = arch or useArchitectureIdentifiedBy('dhsw')
+        generator = Generator(arch)
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return (pathlib.Path(out) / 'kernel.cpp').read_text()
+
+    def test_a_nest_is_one_iteration_space(self):
+        """A short innermost loop is unrolled away before a vectoriser sees it,
+        so the whole nest is marked rather than that one loop."""
+        A = Tensor('A', (20, 9))
+        C = Tensor('C', (20, 9))
+        code = self._emit([C['ij'] <= 2.0 * A['ij']])
+        assert '#pragma omp simd collapse(2)' in code
+
+    def test_a_named_factor_is_read_once(self):
+        """It is a member of the kernel object, and a store through one of its
+        pointer members may, as far as the compiler can tell, land on it."""
+        from yateto import Scalar
+        A = Tensor('A', (20, 9))
+        C = Tensor('C', (20, 9))
+        alpha = Scalar('alpha')
+        code = self._emit([C['ij'] <= alpha * A['ij']])
+        assert 'double const _alpha = alpha;' in code
+        body = code[code.index('k0::execute'):]
+        body = body[:body.index('\n  }\n')]
+        # once into the local, and only the local inside the nest
+        assert body.count('= alpha;') == 1
+        assert '_alpha * A' in body
+
+    def test_a_pinned_index_rules_the_clause_out(self):
+        """Unrolling puts a declaration between the loops; the nest is no
+        longer perfect and collapse would not be legal."""
+        import numpy as np
+        import yateto.functions as yf
+        from yateto.memory import CSCMemoryLayout
+        pattern = np.zeros((6, 6), dtype=bool)
+        pattern[0, 0] = pattern[1, 1] = pattern[3, 2] = True
+        A = Tensor('A', (6, 6), spp=pattern)
+        A.setMemoryLayout(CSCMemoryLayout)
+        B = Tensor('B', (6, 6), spp=pattern)
+        B.setMemoryLayout(CSCMemoryLayout)
+        C = Tensor('C', (6, 6))
+        code = self._emit([C['ij'] <= yf.add(A['ij'], B['ij'])])
+        assert 'collapse' not in code

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import contextlib
 from .. import aspp
 from ..type import AddressingMode, Datatype
 from ..ast.indices import BoundingBox
@@ -85,6 +87,25 @@ def scaleFactor(datatype, alpha):
 # emits its own loops into the same scope has to use it as well.
 INDEX_PREFIX = '_'
 
+@contextlib.contextmanager
+def hoisted(cpp, datatype, value, name):
+  """The value as an expression, read into a local first if it is a name.
+
+  A named scalar is a member of the kernel object, and as far as the compiler
+  can tell a store through one of its pointer members may land on it; reading
+  it once takes that question out of the loop. The local lives in a scope of
+  its own, since one kernel may well scale two statements by the same name.
+
+  A literal has no address, needs no local and gets no scope.
+  """
+  if isinstance(value, (int, float)):
+    yield scaleFactor(datatype, value)
+    return
+  with cpp.AnonymousScope():
+    cpp(f'{datatype.ctype()} const {name} = {value};')
+    yield name
+
+
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, fixed={}, indexNo=None):
   flops = 0
   firstLoop = False
@@ -96,6 +117,13 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX
     for index in indexNames:
       if index in fixed and not (ranges[index].start <= fixed[index] < ranges[index].stop):
         return 0
+    # A nest with nothing between its loops is one iteration space, and saying
+    # so beats marking the innermost loop alone: a short innermost loop is
+    # unrolled away before the vectoriser sees it, and what is left is scalar.
+    # A pinned index breaks the nesting, so it rules the clause out.
+    if pragmaSimd and len(indexNames) > 1 and not any(i in fixed for i in indexNames):
+      cpp(f'#pragma omp simd collapse({len(indexNames)})')
+      pragmaSimd = False
   if indexNo < 0:
     if firstLoop:
       with cpp.AnonymousScope():

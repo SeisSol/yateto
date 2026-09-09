@@ -151,6 +151,9 @@ class DenseMemoryLayout(MemoryLayout):
     self._stride = tuple(stride)
 
   def _alignBB(self):
+    if len(self._bbox) == 0:
+      # a tensor without axes has no column to line up
+      return
     if self.ALIGNMENT_ARCH is not None:
       self._range0 = self._bbox[0]
       rnew = Range( self.ALIGNMENT_ARCH.alignedLower(self._range0.start), self.ALIGNMENT_ARCH.alignedUpper(self._range0.stop) )
@@ -159,14 +162,20 @@ class DenseMemoryLayout(MemoryLayout):
       warnings.warn('Set architecture with DenseMemoryLayout.setAlignmentArch(arch) if you want to use the align stride feature.', UserWarning)
 
   def alignedStride(self):
-    if self.ALIGNMENT_ARCH is None:
+    """Whether the distance between two columns is a multiple of the alignment.
+
+    A tensor without axes has no columns and hence no such distance. That is
+    not a promise that happens to be false, it is the absence of one, and the
+    answer is the same either way: nothing to rely on.
+    """
+    if self.ALIGNMENT_ARCH is None or len(self._bbox) == 0:
       return False
     ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
     localOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].stop - self._bbox[0].start)
     return ldOk and localOk
 
   def mayVectorizeDim(self, dim):
-    if self.ALIGNMENT_ARCH is None:
+    if self.ALIGNMENT_ARCH is None or dim >= len(self._bbox):
       return False
     return self.ALIGNMENT_ARCH.checkAlignment(self._bbox[dim].size())
 

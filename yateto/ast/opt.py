@@ -181,10 +181,27 @@ def _optimalPlan(net):
     return size
 
   cost = [0] * count
+  # the largest intermediate a subtree has to hold: part of the tie-break, and
+  # what the kernel's scratch buffer ends up being
+  peak = [0] * count
   choice = [0] * count
   for k in range(n):
     subset = 1 << k
     cost[subset] = extent(mask[subset], subset) - extent(external[subset], subset)
+    # a leaf is an operand the caller passes, not something the kernel holds
+
+  def tieBreak(left, subset):
+    """How to choose between two trees of the same cost.
+
+    An index both operands carry and the result keeps is not a dimension of the
+    contraction, it is a loop around it: it shrinks the GEMM the pair becomes
+    and the vectoriser is left with what is inside. Its extent therefore comes
+    first, and the size of the larger operand second.
+    """
+    right = subset ^ left
+    batch = external[left] & external[right] & external[subset]
+    return (extent(batch, subset),
+            peak[left] if peak[left] > peak[right] else peak[right])
 
   for subset in range(3, count):
     if subset & (subset - 1) == 0:
@@ -192,6 +209,7 @@ def _optimalPlan(net):
     base = extent(external[subset], subset)
     best = sys.maxsize
     bestLeft = 0
+    bestKey = None
     low = subset & -subset
     rest = subset ^ low
     # the submasks of `rest`, with `low` pinned into the left half: that way
@@ -208,11 +226,22 @@ def _optimalPlan(net):
         if candidate < best:
           best = candidate
           bestLeft = left
+          bestKey = None
+        elif candidate == best:
+          # only a tie pays for the key, which is why it is not part of the cost
+          if bestKey is None:
+            bestKey = tieBreak(bestLeft, subset)
+          key = tieBreak(left, subset)
+          if key < bestKey:
+            bestLeft = left
+            bestKey = key
       if sub == 0:
         break
       sub = (sub - 1) & rest
     cost[subset] = best
     choice[subset] = bestLeft
+    held = peak[bestLeft] if peak[bestLeft] > peak[subset ^ bestLeft] else peak[subset ^ bestLeft]
+    peak[subset] = held if held > base else base
 
   def build(subset):
     if subset & (subset - 1) == 0:

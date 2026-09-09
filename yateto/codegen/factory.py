@@ -186,8 +186,9 @@ class OptimizedKernelFactory(KernelFactory):
     members = []
     for i, step in enumerate(node.steps):
       last = i + 1 == len(node.steps)
+      indices = step.reduction.term().indices if step.reduction is not None else node.indices
       terms = [locals[source] if source is not None
-               else IndexedTensorDescription.fromVar(next(supplied), node.indices)
+               else IndexedTensorDescription.fromVar(next(supplied), indices)
                for source in step.sources]
       local = None if last else f'_fused{i}'
       locals[i] = local

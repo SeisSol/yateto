@@ -128,16 +128,38 @@ class FusedGeneric(object):
       scale = '' if d.alpha == 1.0 else f'{alpha} * '
       assign = '+=' if d.add else '='
 
+      def emit(member, write):
+        """One step: a value, or an axis walked to make one."""
+        step = member.step
+        if step.reduction is None:
+          write(spell(member))
+          return 1
+        # a reduction opens an axis of its own inside the nest and accumulates
+        # over it; the loop variable is spelled the way forLoops spells one,
+        # since the two loops end up in the same scope
+        node = step.reduction
+        sumIndex = f'{INDEX_PREFIX}{node.sumIndexName()}'
+        rng = boundingBoxFromLoopRanges(node.term().indices,
+                                        loopRanges(member.terms[0], node.term().indices))[
+                node.term().indices.find(node.sumIndexName())]
+        acc = f'{member.local or "_acc"}'
+        cpp(f'{member.datatype.ctype()} {acc} = {node.optype.neutralLiteral(member.datatype)};')
+        with cpp.For(f'int {sumIndex} = {rng.start}; {sumIndex} < {rng.stop}; ++{sumIndex}'):
+          cpp(f'{acc} = {node.optype.callstr(acc, operand(member.terms[0]))};')
+        if member.local is None:
+          write(acc)
+        return rng.size()
+
       class FusedBody(object):
         def __call__(s):
           flops = 0
           for member in d.members[:-1]:
-            cpp(f'{member.datatype.ctype()} const {member.local} = {spell(member)};')
-            flops += 1
+            flops += emit(member, lambda expr, m=member:
+                          cpp(f'{m.datatype.ctype()} const {m.local} = {expr};'))
           last = d.members[-1]
           target = operand(d.result)
-          cpp(f'{target} {assign} {scale}({spell(last)});')
-          flops += 1
+          flops += emit(last, lambda expr:
+                        cpp(f'{target} {assign} {scale}({expr});'))
           if d.alpha != 1.0: flops += 1
           if d.add: flops += 1
           return flops

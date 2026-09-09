@@ -180,3 +180,37 @@ class TestExport:
         generator that decides for itself -- and has no reading for a fused
         node."""
         assert not self._fused(self._cfg(frozenset({'cpu'})))
+
+
+class TestReductionStep:
+    """A reduction walks an axis of its own inside the nest.
+
+    Only one that survives to the control-flow graph: a sum over a product is
+    folded into a contraction long before, and reaches the GEMM backends
+    instead. What is left is every other ring -- max, min, any, all, prod --
+    and sums over something that is not a product.
+    """
+
+    def test_a_reduction_and_what_reads_it_share_a_nest(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N,))
+        body = emit([C['i'] <= yf.sqrt(yf.max(yf.mul(A['ij'], B['ij']), 'j'))])
+        assert steps(body) > 0
+        assert 'std::max' in body and 'std::sqrt' in body
+
+    def test_the_accumulator_starts_at_the_ring_s_neutral_element(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N,))
+        body = emit([C['i'] <= yf.sqrt(yf.max(A['ij'], 'j'))])
+        assert 'infinity()' in body
+
+    def test_a_reduction_whose_result_walks_another_space_stays_apart(self):
+        """Its operand has one axis more than the nest; a step that walks a
+        different space is a nest of its own."""
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N,))
+        body = emit([C['i'] <= yf.max(yf.mul(A['ij'], B['ij']), 'j')])
+        # the product is its own nest, the reduction another
+        assert body.count('#pragma omp simd') == 2

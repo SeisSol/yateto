@@ -47,6 +47,13 @@ def add(g):
   R = Tensor('R', (N, N))
   g.add('sparse', R['ij'] <= yf.add(yf.maximum(P['ij'], Q['ij']), P['ij']))
 
+  # a reduction and what reads it: max survives to the graph, a sum over a
+  # product does not -- that is a contraction long before
+  W = Tensor('W', (N, N))
+  X = Tensor('X', (N, N))
+  red = Tensor('red', (N,))
+  g.add('reduced', red['i'] <= yf.sqrt(yf.max(yf.mul(W['ij'], X['ij']), 'j')))
+
   # two statements under different guards
   flag = Tensor('flag', (), datatype=Datatype.BOOL)
   S = Tensor('S', (N, N))

@@ -1,6 +1,6 @@
 from .graph import *
 from collections import deque
-from ..ast.node import Elementwise, FusedElementwise, LoopOverGEMM
+from ..ast.node import Elementwise, FusedElementwise, LoopOverGEMM, Reduction
 from ..ast.indices import BoundingBox, Indices
 import string
 from .fused_gemm_automata import Context as FusedGemmsContext
@@ -226,7 +226,16 @@ class FindFusedElementwise(object):
     box = str(BoundingBox.fromSpp(result.eqspp()))
     if action.isRHSExpression():
       node = action.term.node
-      if not isinstance(node, Elementwise) or node.eqspp() is None:
+      if node.eqspp() is None:
+        return None
+      if isinstance(node, Reduction):
+        # its operand walks the nest's space and one axis more, which the nest
+        # opens for it; the box check below is about the nest's axes, so it is
+        # made against the operand seen through the result's indices
+        if node.term().memoryLayout().isSparse():
+          return None
+        return (str(node.indices), box)
+      if not isinstance(node, Elementwise):
         return None
       operands = action.term.variableList()
       # the loop variables come from these names, so two steps that spell the
@@ -317,7 +326,10 @@ class FindFusedElementwise(object):
         outside = []
         produced = {}
         for k, action in enumerate(members):
-          if action.isRHSExpression():
+          if action.isRHSExpression() and isinstance(action.term.node, Reduction):
+            step = FusedElementwise.Step.fromReduction(action.term.node)
+            operands = action.term.variableList()
+          elif action.isRHSExpression():
             step = FusedElementwise.Step.fromElementwise(action.term.node)
             operands = action.term.variableList()
           else:

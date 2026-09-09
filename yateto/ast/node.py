@@ -651,6 +651,8 @@ class FusedElementwise(Op):
       self.add = add
       # per operand: the index of the step that wrote it, or None
       self.sources = [None] * operands
+      # a reduction walks an axis of its own inside the nest
+      self.reduction = None
 
     @classmethod
     def fromElementwise(cls, node):
@@ -660,6 +662,12 @@ class FusedElementwise(Op):
     @classmethod
     def scaling(cls, scalar, add):
       return cls(operands=1, scalar=scalar, add=add)
+
+    @classmethod
+    def fromReduction(cls, node):
+      step = cls(optype=node.optype, operands=1)
+      step.reduction = node
+      return step
 
     def fillTerms(self, args):
       if self.optype is None:

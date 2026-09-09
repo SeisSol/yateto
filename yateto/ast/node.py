@@ -13,6 +13,7 @@ class Node(ABC):
     self.indices = None
     self._children = []
     self._eqspp = None
+    self._boundingBox = None
     self.datatype = None
     self.prefetch = None
 
@@ -45,7 +46,15 @@ class Node(ABC):
     self._eqspp = spp
 
   def boundingBox(self):
-    return BoundingBox.fromSpp(self._eqspp)
+    # keyed on the identity of the pattern, so any replacement of _eqspp
+    # (setEqspp, setIndexPermutation, deepcopy) drops the cached box; the cache
+    # keeps the pattern alive, so no other object can take over its address
+    cached = self._boundingBox
+    if cached is not None and cached[0] is self._eqspp:
+      return cached[1]
+    box = BoundingBox.fromSpp(self._eqspp)
+    self._boundingBox = (self._eqspp, box)
+    return box
 
   @abstractmethod
   def memoryLayout(self):
@@ -280,7 +289,9 @@ class NAryOp(Node):
   """Mixin for operations whose indices are the merge of their operands'."""
 
   def deduceIndices(self):
-    indices = deepcopy(self[0].indices)
+    # Indices are built once and never written to afterwards, so the merge can
+    # start from the first child's object instead of a copy of it
+    indices = self[0].indices
     for i in range(1, len(self)):
       indices = indices.mergeStrict(self[i].indices)
     if not all(child.indices <= indices for child in self):

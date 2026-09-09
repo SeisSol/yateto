@@ -5,6 +5,29 @@ from abc import ABC, abstractmethod
 
 
 class CostEstimator(ABC):
+  """Estimates what a node costs, and tells the contraction search how far it
+  can go without building trees.
+
+  Besides `estimate`, an estimator declares two properties that the search in
+  ast/opt.py acts on:
+
+  * `searchModel` -- if the cost of a tree follows from the per-index ranges of
+    its leaves, it hands those ranges back and the search runs on an analytic
+    model: integers and bitmasks, with no AST node allocated before the winner
+    is known. None selects the enumeration instead.
+  * `planSignature` -- a hashable description of everything the estimator reads
+    beyond the index names and shapes of the leaves. It lets the search reuse a
+    contraction order across kernels, and is independent of `searchModel`: an
+    estimator whose verdict is reproducible from the signature can be cached
+    even when its cost does not decompose over the tree. None disables caching.
+  """
+
+  def searchModel(self, terms):
+    return None
+
+  def planSignature(self, terms):
+    return None
+
   def estimate(self, node):
     childCost = 0
     for child in node:
@@ -25,6 +48,14 @@ def isSummation(node):
   return node.optype == ops.Add()
 
 class ShapeCostEstimator(CostEstimator):
+  def searchModel(self, terms):
+    return [term.indices.ranges() for term in terms]
+
+  def planSignature(self, terms):
+    # the index names and shapes are the whole of it, and the search keys on
+    # those already
+    return (type(self).__name__,)
+
   def generic_estimate(self, node):
     return 0
 
@@ -58,6 +89,14 @@ class CachedCostEstimator(CostEstimator):
 
 
 class BoundingBoxCostEstimator(CachedCostEstimator):
+  def searchModel(self, terms):
+    return [[(r.start, r.stop) for r in term.boundingBox()] for term in terms]
+
+  def planSignature(self, terms):
+    return (type(self).__name__,
+            tuple(tuple((r.start, r.stop) for r in term.boundingBox())
+                  for term in terms))
+
   def __init__(self):
     super().__init__()
     self._cache = dict()
@@ -107,6 +146,17 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
   Note, the estimator includes GPU caching. This estimator is relevant to
   fused gemms kernels.
   """
+
+  # The cost of a subtree is not settled by its leaves alone: both
+  # estimate_Elementwise and estimate_Reduction divide by the extent of the
+  # leading dimension of the *left* operand, which depends on the shape of the
+  # subtree. Optimal substructure fails and a subset DP would hand back more
+  # expensive trees, so the analytic search does not apply. The inherited plan
+  # signature does: the cost still only reads the index names and bounding
+  # boxes of the leaves, so the same leaves yield the same contraction order.
+  def searchModel(self, terms):
+    return None
+
   def __init__(self):
     super().__init__()
     self._lead_dim = 0

@@ -157,8 +157,13 @@ class general(ASpp):
       reduction = self.sumAxes(self.pattern, cache, axes)
       nonzeros = np.where(reduction)
       assert len(nonzeros) == 1
-      m, M = nonzeros[0][[0,-1]]
-      bounds.append((m, M))
+      if len(nonzeros[0]) == 0:
+        # nothing is non-zero along this axis, and an inclusive upper bound of
+        # -1 turns into the empty range in BoundingBox.fromSpp
+        bounds.append((0, -1))
+      else:
+        m, M = nonzeros[0][[0,-1]]
+        bounds.append((m, M))
     return bounds
 
   def nonzero(self):

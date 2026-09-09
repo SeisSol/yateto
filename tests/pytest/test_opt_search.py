@@ -258,3 +258,26 @@ def test_the_fused_estimator_still_shares_a_plan_signature():
     node = _network(['ij', 'jk'], 'ik', dict(i=4, j=5, k=6))
     terms = list(node)
     assert FusedGemmsBoundingBoxCostEstimator().planSignature(terms) is not None
+
+
+def test_a_reduction_over_a_plain_term_is_estimated():
+    """The fused estimator also sees reductions with no product underneath.
+
+    They arise whenever the target indices are narrower than the contraction's
+    own, as when an equivalent sparsity pattern is computed for one operand.
+    """
+    node = _network(['ij', 'jk', 'kl'], 'il', dict(i=4, j=5, k=3, l=6))
+    operands = list(node)
+    estimator = FusedGemmsBoundingBoxCostEstimator()
+    tree = opt.strengthReduction([copy.deepcopy(t) for t in operands],
+                                 operands[0].indices, estimator)
+    assert tree is not None
+
+
+def test_a_rank_zero_product_is_estimated():
+    """Both operands rank-0: there is no leading dimension to divide by."""
+    node = _network(['', ''], '', {})
+    operands = list(node)
+    tree = opt.strengthReduction([copy.deepcopy(t) for t in operands],
+                                 node.indices, FusedGemmsBoundingBoxCostEstimator())
+    assert tree is not None

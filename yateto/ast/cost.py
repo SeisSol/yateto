@@ -41,11 +41,15 @@ class CostEstimator(ABC):
     pass
 
 def isProduct(node):
-  """A binary multiplication -- the shape a contraction is built from."""
-  return node.optype == ops.Mul() and len(node) == 2
+  """A binary multiplication -- the shape a contraction is built from.
+
+  Total over nodes: an operand of a contraction may be any node, and only
+  those carrying an operation can be one of these two shapes.
+  """
+  return getattr(node, 'optype', None) == ops.Mul() and len(node) == 2
 
 def isSummation(node):
-  return node.optype == ops.Add()
+  return getattr(node, 'optype', None) == ops.Add()
 
 class ShapeCostEstimator(CostEstimator):
   def searchModel(self, terms):
@@ -181,17 +185,28 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     else:
       return node[0], node[1]
 
+  def _perThread(self, cost, term):
+    """Divide by what the leading dimension parallelises over.
+
+    A rank-0 term has no leading dimension -- which happens when both operands
+    of a product are rank-0, since _get_terms can only move one of them out of
+    the way -- and then every thread does the whole of the work.
+    """
+    bb = self._cache[term]
+    if len(bb) == 0:
+      return cost
+    return cost / bb[self._lead_dim].size()
+
+  def _leadIndex(self, node):
+    return node.indices[self._lead_dim] if len(node.indices) > 0 else None
+
   def estimate_Elementwise(self, node):
     if not isProduct(node):
       return super().estimate_Elementwise(node)
     cost = super().estimate_Elementwise(node)
     left_term, right_term = self._get_terms(node)
 
-    # NOTE: the case rank-0 tensor product rank-0 tensor is currently ill-supported here,
-    # (we only save against _one_ rank-0 tensor in self._get_terms)
-
-    bb = self._cache[left_term]
-    cost /= bb[self._lead_dim].size()
+    cost = self._perThread(cost, left_term)
 
     # take the union of all cached nodes
     self._loaded_to_gpu_cache[node] = self._loaded_to_gpu_cache[left_term].union(self._loaded_to_gpu_cache[right_term])
@@ -202,7 +217,7 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
       rbb = self._cache[right_term]
       extra_cost += rbb.size()
 
-    if node.indices[self._lead_dim] != left_term.indices[self._lead_dim]:
+    if self._leadIndex(node) != self._leadIndex(left_term):
       if left_term not in self._loaded_to_gpu_cache[node]:
         self._loaded_to_gpu_cache[node].add(left_term)
         lbb = self._cache[left_term]
@@ -222,15 +237,16 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
     while isinstance(child, Reduction) and isSummation(child):
       child = child.term()
 
-    left_term, _ = self._get_terms(child)
-    bb = self._cache[left_term]
+    # a reduction may also sit straight on a term nothing was contracted into,
+    # and then that term is what the leading dimension parallelises over
+    left_term = self._get_terms(child)[0] if isProduct(child) else child
 
     # we will have visited node.term() as well at this point
     # (but we need to add ourselves as well)
     self._loaded_to_gpu_cache[node] = set(self._loaded_to_gpu_cache[node.term()])
     self._loaded_to_gpu_cache[node].add(node)
 
-    return cost / bb[self._lead_dim].size()
+    return self._perThread(cost, left_term)
 
 
 class ExactCost(CachedCostEstimator):

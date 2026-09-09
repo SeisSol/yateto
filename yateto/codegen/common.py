@@ -73,6 +73,18 @@ class IndexedTensorDescription(TensorDescription):
         addressing = var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
+def operand(term):
+  """How the generated code reads an operand.
+
+  A by-value operand is the value itself: it has a name in the kernel's
+  signature and no storage to address. Everything else is read through its
+  memory layout.
+  """
+  if term.addressing == AddressingMode.SCALAR:
+    return term.name
+  return f'{term.name}[{term.memoryLayout.addressString(term.indices)}]'
+
+
 def scaleFactor(datatype, alpha):
   """Spell a scale factor in the result's datatype.
 

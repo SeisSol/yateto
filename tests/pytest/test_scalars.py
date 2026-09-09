@@ -318,3 +318,45 @@ class TestScaledOperations:
         body = body[:body.index('\n  }\n')]
         assert 'int32_t>(2LL)' in body
         assert '2.0' not in body
+
+
+class TestByValueOperand:
+    """A by-value operand stays by value wherever it appears."""
+
+    @staticmethod
+    def _emit(statements):
+        import pathlib
+        import tempfile
+        from yateto import Generator, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return ((pathlib.Path(out) / 'kernel.cpp').read_text(),
+                    (pathlib.Path(out) / 'kernel.h').read_text())
+
+    def test_an_operand_is_read_by_name(self):
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        beta = Scalar('beta')
+        code, header = self._emit([C['ij'] <= yf.add(beta, A['ij'])])
+        assert 'double beta' in header
+        assert 'beta[0]' not in code
+
+    def test_one_scalar_used_two_ways_is_declared_once(self):
+        """As a factor it went through ScalarsSet and as an operand through the
+        variables, so the kernel declared the name twice with two types."""
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        beta = Scalar('beta')
+        # one kernel, two statements: the same name reached both collections
+        code, header = self._emit([[C['ij'] <= beta * A['ij'],
+                                    C['ij'] <= yf.add(beta, B['ij'])]])
+        assert header.count('double beta') == 1
+        assert 'double const* beta' not in header
+        assert 'beta[0]' not in code

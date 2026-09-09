@@ -40,7 +40,7 @@ class Generic(object):
 
       class ElementwiseBody(object):
         def __call__(s):
-          args = [f'{arg.name}[{arg.memoryLayout.addressString(arg.indices)}]' for arg in d.terms]
+          args = [operand(arg) for arg in d.terms]
           opstr = d.optype.callstr(*d.fillTerms(args))
           resultstr = f'{d.result.name}[{d.result.memoryLayout.addressString(d.result.indices)}]'
           cpp(assigner(resultstr, opstr))
@@ -73,7 +73,9 @@ class Generic(object):
       args = []
       for term, position, pattern in zip(d.terms, positions, patterns):
         termEntry = tuple(entry[position] for position in position)
-        if pattern[termEntry]:
+        if term.addressing == AddressingMode.SCALAR:
+          args.append(term.name)
+        elif pattern[termEntry]:
           args.append(f'{term.name}[{term.memoryLayout.address(termEntry)}]')
         else:
           args.append(term.datatype.literal(0))

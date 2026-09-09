@@ -87,12 +87,21 @@ class Node(ABC):
     return reshaped.broadcast(bcst)
 
   @staticmethod
+  def _operand(value):
+    """A tensor written without indices is the rank-0 operand of that tensor.
+
+    Which is what a scalar is: it has a shape, a layout and a name, and only
+    its calling convention sets it apart. Anything else -- a number -- is a
+    literal, and Elementwise carries those as templates, since a literal needs
+    neither storage nor a name.
+    """
+    return value[''] if isinstance(value, Tensor) else value
+
+  @staticmethod
   def _scalarOperand(value):
     """Turn a scale factor into an operand.
 
-    A number stays a number: Elementwise carries non-node operands as templates,
-    and a literal needs neither storage nor a name. A named scalar becomes a
-    rank-0 operand.
+    A number stays a number, and a named scalar becomes a rank-0 operand.
     """
     if isinstance(value, Node):
       return value
@@ -654,6 +663,12 @@ class Elementwise(NAryOp, Op):
   def __init__(self, optype: ops.Operation, *terms):
     optype.checkArity(len(terms))
 
+    # A tensor handed over without indices is an operand, not a template: it
+    # has a name the kernel has to declare and a value the caller sets, and
+    # writing it into the expression as if it were a literal leaves the
+    # generated code naming something that was never declared.
+    terms = tuple(Node._operand(term) for term in terms)
+
     nodeTerms = [term for term in terms if isinstance(term, Node)]
     if len(nodeTerms) == 0:
       raise ValueError('Elementwise needs at least one tensor-valued operand.')
@@ -783,7 +798,7 @@ class Reduction(UnaryOp):
 
 class Accumulate(NAryOp, Op):
   def __init__(self, optype, *operands):
-    super().__init__(*operands)
+    super().__init__(*[Node._operand(operand) for operand in operands])
 
     self.optype = optype
     self._deduceIndicesIfPossible()

@@ -1,4 +1,5 @@
 from ..ast.node import Node, FusedGEMMs, LoopOverGEMM
+from .. import ops
 from ..ast.indices import Indices
 from collections import OrderedDict
 from typing import Dict, List
@@ -190,7 +191,11 @@ class ProgramAction(object):
     return self.add
 
   def hasTrivialScalar(self):
-    return self.scalar is None or self.scalar == 1.0
+    # One, because a scaling is a multiplication: Elementwise.scalingOperands
+    # only recognises one under ops.Mul(), which is also the only ring the
+    # contraction backends implement. A scaling under another ring would need
+    # that operation's neutral element here.
+    return self.scalar is None or self.scalar == ops.Mul().neutral()
 
   def variables(self):
     V = self.term.variables()

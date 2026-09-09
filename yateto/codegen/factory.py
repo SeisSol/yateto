@@ -311,7 +311,9 @@ class UnitTestFactory(KernelFactory):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
 
     if scalar and scalar != 1.0:
-      termTerm = f'{scalar} * {termTerm}'
+      # parenthesised: `*` binds tighter than the operators an operation may
+      # spell itself with, so the factor would otherwise land on one operand
+      termTerm = f'{scalar} * ({termTerm})'
 
     assign = '+=' if add else '='
 

@@ -268,3 +268,53 @@ class TestScalarOperand:
         C = Tensor('C', (8, 8))
         code, header = self._emit([C['ij'] <= yf.maximum(2.5, A['ij'])])
         assert '2.5' in code
+
+
+class TestScaledOperations:
+    """A factor applies to the operation's result, not to its first operand."""
+
+    @staticmethod
+    def _emit(statements):
+        import pathlib
+        import tempfile
+        from yateto import Generator, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return (pathlib.Path(out) / 'kernel.cpp').read_text()
+
+    def test_a_scaled_operation_is_parenthesised(self):
+        """`*` binds tighter than `+`, `&`, `|`, `^` and every comparison."""
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        code = self._emit([C['ij'] <= 2.0 * yf.add(A['ij'], A['ij'])])
+        assert '2.0 * ((' in code
+
+    def test_a_boolean_result_is_not_scaled(self):
+        """Every non-zero factor is the same boolean, so it would be lost."""
+        import pytest as _pytest
+        import yateto.functions as yf
+        A = Tensor('A', (N, N), datatype=Datatype.BOOL)
+        S = Tensor('S', (N, N), datatype=Datatype.BOOL)
+        with _pytest.raises(ValueError, match='boolean'):
+            self._emit([S['ij'] <= 2.0 * yf.logical_and(A['ij'], A['ij'])])
+
+    def test_an_integer_result_is_not_scaled_by_a_fraction(self):
+        import pytest as _pytest
+        AI = Tensor('AI', (N, N), datatype=Datatype.I32)
+        CI = Tensor('CI', (N, N), datatype=Datatype.I32)
+        with _pytest.raises(ValueError, match='truncate'):
+            self._emit([CI['ij'] <= 2.5 * AI['ij']])
+
+    def test_a_whole_factor_on_an_integer_result_is_fine(self):
+        AI = Tensor('AI', (N, N), datatype=Datatype.I32)
+        CI = Tensor('CI', (N, N), datatype=Datatype.I32)
+        code = self._emit([CI['ij'] <= 2.0 * AI['ij']])
+        body = code[code.index('k0::execute'):]
+        body = body[:body.index('\n  }\n')]
+        assert 'int32_t>(2LL)' in body
+        assert '2.0' not in body

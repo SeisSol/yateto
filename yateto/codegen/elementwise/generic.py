@@ -12,13 +12,18 @@ class Generic(object):
     scale by -- it has already been formatted, so it cannot be compared to one.
     """
     flops = 1
-    scale = '' if alpha is None else f'{alpha} * '
     assign = '+=' if add else '='
 
     if alpha is not None: flops += 1
     if add: flops += 1
 
-    return flops, lambda left, right: f'{left} {assign} {scale}{right};'
+    # NOTE: the operation is parenthesised before the factor is applied to it.
+    #       `*` binds tighter than `&`, `|`, `^`, `+` and every comparison, so
+    #       `alpha * a & b` is `(alpha * a) & b` -- the factor would land on
+    #       the first operand instead of on the result.
+    if alpha is None:
+      return flops, lambda left, right: f'{left} {assign} {right};'
+    return flops, lambda left, right: f'{left} {assign} {alpha} * ({right});'
 
   def _generateDenseDense(self, cpp):
     d = self._descr

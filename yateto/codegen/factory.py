@@ -4,7 +4,7 @@ from ..ast.indices import BoundingBox, Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
-from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
+from .common import forLoops, loopRanges, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
 from . import copyscaleadd, log, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
@@ -174,6 +174,27 @@ class OptimizedKernelFactory(KernelFactory):
       nodeTermIndices = node.nodeTermIndices
     )
     generator = elementwise.generator(self._arch, description, self._target)
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+
+  def create_FusedElementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    # The pass collected the operands step by step, so walking the steps the
+    # same way pairs each one with its variable again. A step whose operand is
+    # an earlier step's result reads that step's local instead.
+    resultDescr = IndexedTensorDescription.fromNode(result, node)
+    supplied = iter(arguments)
+    locals = {}
+    members = []
+    for i, step in enumerate(node.steps):
+      last = i + 1 == len(node.steps)
+      terms = [locals[source] if source is not None
+               else IndexedTensorDescription.fromVar(next(supplied), node.indices)
+               for source in step.sources]
+      local = None if last else f'_fused{i}'
+      locals[i] = local
+      members.append(elementwise.FusedMember(step, terms, local, resultDescr.datatype))
+    description = elementwise.FusedDescription(
+      scalar, add, resultDescr, members, loopRanges(resultDescr, resultDescr.indices))
+    generator = elementwise.fusedGenerator(self._arch, description, self._target)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):

@@ -1,5 +1,5 @@
 from ..common import *
-from .generic import Generic
+from .generic import Generic, FusedGeneric
 
 from ...ops import Operation
 
@@ -40,8 +40,41 @@ class Description(object):
     return [args[index] if template is None else template
             for index, template in zip(self.nodeTermIndices, self.termTemplate)]
 
+class FusedMember(object):
+  """One step of a fused nest.
+
+  `terms` holds, per operand, either an IndexedTensorDescription to read
+  through or the name of a local an earlier step wrote. `local` is the name
+  this step writes, or None for the last one, which writes the result.
+  """
+
+  def __init__(self, step, terms, local, datatype):
+    self.step = step
+    self.terms = terms
+    self.local = local
+    self.datatype = datatype
+
+
+class FusedDescription(object):
+  """Several element-wise steps over one index space."""
+
+  def __init__(self, alpha, add, result, members, loopRanges):
+    self.alpha = alpha
+    self.add = add
+    self.result = result
+    self.members = members
+    self.loopRanges = loopRanges
+
+
 def generator(arch, descr, target):
   if target == 'cpu':
     return Generic(arch, descr)
   elif target == 'gpu':
     raise RuntimeError("Elementwise operation has not been implemented for GPU-like architectures. At least not like this.")
+
+def fusedGenerator(arch, descr, target):
+  if target == 'cpu':
+    return FusedGeneric(arch, descr)
+  raise RuntimeError('Fused element-wise steps are a CPU thing: on a device the '
+                     'loop nest is the kernel launch, and putting several of '
+                     'them together is the external generator\'s business.')

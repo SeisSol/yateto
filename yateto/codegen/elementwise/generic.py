@@ -92,3 +92,54 @@ class Generic(object):
       return self._generateUnrolled(cpp)
 
     return self._generateDenseDense(cpp)
+
+
+class FusedGeneric(object):
+  """Several element-wise steps emitted into one loop nest.
+
+  A result that does not leave the nest becomes a local of the loop body: the
+  buffer it used to occupy disappears, and so does the pass over it.
+  """
+
+  def __init__(self, arch, descr):
+    self._arch = arch
+    self._descr = descr
+
+  def generate(self, cpp, routineCache):
+    d = self._descr
+
+    if not d.add:
+      writeBB = boundingBoxFromLoopRanges(d.result.indices, d.loopRanges)
+      initializeWithZero(cpp, d.result, writeBB)
+
+    read = lambda term: term if isinstance(term, str) else operand(term)
+
+    def spell(member):
+      args = [read(term) for term in member.terms]
+      step = member.step
+      if step.optype is not None:
+        return step.optype.callstr(*step.fillTerms(args))
+      # a scaling: the factor written in the type it is applied in
+      if step.scalar is None or step.scalar == 1.0:
+        return args[0]
+      return f'{scaleFactor(member.datatype, step.scalar)} * {args[0]}'
+
+    with hoisted(cpp, d.result.datatype, d.alpha, '_alpha') as alpha:
+      scale = '' if d.alpha == 1.0 else f'{alpha} * '
+      assign = '+=' if d.add else '='
+
+      class FusedBody(object):
+        def __call__(s):
+          flops = 0
+          for member in d.members[:-1]:
+            cpp(f'{member.datatype.ctype()} const {member.local} = {spell(member)};')
+            flops += 1
+          last = d.members[-1]
+          target = operand(d.result)
+          cpp(f'{target} {assign} {scale}({spell(last)});')
+          flops += 1
+          if d.alpha != 1.0: flops += 1
+          if d.add: flops += 1
+          return flops
+
+      return forLoops(cpp, d.result.indices, d.loopRanges, FusedBody())

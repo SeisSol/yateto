@@ -116,6 +116,8 @@ class Kernel(object):
     if self.target == 'gpu' and enableFusedGemm:
       self.cfg = FindFusedGemms().visit(self.cfg)
       self.cfg = LivenessAnalysis().visit(self.cfg)
+    if self.target == 'cpu':
+      self.cfg = FindFusedElementwise().visit(self.cfg)
 
   def prefetch(self):
     return self._prefetch

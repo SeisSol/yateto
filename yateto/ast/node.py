@@ -627,6 +627,66 @@ class FusedGEMMs(Op):
   def is_empty(self):
     return len(self._children) == 0
 
+class FusedElementwise(Op):
+  """Several element-wise steps sharing one loop nest.
+
+  A step is either an operation over its operands or a scaling of one operand,
+  which is the same thing seen from the control-flow graph, where a scaling is
+  an action's factor rather than a node. Each step writes what a later one
+  reads, and none of those intermediates leaves the nest, so they become
+  locals rather than buffers. The last step produces the result.
+
+  The node carries the steps rather than AST children: a scaling has no node
+  of its own to be a child.
+  """
+
+  class Step(object):
+    def __init__(self, optype=None, termTemplate=None, nodeTermIndices=None,
+                 operands=1, scalar=None, add=False):
+      self.optype = optype
+      self.termTemplate = termTemplate
+      self.nodeTermIndices = nodeTermIndices
+      self.operands = operands
+      self.scalar = scalar
+      self.add = add
+      # per operand: the index of the step that wrote it, or None
+      self.sources = [None] * operands
+
+    @classmethod
+    def fromElementwise(cls, node):
+      return cls(optype=node.optype, termTemplate=node.termTemplate,
+                 nodeTermIndices=node.nodeTermIndices, operands=len(node))
+
+    @classmethod
+    def scaling(cls, scalar, add):
+      return cls(operands=1, scalar=scalar, add=add)
+
+    def fillTerms(self, args):
+      if self.optype is None:
+        return args
+      return [args[index] if template is None else template
+              for index, template in zip(self.nodeTermIndices, self.termTemplate)]
+
+  def __init__(self, steps, indices):
+    super().__init__()
+    self.steps = steps
+    self.indices = indices
+
+  def stepScalars(self):
+    """The factors the steps carry, which are the kernel's to declare."""
+    return [step.scalar for step in self.steps if step.scalar is not None]
+
+  def nonZeroFlops(self):
+    return self.eqspp().count_nonzero() * len(self.steps)
+
+  def computeSparsityPattern(self, *spps):
+    return self.eqspp()
+
+  def __str__(self):
+    what = ', '.join(str(step.optype) if step.optype is not None else 'scale'
+                     for step in self.steps)
+    return f'{type(self).__name__}[{self.indices}]({what})'
+
 class IfThenElse(Op):
   def __init__(self, condition, yesTerm, noTerm):
     if isinstance(condition, Node):

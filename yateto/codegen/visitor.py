@@ -9,7 +9,6 @@ from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsL
 from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
-from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux, KernelAttributes

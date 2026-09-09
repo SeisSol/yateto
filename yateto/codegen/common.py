@@ -253,7 +253,7 @@ class BatchedOperationsAux:
     if term.is_compute_constant or term.is_temporary:
       return '0'
     else:
-      return f'{self.EXTRA_OFFSET_NAME}_{term.name}'
+      return f'{cls.EXTRA_OFFSET_NAME}_{term.name}'
 
 class TinytcKernelArgument:
 

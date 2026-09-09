@@ -688,7 +688,6 @@ class UnitTestGenerator(KernelGenerator):
          prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
          cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
              initNS = InitializerGenerator.INIT_NAMESPACE,
-             supportNS = SUPPORT_LIBRARY_NAMESPACE,
              groupTemplate=self._groupTemplate(var.tensor),
              prefix=prefix,
              baseName=var.tensor.baseName(),

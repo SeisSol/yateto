@@ -160,13 +160,6 @@ class Generic(object):
   def generate(self, cpp, routineCache, gemm_cfg):
     d = self._descr
 
-    A = d.leftTerm.indices - d.loopIndices
-    B = d.rightTerm.indices - d.loopIndices
-    C = d.result.indices - d.loopIndices
-    Im = set(A) & set(C)
-    In = set(B) & set(C)
-    Ik = set(A) & set(B)
-
     unrollNeeded = set()
     if d.leftTerm.memoryLayout.isSparse():
       unrollNeeded |= set(d.leftTerm.indices)

@@ -10,7 +10,6 @@ from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
 from ..common import BatchedOperationsAux, KernelAttributes, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, toTinyTCType, toTinyTCImmediate
 from ..tiny_tensor_language import *
 from ...type import Datatype
-import importlib.util
 
 
 # Optional modules
@@ -318,7 +317,6 @@ class ExecuteGemmGen(RoutineGenerator):
       cpp.includeSys('immintrin.h')
 
   def _callGenerator(self, argList):
-    resultCode = 1
     try:
       strcmd = [str(arg) for arg in argList]
       result = subprocess.run(strcmd, capture_output=True, text=True)
@@ -530,13 +528,8 @@ class LibxsmmGemmGen(ExecuteGemmGen):
     ldC = self._gemmDescr['LDC']
     alpha = self._gemmDescr['alpha']
     beta = self._gemmDescr['beta']
-    alignedA = self._gemmDescr['alignedA']
-    alignedC = self._gemmDescr['alignedC']
-    prefetch = self._gemmDescr['prefetch']
     transA = self._gemmDescr['transA']
     transB = self._gemmDescr['transB']
-    datatypeA = self._gemmDescr['datatypeA']
-    datatypeB = self._gemmDescr['datatypeB']
     datatypeC = self._gemmDescr['datatypeC']
 
     flags = ["LIBXSMM_GEMM_FLAG_NONE"]
@@ -549,9 +542,9 @@ class LibxsmmGemmGen(ExecuteGemmGen):
     # Enabling alignedC leads to wrong results currenty.
     # See:
     # https://github.com/SeisSol/yateto/issues/15
-    #if alignedA:
+    #if self._gemmDescr['alignedA']:
     #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_A"]
-    #if alignedC:
+    #if self._gemmDescr['alignedC']:
     #flags += ["LIBXSMM_GEMM_FLAG_ALIGN_C"]
     libxsmm_flag_str = " | ".join(flags)
 
@@ -578,7 +571,6 @@ static auto {kernel_var_name} = libxsmm_mmfunction<{prec}>(
            alpha=alpha, beta=beta,
            flag=libxsmm_flag_str,
            prefetch_flag=prefetch_flag,
-           prefetch=prefetch,
  )
 
   def _call(self, routineName):

@@ -5,7 +5,7 @@ from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
 from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
-from . import copyscaleadd, log, product, fused_gemms, elementwise, reduction
+from . import copyscaleadd, log, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
 from ..ops import Add, Mul
@@ -161,22 +161,7 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    # a binary product has its own backend, which can also unroll a CSC operand
-    if node.optype == Mul() and len(node) == 2:
-      return self._product(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
     return self._elementwise(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
-
-  def _product(self, node, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
-    assert len(arguments) == 2
-    description = product.Description(
-      alpha = scalar,
-      add = add,
-      result = IndexedTensorDescription.fromNode(result, node),
-      leftTerm = IndexedTensorDescription.fromNode(arguments[0], node[0]),
-      rightTerm = IndexedTensorDescription.fromNode(arguments[1], node[1])
-    )
-    generator = product.generator(self._arch, description, self._target)
-    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
 
   def _elementwise(self, node, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
     description = elementwise.Description(
@@ -275,20 +260,9 @@ class UnitTestFactory(KernelFactory):
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
 
-  def _product(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     # the loops below run over node.indices, so the address strings have to be
     # built from those very indices
-    resultTerm = self._formatTerm(result, node.indices)
-
-    argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
-    termTerm = f'({argTerms[0]}) * ({argTerms[1]})'
-
-    return self._conditional(condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices))
-
-  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    if node.optype == Mul() and len(node) == 2:
-      return self._product(node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg)
-
     resultTerm = self._formatTerm(result, node.indices)
 
     argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]

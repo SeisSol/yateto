@@ -64,6 +64,16 @@ class Operation:
         """
         return _denseSpp(spps)
 
+    def preservesZero(self):
+        """Whether all-zero operands give an all-zero result.
+
+        Read off `sparsityResult` rather than declared separately, so that an
+        operation cannot answer this one way and pattern the other.
+        """
+        arity = self.ARITY if self.ARITY is not None else 2
+        zero = aspp.general(np.zeros((1,), dtype=bool))
+        return self.sparsityResult([zero] * arity).count_nonzero() == 0
+
     def checkArity(self, nargs):
         if self.ARITY is not None and nargs != self.ARITY:
             raise ValueError(f'{self} takes {self.ARITY} argument(s), got {nargs}.')
@@ -253,8 +263,11 @@ class Div(CBinaryOperatorMixin, BinaryArgsMixin, Operation):
     def call(self, *args):
         return args[0] / args[1]
     def sparsityResult(self, spps):
-        # 0/x == 0, but x/0 is not zero -- the numerator decides.
-        return spps[0]
+        # 0/x is 0, so the numerator decides -- but only where the denominator
+        # is known to be non-zero, since 0/0 is NaN and NaN is not a zero we may
+        # claim. Dividing by a structurally sparse tensor divides by zero
+        # somewhere, and the result is not sparse anywhere.
+        return spps[0] if spps[1].is_dense() else _denseSpp(spps)
 
 
 class Add(CBinaryOperatorMixin, BinaryArgsMixin, CommutativeMonoidMixin, ZeroPreservingMixin, Operation):

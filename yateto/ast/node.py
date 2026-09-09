@@ -770,6 +770,11 @@ class Reduction(UnaryOp):
   def computeSparsityPattern(self, *spps):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    if not self.optype.preservesZero():
+      # folding an all-zero slice need not give zero, so nothing can be ruled out
+      return aspp.dense(self.indices.shape())
+    # the fold is over slices that are all zero unless one of them is not, which
+    # is what the union along the reduced axis says
     return spp.indexSum(self.term().indices, self.indices)
 
   def __str__(self):

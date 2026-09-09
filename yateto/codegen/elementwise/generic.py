@@ -29,19 +29,51 @@ class Generic(object):
     class ElementwiseBody(object):
       def __call__(s):
         args = [f'{arg.name}[{arg.memoryLayout.addressString(arg.indices)}]' for arg in d.terms]
-        fullArgs = [args[index] if template is None else template for index, template in zip(d.nodeTermIndices, d.termTemplate)]
-        opstr = d.optype.callstr(*fullArgs)
+        opstr = d.optype.callstr(*d.fillTerms(args))
         resultstr = f'{d.result.name}[{d.result.memoryLayout.addressString(d.result.indices)}]'
         cpp(assigner(resultstr, opstr))
         return flops
     return forLoops(cpp, d.result.indices, d.loopRanges, ElementwiseBody())
 
-  def generate(self, cpp, routineCache):
+  def _generateUnrolled(self, cpp):
+    """One statement per non-zero of the result.
+
+    A sparse operand has no address expression to loop over, so the entries are
+    written out. An operand that is structurally zero at an entry is spelled as
+    a literal zero instead of being read -- it has no address to read from, and
+    it lets the compiler fold the operation away where the zero decides it.
+    """
     d = self._descr
 
-    if any(d.isSparse):
-      raise NotImplementedError(
-        'Element-wise operations on sparse operands are not implemented yet: '
-        'they would have to be emitted by unrolling.')
+    if not d.add:
+      initializeWithZero(cpp, d.result)
+
+    flops, assigner = self._affine(d.add, d.alpha, d.result.datatype)
+
+    # where each operand's indices sit in the result's, and its pattern
+    positions = [d.result.indices.positions(term.indices, sort=False) for term in d.terms]
+    patterns = [term.eqspp.as_ndarray() for term in d.terms]
+
+    total = 0
+    nonzeros = d.result.eqspp.nonzero()
+    for entry in sorted(zip(*nonzeros), key=lambda x: x[::-1]):
+      args = []
+      for term, position, pattern in zip(d.terms, positions, patterns):
+        termEntry = tuple(entry[position] for position in position)
+        if pattern[termEntry]:
+          args.append(f'{term.name}[{term.memoryLayout.address(termEntry)}]')
+        else:
+          args.append(term.datatype.literal(0))
+      resultstr = f'{d.result.name}[{d.result.memoryLayout.address(entry)}]'
+      cpp(assigner(resultstr, d.optype.callstr(*d.fillTerms(args))))
+      total += flops
+
+    return total
+
+  def generate(self, cpp, routineCache):
+    # a sparse operand or result is addressed entry by entry, so the loops are
+    # unrolled; everything dense is looped over
+    if any(self._descr.isSparse):
+      return self._generateUnrolled(cpp)
 
     return self._generateDenseDense(cpp)

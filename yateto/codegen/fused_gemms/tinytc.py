@@ -51,7 +51,6 @@ class FusedGemmsTinytc:
             addVal(op2, node.rightTerm())
             op2_val = vals[op2]
 
-            res_batch = None
             res_val = None
             if res.is_temporary:
                 res_val = bb.add(
@@ -65,7 +64,6 @@ class FusedGemmsTinytc:
 
             bbA = BoundingBox.fromSpp(node.leftTerm().eqspp())
             bbB = BoundingBox.fromSpp(node.rightTerm().eqspp())
-            bbC = BoundingBox.fromSpp(node.eqspp())
 
             k_op1 = 0 if node.transA() else 1
             k_op2 = 1 if node.transB() else 0

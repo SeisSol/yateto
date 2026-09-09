@@ -201,7 +201,7 @@ class TestExporterHandover:
         seen = {}
 
         class Exporter:
-            INTERFACE_VERSION = 5
+            INTERFACE_VERSION = 6
 
             def __init__(self, arch, attrs=None):
                 seen["attrs"] = attrs
@@ -239,7 +239,7 @@ class TestExporterHandover:
         """A factory function is a fine way to register one, and it carries
         no version of its own."""
         class Exporter:
-            INTERFACE_VERSION = 5
+            INTERFACE_VERSION = 6
 
             def __init__(self, arch, attrs=None):
                 pass

@@ -153,6 +153,29 @@ class TestExportedGuards:
         widest = max((op['condition'] for op in collector.operations), key=len)
         assert {literal['tensor']['name'] for literal in widest} == {'flag', 'other'}
 
+    def test_an_operation_that_can_never_run_is_not_exported(self, tensors):
+        """A guard that is a contradiction produces no operation at all.
+
+        `None` and `[]` are both falsy, so an exporter cannot tell "never" from
+        "always" by reading the field; the C++ factory emits nothing for such
+        an action either.
+        """
+        from yateto.codegen.factory import ExportFactory
+        from yateto.controlflow.graph import Guard
+
+        collector = export([tensors['out']['ij'] <= tensors['A']['ij']])
+        assert collector.operations
+        for op in collector.operations:
+            assert op['condition'] is not None
+
+        factory = ExportFactory.__new__(ExportFactory)
+        factory.operations = []
+        assert factory._handleCondition(Guard.never()) is None
+        factory._emit({'condition': factory._handleCondition(Guard.never())})
+        assert factory.operations == []
+        factory._emit({'condition': factory._handleCondition(Guard.always())})
+        assert len(factory.operations) == 1
+
     def test_a_rewritten_condition_gets_a_new_version(self, tensors):
         t = tensors
         collector = export([[
@@ -174,28 +197,47 @@ class TestExportedScalars:
         t = tensors
         from yateto.type import Scalar
         collector = export([t['out']['ij'] <= Scalar('alpha') * t['A']['ij']])
-        names = {arg['name'] for op in collector.operations for arg in op['args']}
-        assert 'alpha' in names
+        factors = {op['linear']['alpha']['name'] for op in collector.operations}
+        assert 'alpha' in factors
 
     def test_a_derived_scalar_is_exported_by_name(self, tensors):
         t = tensors
         from yateto.type import Scalar
         alpha, beta = Scalar('alpha'), Scalar('beta')
         collector = export([t['out']['ij'] <= (alpha * beta) * t['A']['ij']])
-        names = {arg['name'] for op in collector.operations for arg in op['args']}
-        assert any(name.startswith('_s') for name in names), names
+        factors = {op['linear']['alpha']['name'] for op in collector.operations}
+        assert any(name.startswith('_s') for name in factors), factors
         # the expression itself stays on the host; the generator sees one value
-        assert 'alpha' not in names and 'beta' not in names
+        assert 'alpha' not in factors and 'beta' not in factors
 
     def test_a_numeric_factor_is_exported_with_its_value(self, tensors):
         t = tensors
         collector = export([t['out']['ij'] <= 2.0 * t['A']['ij']])
-        # the operand is referenced by name; the value sits in its descriptor
-        names = {arg['name'] for op in collector.operations for arg in op['args']}
-        assert any(name.startswith('_scalar') for name in names), names
+        # the factor is referenced by name; the value sits in its descriptor
+        factors = {op['linear']['alpha']['name'] for op in collector.operations}
+        assert any(name.startswith('_scalar') for name in factors), factors
         values = {d['name']: d.get('values') for d in collector.tensors}
         assert any(v == {'kind': 'entries', 'data': [[[], 2.0]]}
                    for v in values.values()), values
+
+    def test_a_factor_is_stated_once(self, tensors):
+        """Never as an operand as well as alpha.
+
+        Compared by value, not by name: listing it twice used to mint a second
+        scalar tensor with the same value, which an exporter reading both the
+        operands and alpha applies twice all the same.
+        """
+        t = tensors
+        for statement in (t['out']['ij'] <= 2.0 * t['A']['ij'],
+                          t['out']['ij'] <= 2.0 * t['A']['ik'] * t['B']['kj']):
+            collector = export([statement])
+            descriptors = {d['name']: d for d in collector.tensors}
+            for op in collector.operations:
+                factor = descriptors[op['linear']['alpha']['name']]
+                for arg in op['args']:
+                    operand = descriptors[arg['name']]
+                    assert operand['values'] is None \
+                        or operand['values'] != factor['values'], op
 
 
 class TestExportedTensors:

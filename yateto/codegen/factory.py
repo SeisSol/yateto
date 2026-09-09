@@ -438,6 +438,13 @@ class ExportGenerator:
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
+  #: 6: a scale factor is stated once, as `linear.alpha`, for every kind of
+  #:    operation. A multilinear one also listed it among its operands, so an
+  #:    exporter honouring both -- which is the only way to be right about an
+  #:    element-wise operation, where the factor is never an operand -- applied
+  #:    it twice. An operation whose guard can never hold is no longer sent at
+  #:    all, rather than sent with a null condition that reads like no guard.
+  #:
   #: 5: an occurrence may state `offset_from`, a shift along an axis that is
   #:    only known once the kernel runs. An exporter that ignores it reads
   #:    the same slice every time.
@@ -458,7 +465,7 @@ class ExportGenerator:
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 5
+  INTERFACE_VERSION = 6
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -515,11 +522,9 @@ class ExportFactory(KernelFactory):
       raise RuntimeError(
         f'routine exporter {exporter.__class__.__name__} speaks interface '
         f'version {spoken}, this yateto sends '
-        f'{ExportGenerator.INTERFACE_VERSION}. An exporter that ignores the '
-        f'per-occurrence bounding box runs every operation over the whole '
-        f'storage instead of the range it was given, which for an assignment '
-        f'writes over entries the operation was never meant to touch. Update '
-        f'the exporter rather than this check.')
+        f'{ExportGenerator.INTERFACE_VERSION}. See the changelog on '
+        f'ExportGenerator for what each version added and what an exporter '
+        f'ignoring it gets wrong. Update the exporter rather than this check.')
 
     return exporter
 
@@ -541,6 +546,11 @@ class ExportFactory(KernelFactory):
     self.generator.generate(self._cpp, routine_cache)
 
   def _emit(self, description):
+    if description['condition'] is None:
+      # a guard that can never hold: the C++ factory emits no action for one
+      # either, and an operation the receiving side cannot tell from an
+      # unguarded one -- both `None` and `[]` are falsy -- would run always
+      return 0
     self.operations.append(description)
     # The flop count used to come back from here and be added to the
     # kernel's `hwFlops`. Nothing is built yet at this point, so there is
@@ -770,7 +780,7 @@ class ExportFactory(KernelFactory):
     and indexing it by an axis it does not have reads somewhere else entirely.
     A bare `True` could not say which, so it had to mean "all of them".
     """
-    if not add:
+    if not add or dest is None:
       return False
     return list(range(len(dest['indices'])))
 
@@ -829,20 +839,22 @@ class ExportFactory(KernelFactory):
 
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
+    # NOTE: no transposition flags. Which axis of an operand goes where is
+    #       already in `target`, and a flag saying it again could disagree.
     argnodes = [self._nodeTensor(arguments[0], node[0]), self._nodeTensor(arguments[1], node[1])]
-    return self.handleLinear(self._nodeTensor(result, node), argnodes, condition, add, scalar, node.transA(), node.transB())
+    return self.handleLinear(self._nodeTensor(result, node), argnodes, condition, add, scalar)
 
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
-    return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar, False, False)
+    return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar)
 
   def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
-    return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar, False, False)
+    return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar)
 
   def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
-    return self.handleLinear(self._varTensor(result, self._indices(result)), [self._varTensor(term, self._indices(term))], condition, add, scalar, False, False)
+    return self.handleLinear(self._varTensor(result, self._indices(result)), [self._varTensor(term, self._indices(term))], condition, add, scalar)
 
   def getIndices(self, dest, ops):
     if dest is None:
@@ -864,16 +876,15 @@ class ExportFactory(KernelFactory):
 
     return target, permute
 
-  def handleLinear(self, dest, ops, condition, add, scalar, transposeA, transposeB):
+  def handleLinear(self, dest, ops, condition, add, scalar):
     # convert indices to loop numbers
 
     target, permute = self.getIndices(dest, ops)
 
-    if not (scalar == 1 or scalar == 1.0):
-      ops += [self._scalarTensor(scalar)]
-      target += [[]]
-      permute += [[]]
-
+    # NOTE: the factor belongs in `linear.alpha` and nowhere else. Listing it
+    #       among the operands as well made every exporter that also reads
+    #       alpha -- as it must, since an element-wise operation states its
+    #       factor there and cannot state it as an operand -- scale twice.
     description = {
       'type': 'multilinear',
       'result': dest,

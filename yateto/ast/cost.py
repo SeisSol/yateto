@@ -2,6 +2,7 @@ from .indices import BoundingBox
 from .. import ops
 from .node import Reduction
 from abc import ABC, abstractmethod
+from fractions import Fraction
 
 
 class CostEstimator(ABC):
@@ -186,16 +187,23 @@ class FusedGemmsBoundingBoxCostEstimator(BoundingBoxCostEstimator):
       return node[0], node[1]
 
   def _perThread(self, cost, term):
-    """Divide by what the leading dimension parallelises over.
+    """Divide by what the leading dimension of `term` parallelises over.
+
+    Exact rather than floating point: the quotient is not always whole -- the
+    leading index of the left operand may itself be contracted, and then the
+    node's range for it is narrower than the operand's -- and comparing floats
+    would let the last bit of a rounding decide a contraction order.
 
     A rank-0 term has no leading dimension -- which happens when both operands
     of a product are rank-0, since _get_terms can only move one of them out of
-    the way -- and then every thread does the whole of the work.
+    the way -- and a structurally zero one nothing to spread over threads; in
+    both cases the cost stands as it is.
     """
     bb = self._cache[term]
     if len(bb) == 0:
       return cost
-    return cost / bb[self._lead_dim].size()
+    threads = bb[self._lead_dim].size()
+    return Fraction(cost, threads) if threads > 0 else cost
 
   def _leadIndex(self, node):
     return node.indices[self._lead_dim] if len(node.indices) > 0 else None

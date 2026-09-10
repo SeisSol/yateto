@@ -112,8 +112,7 @@ class Kernel(object):
     self._reportGraph('as it is built')
     self.rewrites = collections.Counter()
     for graphPass in (MergeScalarMultiplications(), SubstituteForward(),
-                      SubstituteBackward(), RemoveEmptyStatements(),
-                      MergeActions()):
+                      SubstituteBackward(), MergeActions()):
       self.cfg = graphPass.visit(self.cfg)
       name = type(graphPass).__name__
       self.rewrites[name] += graphPass.rewrites

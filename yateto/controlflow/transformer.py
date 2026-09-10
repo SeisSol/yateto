@@ -51,6 +51,23 @@ def liveness(cfg):
     live[i] = at
   return live
 
+def _dropIfEmptied(cfg, position):
+  """Drop the statement a substitution has just left saying nothing.
+
+  Substituting a variable by the one it was copied from turns the copy into
+  ``x = x``, and that is not a statement -- it is what is left where one was.
+  Dropped by whoever made it, so that no other pass ever reasons about a
+  graph holding one: something that writes and reads the same name in one
+  step is a shape none of them is written for.
+  """
+  action = cfg[position]
+  if not action.isCompound() and action.isRHSVariable() \
+     and action.result == action.term and action.hasTrivialScalar():
+    del cfg[position]
+    return True
+  return False
+
+
 def _guardsCompatible(cfg, rng, definition):
   """Every touched action must run at least as restrictively as `definition`.
 
@@ -60,9 +77,10 @@ def _guardsCompatible(cfg, rng, definition):
 
 class SubstituteForward(GraphPass):
   def visit(self, cfg):
-    n = len(cfg)
     live = liveness(cfg)
-    for i in range(n):
+    i = 0
+    while i < len(cfg):
+      n = len(cfg)
       ua = cfg[i]
 
       if not ua.isCompound() \
@@ -81,7 +99,12 @@ class SubstituteForward(GraphPass):
             # a read substitution; the downstream guards stay as they are
             cfg[j] = cfg[j].substituted(when, by)
           self.rewrites += 1
+          if _dropIfEmptied(cfg, i):
+            # what stands here now is the next statement, not the one after it
+            live = liveness(cfg)
+            continue
           live = liveness(cfg)
+      i += 1
 
     return cfg
 
@@ -111,21 +134,8 @@ class SubstituteBackward(GraphPass):
             for j in range(found+1,i+1):
               cfg[j] = cfg[j].substituted(when, by)
             self.rewrites += 1
+            _dropIfEmptied(cfg, i)
             live = liveness(cfg)
-    return cfg
-
-class RemoveEmptyStatements(GraphPass):
-  def visit(self, cfg):
-    n = len(cfg)
-    i = 0
-    while i < n:
-      ua = cfg[i]
-      if not ua.isCompound() and ua.isRHSVariable() and ua.result == ua.term and ua.hasTrivialScalar():
-        self.rewrites += 1
-        del cfg[i]
-        n -= 1
-      else:
-        i += 1
     return cfg
 
 class MergeActions(GraphPass):

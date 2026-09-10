@@ -22,7 +22,7 @@ These tests check:
   ``live`` set,
 * ``SubstituteForward`` / ``SubstituteBackward`` eliminate trivial
   copies,
-* ``RemoveEmptyStatements`` drops ``x = x`` lines,
+* a substitution drops the ``x = x`` it leaves behind,
 * ``MergeActions`` fuses compatible actions.
 """
 from __future__ import annotations
@@ -53,7 +53,6 @@ from yateto.controlflow.transformer import (
     liveness,
     MergeActions,
     MergeScalarMultiplications,
-    RemoveEmptyStatements,
     SubstituteBackward,
     SubstituteForward,
 )
@@ -237,7 +236,6 @@ class TestCopyPropagation:
         before = len(cfg)
         cfg = SubstituteForward().visit(cfg)
         cfg = SubstituteBackward().visit(cfg)
-        cfg = RemoveEmptyStatements().visit(cfg)
         after = len(cfg)
         # The pipeline must not grow the CFG.  It usually shrinks it.
         assert after <= before

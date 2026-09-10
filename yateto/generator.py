@@ -115,8 +115,9 @@ class Kernel(object):
                       SubstituteBackward(), RemoveEmptyStatements(),
                       MergeActions()):
       self.cfg = graphPass.visit(self.cfg)
-      self.rewrites[type(graphPass).__name__] += graphPass.rewrites
-    self._reportGraph('after the passes')
+      name = type(graphPass).__name__
+      self.rewrites[name] += graphPass.rewrites
+      self._reportGraph(f'after {name}')
     self._reportUnreachable()
 
   def _reportGraph(self, when):

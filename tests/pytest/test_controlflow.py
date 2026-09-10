@@ -277,11 +277,18 @@ class TestVerify:
         from yateto.memory import DenseMemoryLayout
         return DenseMemoryLayout((4, 4))
 
+    @staticmethod
+    def _spp():
+        import numpy as np
+        from yateto import aspp
+        return aspp.general(np.ones((4, 4), dtype=bool))
+
     def _tmp(self, name='_tmp0'):
-        return Variable(name, True, self._ml(), is_temporary=True)
+        return Variable(name, True, self._ml(), self._spp(), is_temporary=True)
 
     def _global(self, name='A', writable=False):
-        return Variable(name, writable, self._ml(), tensor=Tensor(name, (4, 4)))
+        return Variable(name, writable, self._ml(), self._spp(),
+                        tensor=Tensor(name, (4, 4)))
 
     def test_a_graph_that_is_as_it_is_taken_to_be_says_nothing(self, arch):
         A, C = self._global('A'), self._global('C', writable=True)
@@ -317,10 +324,14 @@ class TestVerify:
         from yateto.memory import DenseMemoryLayout
         A, C = self._global('A'), self._global('C', writable=True)
         tmp = self._tmp()
-        sliced = Variable.view(tmp, DenseMemoryLayout((4, 4)).subslice(1, 0, 2), None)
-        found, = verify([ProgramAction(tmp, A, add=False),
-                         ProgramAction(C, sliced, add=False)])
-        assert '_tmp0' in found and 'view of a temporary' in found
+        sliced = Variable.view(tmp, DenseMemoryLayout((4, 4)).subslice(1, 0, 2),
+                               self._spp())
+        # it does not stand up either -- the slice keeps room for fewer
+        # entries than the pattern says it has values at -- so ask for the one
+        # finding this is about
+        found = verify([ProgramAction(tmp, A, add=False),
+                        ProgramAction(C, sliced, add=False)])
+        assert any('_tmp0' in f and 'view of a temporary' in f for f in found)
 
     def test_a_read_outside_the_guard_it_was_written_under_is_reported(self, arch):
         A, C = self._global('A'), self._global('C', writable=True)
@@ -335,3 +346,19 @@ class TestVerify:
         C = self._global('C', writable=True)
         found, = verify([ProgramAction(C, self._tmp(), add=False)])
         assert '_tmp0' in found and 'never written' in found
+
+    def test_a_statement_that_does_not_stand_up_is_reported(self, arch):
+        """The same three questions a rewrite has to answer before it is made,
+        asked of what came out of one."""
+        import numpy as np
+        from yateto import aspp
+        from yateto.memory import DenseMemoryLayout
+        A = self._global('A')
+        # a destination that keeps room for fewer entries than the operand has
+        # values at
+        narrow = np.zeros((4, 4), dtype=bool)
+        narrow[:2, :2] = True
+        C = Variable('C', True, DenseMemoryLayout.fromSpp(aspp.general(narrow)),
+                     self._spp(), tensor=Tensor('C', (4, 4)))
+        found = verify([ProgramAction(C, A, add=False)])
+        assert any('does not stand up' in f for f in found)

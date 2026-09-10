@@ -14,10 +14,34 @@ reason about the easy way.
 
 import collections
 
+from .graph import Variable
+
+#: A substitution that replaces nothing: no variable is named this, so asking
+#: whether it may be made reduces to asking whether the statement stands up as
+#: it is.
+_NOTHING = Variable('', False, None)
+
 
 def verify(cfg):
   """The findings, or an empty list where the graph is as it is taken to be."""
-  return _definitions(cfg) + _views(cfg) + _guards(cfg)
+  return _generatable(cfg) + _definitions(cfg) + _views(cfg) + _guards(cfg)
+
+
+def _generatable(cfg):
+  """Every statement is one that can still be generated.
+
+  Three things are asked before a rewrite is made: that every operand is read
+  from storage keeping the entries it has values at, that the destination
+  keeps the entries the statement writes, and that a contraction's operands
+  are still matrices. They are asked here of what came out of the rewrite,
+  and by the same rule -- a substitution that replaces nothing reduces
+  `maySubstitute` to exactly those three. So a rewrite that should not have
+  been made is caught by the rule that was meant to forbid it, rather than by
+  the numbers being wrong somewhere else.
+  """
+  return [f'the statement at {position} does not stand up as it is'
+          for position, action in enumerate(cfg)
+          if not action.maySubstitute(_NOTHING, _NOTHING)]
 
 
 def _definitions(cfg):

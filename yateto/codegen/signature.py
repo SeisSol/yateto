@@ -13,7 +13,9 @@ writes it and what its datatype is, which is all the interface is built from.
 """
 
 from .. import ir
+from ..memory import MemoryLayoutView
 from ..type import DerivedScalar, Tensor
+from .common import TensorDescription
 
 
 def operands(region):
@@ -35,9 +37,27 @@ def operands(region):
   return found
 
 
+def _whole(operand):
+  """The whole of what an operand names, where it names a slice of one.
+
+  The interface is about storage: a kernel handed a slice of C is handed C,
+  and what it is handed is the whole of it. Which entries the slice covers is
+  the statement's business and says nothing about the tensor behind the name.
+  """
+  layout = operand.memoryLayout
+  while isinstance(layout, MemoryLayoutView):
+    layout = layout.base
+  if layout is operand.memoryLayout:
+    return operand
+  return TensorDescription(operand.name, layout, None,
+                           operand.is_compute_constant, operand.is_temporary,
+                           operand.values, operand.datatype, operand.addressing,
+                           operand.tensor, operand.writable)
+
+
 def globals(region):
   """The operands the caller hands over, in a stable order."""
-  return [operand for _, operand in sorted(operands(region).items())
+  return [_whole(operand) for _, operand in sorted(operands(region).items())
           if operand.isGlobal()]
 
 

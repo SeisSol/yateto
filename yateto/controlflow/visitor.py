@@ -199,22 +199,6 @@ class AST2ControlFlow(Visitor):
     for action in self._cfg:
       action.setVariablesWritable(name)
 
-class SortedGlobalsList(object):
-  """The tensors the caller hands over.
-
-  A statement that can never run names none of them: it is generated nowhere,
-  so nothing reads what it would have read and nothing writes what it would
-  have written.
-  """
-
-  def visit(self, cfg):
-    V = set()
-    for action in cfg:
-      if action.getGuard().isNever():
-        continue
-      V = V | action.result.variables() | action.allVariables()
-    return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
-
 def _scalarsOf(cfg):
   S = set()
   for action in cfg:

@@ -810,3 +810,52 @@ class TestChains:
         assert isinstance(guarded.region.ops[0], ir.FusedGEMMs)
         assert len(guarded.region.ops[0].statements) == 1
         assert len(region.ops[1].statements) == 1
+
+
+class TestReferenceStatements:
+    """The reference implementation states its statement like every backend.
+
+    Its loops are its own -- they are there to be obviously right, not to be
+    reasoned about -- but what the statement is, is stated, because what the
+    generated test hands the kernel is read off it.
+    """
+
+    @staticmethod
+    def _region(statements):
+        from yateto.codegen.factory import UnitTestFactory
+        from yateto.codegen.visitor import UnitTestGenerator
+        from yateto.generator import Kernel
+
+        arch = useArchitectureIdentifiedBy('dhsw')
+        kernel = Kernel('k', statements)
+        with contextlib.redirect_stdout(io.StringIO()):
+            # the graph the reference implementation is built from
+            kernel.prepareUntilUnitTest(arch)
+        generator = UnitTestGenerator(arch)
+        factory = UnitTestFactory(Cpp(io.StringIO()), arch,
+                                  UnitTestGenerator._name, None)
+        return generator.build(kernel.cfg, factory, None, None)
+
+    def test_every_statement_stands_in_the_region(self):
+        A, B, C = (Tensor(name, (N, N)) for name in 'ABC')
+        region = self._region(C['ij'] <= A['ik'] * B['kj'])
+        assert [op for op in region.walk() if isinstance(op, ir.TensorOp)]
+
+    def test_what_the_test_hands_over_is_what_the_statements_name(self):
+        from yateto.codegen import signature
+        A, B, C = (Tensor(name, (N, N)) for name in 'ABC')
+        region = self._region(C['ij'] <= A['ik'] * B['kj'])
+        assert {operand.name for operand in signature.globals(region)} == {'A', 'B', 'C'}
+
+    def test_a_slice_is_handed_over_whole(self):
+        """A kernel handed a slice of C is handed C: what the statement covers
+        says nothing about the tensor behind the name."""
+        from yateto.codegen import signature
+        from yateto.memory import MemoryLayoutView
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        region = self._region(C['ij'].subslice('j', 0, 2) <= A['ij'].subslice('j', 0, 2))
+        layouts = {operand.name: operand.memoryLayout
+                   for operand in signature.globals(region)}
+        assert not any(isinstance(layout, MemoryLayoutView)
+                       for layout in layouts.values())

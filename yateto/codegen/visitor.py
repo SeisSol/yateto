@@ -5,7 +5,7 @@ from functools import reduce
 from io import StringIO
 from ..memory import DenseMemoryLayout
 from .. import aspp
-from ..controlflow.visitor import ScalarsSet, SortedGlobalsList
+from ..controlflow.visitor import ScalarsSet
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
 from .code import Cpp
@@ -13,7 +13,7 @@ from .. import ir
 from .factory import *
 from .lowering import lower as lowerStatements
 from . import signature
-from .common import BatchedOperationsAux, KernelAttributes
+from .common import BatchedOperationsAux, KernelAttributes, TensorDescription
 from ..type import Scalar, Tensor, Datatype
 
 import numpy as np
@@ -676,11 +676,15 @@ class UnitTestGenerator(KernelGenerator):
     else:
       device_test = False
 
-    scalars = ScalarsSet().visit(cfg)
-    scalars = sorted(scalars, key=str)
-    variables = SortedGlobalsList().visit(cfg)
+    scalars = sorted(ScalarsSet().visit(cfg), key=str)
     conditions = self._conditionVariables(cfg)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
+    # The reference implementation is built before it is written, and what it
+    # fills and hands over is read off it -- so the test names what the kernel
+    # names, statement for statement.
+    factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
+    region = self.build(cfg, factory, None, gemm_cfg)
+    variables = signature.globals(region)
     with cpp.Function(**testFramework.functionArgs(testName)):
       # A guarded kernel is several kernels: which statements run depends on
       # the conditions, and filling them from the usual pattern picks one
@@ -694,8 +698,6 @@ class UnitTestGenerator(KernelGenerator):
       loop = cpp.For(f'int {self.CASE_VAR} = 0; {self.CASE_VAR} < {cases}; ++{self.CASE_VAR}') \
              if cases > 1 else contextlib.nullcontext()
       with loop:
-       factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
-
        for i,scalar in enumerate(scalars):
          cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
 
@@ -782,11 +784,14 @@ class UnitTestGenerator(KernelGenerator):
          stream_delete(self.STREAM)
          cpp.emptyline()
 
-       super().generate(cpp, cfg, factory, None, gemm_cfg)
+       self._generateScalarPrologue(cpp, region)
+       self.emit(cpp, region, factory, None, gemm_cfg)
 
        for var in variables:
          if var.writable:
-           factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout(), datatype=var.datatype))
+           factory.compare(var, TensorDescription(
+             self._tensorName(var), var.tensor.memoryLayout(), None,
+             datatype=var.datatype))
 
        factory.freeTmp()
 

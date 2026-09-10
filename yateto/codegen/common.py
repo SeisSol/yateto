@@ -44,6 +44,16 @@ class TensorDescription(object):
     """Whether the caller hands this over, which is what puts it in the interface."""
     return self.tensor is not None and not self.tensor.temporary
 
+  def isLocal(self):
+    """Whether the kernel is the only one who ever sees it."""
+    return not self.isGlobal() and (self.tensor is None or not self.tensor.temporary)
+
+  def __str__(self):
+    return self.name
+
+  def __repr__(self):
+    return self.name
+
   @classmethod
   def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())

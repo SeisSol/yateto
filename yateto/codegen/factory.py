@@ -123,42 +123,22 @@ class KernelFactory(object):
     shape = var.memoryLayout.shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
-  def _conditional(self, condition, statement, touches=(), writes=()):
+  def _conditional(self, condition, statement):
     """One statement of the kernel, as a region, guarded where it is guarded.
 
     `statement` is the statement itself, stated over tensors, and stays that
-    way until the region is lowered. It may instead be a callable, for a
-    generator that writes itself without stating a statement -- which becomes
-    a call, and then what it touches is stated here, because a call that has
-    not been asked may touch anything and nothing can be said about the
-    storage the kernel needs.
+    way until the region is lowered -- whichever backend has claimed it and
+    whatever that backend makes of it.
     """
     guard = Guard.coerce(condition)
     if guard.isNever():
       return ir.Region()
-    if isinstance(statement, ir.Region):
-      region = statement
-    elif isinstance(statement, ir.TensorOp):
-      region = ir.Region([statement])
-    else:
-      region = ir.Region([ir.Call(lambda cpp, cache: statement(),
-                                  reads=[self._buffer(term) for term in touches],
-                                  writes=[self._buffer(term) for term in writes])])
+    region = statement if isinstance(statement, ir.Region) \
+             else ir.Region([statement])
     if guard.isAlways():
       return region
     self._checkGuardIsReadable(guard)
     return ir.Region([ir.If(guard, region)])
-
-  @staticmethod
-  def _buffer(term):
-    """The buffer behind a tensor description or a control-flow variable.
-
-    The two spell the same things differently -- one states its layout, the
-    other answers when asked -- and a statement is described with whichever
-    of them its generator was handed.
-    """
-    return ir.Buffer(term.name, term.datatype, term.memoryLayout, term.eqspp,
-                     getattr(term, 'is_temporary', False))
 
   def _checkGuardIsReadable(self, guard):
     """A guard emitted here is read on the host, so it has to live there.
@@ -273,6 +253,27 @@ class UnitTestFactory(KernelFactory):
     address = var.memoryLayout.addressString(indices)
     return f'{self._name(var)}[{address}]'
 
+  def _statement(self, result, terms, add, scalar, write):
+    """The statement, and the reference implementation that writes it.
+
+    The loops are this backend's own: they are there to be obviously right,
+    not to be reasoned about. What the statement is, though, is stated like
+    everywhere else, because what the test hands the kernel is read off it.
+    """
+    class Reference:
+      @staticmethod
+      def generate(cpp, routineCache):
+        return write()
+
+    return ir.TensorOp(result, terms, alpha=scalar, add=add, generator=Reference)
+
+  def _fromNodes(self, node, result, arguments, children=None):
+    """The destination and the operands, as the statement states them."""
+    children = list(node) if children is None else children
+    return (IndexedTensorDescription.fromNode(result, node),
+            [IndexedTensorDescription.fromNode(argument, child)
+             for argument, child in zip(arguments, children)])
+
   def create_Einsum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     g = node.indices
     for child in node:
@@ -298,25 +299,28 @@ class UnitTestFactory(KernelFactory):
         self._cpp.memset(self._name(result), result.memoryLayout.requiredReals(), result.datatype.ctype())
       return forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False)
 
-    return self._conditional(condition, statement,
-                             touches=[result] + list(arguments), writes=[result])
+    dest, operands = self._fromNodes(node, result, arguments)
+    return self._conditional(condition,
+                             self._statement(dest, operands, add, scalar, statement))
 
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.indices <= node.term().indices and node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
-    return self._conditional(
-      condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices),
-      touches=[result] + list(arguments), writes=[result])
+    dest, operands = self._fromNodes(node, result, arguments, [node.term()])
+    return self._conditional(condition, self._statement(
+      dest, operands, add, scalar,
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
   def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
-    return self._conditional(
-      condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices),
-      touches=[result] + list(arguments), writes=[result])
+    dest, operands = self._fromNodes(node, result, arguments, [node.term()])
+    return self._conditional(condition, self._statement(
+      dest, operands, add, scalar,
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     # the loops below run over node.indices, so the address strings have to be
@@ -326,9 +330,10 @@ class UnitTestFactory(KernelFactory):
     argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
     termTerm = node.optype.callstr(*node.fillTerms(argTerms))
 
-    return self._conditional(
-      condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices),
-      touches=[result] + list(arguments), writes=[result])
+    dest, operands = self._fromNodes(node, result, arguments)
+    return self._conditional(condition, self._statement(
+      dest, operands, add, scalar,
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
   def create_Accumulate(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     resultTerm = self._formatTerm(result, node.indices)
@@ -338,9 +343,10 @@ class UnitTestFactory(KernelFactory):
     for argTerm in argTerms[1:]:
       termTerm = node.optype.callstr(termTerm, argTerm)
 
-    return self._conditional(
-      condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices),
-      touches=[result] + list(arguments), writes=[result])
+    dest, operands = self._fromNodes(node, result, arguments)
+    return self._conditional(condition, self._statement(
+      dest, operands, add, scalar,
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     resultTerm = self._formatTerm(result, node.indices)
@@ -357,8 +363,9 @@ class UnitTestFactory(KernelFactory):
       return self._simpleBody(resultTerm, accumulator, add, scalar, node.indices,
                               reduceIdx=(sumIndex, size, init, inner))
 
-    return self._conditional(condition, body,
-                             touches=[result] + list(arguments), writes=[result])
+    dest, operands = self._fromNodes(node, result, arguments, [node.term()])
+    return self._conditional(condition,
+                             self._statement(dest, operands, add, scalar, body))
 
   def create_IfThenElse(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     resultTerm = self._formatTerm(result, node.indices)
@@ -368,9 +375,11 @@ class UnitTestFactory(KernelFactory):
 
     termTerm = f'(({conditionTerm}) ? ({yesTerm}) : ({noTerm}))'
 
-    return self._conditional(
-      condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices),
-      touches=[result] + list(arguments), writes=[result])
+    dest, operands = self._fromNodes(node, result, arguments,
+                                  [node.yesTerm(), node.noTerm(), node.condition()])
+    return self._conditional(condition, self._statement(
+      dest, operands, add, scalar,
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
   def _simpleBody(self, resultTerm, termTerm, add, scalar, indices, reduceIdx = None):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
@@ -405,9 +414,10 @@ class UnitTestFactory(KernelFactory):
     resultTerm = self._formatTerm(result, g)
     termTerm = self._formatTerm(term, g)
 
-    return self._conditional(
-      condition, lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g),
-      touches=[result, term], writes=[result])
+    return self._conditional(condition, self._statement(
+      IndexedTensorDescription.fromVar(result, g),
+      [IndexedTensorDescription.fromVar(term, self._indices(term))], add, scalar,
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g)))
 
   def compare(self, ref, target, epsMult = 100.0):
     g = self._indices(ref)

@@ -5,9 +5,17 @@ from collections import OrderedDict
 from typing import Dict, List
 
 class Variable(object):
-  def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None, is_temporary=False, datatype=None):
+  """A name the generated code addresses, and what stands behind it.
+
+  A variable may view another: then it names a slice of the same storage
+  under another layout. It stands for the same tensor and answers for the
+  same name -- a slice of C is written into C -- but for fewer of its
+  entries, which is what tells two slices of one variable apart.
+  """
+
+  def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None,
+               is_temporary=False, datatype=None, views=None):
     self.name = name
-    self.writable = writable
     self.tensor = tensor
     #: Where its entries sit, and which of them it has a value at. Asked for
     #: rather than called, which is how a buffer and a tensor description
@@ -16,9 +24,35 @@ class Variable(object):
     self.eqspp = eqspp
     self.is_temporary = is_temporary
     self.datatype = datatype
+    self._views = views
+    self.writable = writable
+
+  @classmethod
+  def view(cls, variable, memoryLayout, eqspp):
+    """A slice of what `variable` names: the same storage, another layout."""
+    base = variable.viewed()
+    return cls(base.name, base.writable, memoryLayout, eqspp, base.tensor,
+               base.is_temporary, base.datatype, views=base)
+
+  def viewed(self):
+    """The variable whose storage this names, which for most is itself."""
+    return self._views if self._views is not None else self
+
+  def isView(self):
+    return self._views is not None
+
+  @property
+  def writable(self):
+    # Asked of the storage: whether the kernel writes a slice of something is
+    # whether it writes that something.
+    return self.viewed()._writable
+
+  @writable.setter
+  def writable(self, value):
+    self.viewed()._writable = value
 
   def variables(self):
-    return {self}
+    return {self.viewed()}
 
   def maySubstitute(self, when, by):
     return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
@@ -52,82 +86,17 @@ class Variable(object):
     # Two variables of the same name denote the same storage. Whether the
     # tensors behind that name agree is a property of the kernel signature and
     # is reported there, with the context needed for a useful message.
-    if not isinstance(other, (Variable, VariableView)):
+    if not isinstance(other, Variable):
       return NotImplemented
-    return self.name == other.viewed().name
+    if self.name != other.viewed().name:
+      return False
+    # A view names a slice of that storage, so it is the same as something
+    # else only where that something names the same slice.
+    return not self.isView() or self.memoryLayout == other.memoryLayout
 
   def setWritable(self, name):
     if self.name == name:
       self.writable = True
-
-  def viewed(self):
-    return self
-
-class VariableView(object):
-  def __init__(self, variable, memoryLayout, eqspp):
-    self.variable = variable.viewed()
-    self.memoryLayout = memoryLayout
-    self.eqspp = eqspp
-
-  @property
-  def name(self):
-    return self.variable.name
-
-  @property
-  def tensor(self):
-    return self.variable.tensor
-
-  @property
-  def writable(self):
-    return self.variable.writable
-
-  @property
-  def is_temporary(self):
-    return self.variable.is_temporary
-
-  def maySubstitute(self, when, by):
-    return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
-
-  def substituted(self, when, by, memoryLayout=None):
-    return by if self == when else self
-
-  @property
-  def datatype(self):
-    return self.variable.datatype
-
-  def isPassedByValue(self):
-    return self.variable.isPassedByValue()
-
-  def viewed(self):
-    return self.variable
-
-  def variables(self):
-    return {self.variable}
-
-  def resultCompatible(self, result):
-    return result.memoryLayout.isCompatible(self.eqspp)
-
-  def isGlobal(self):
-    return self.variable.isGlobal()
-
-  def isLocal(self):
-    return self.variable.isLocal()
-
-  def __hash__(self):
-    return hash(self.variable.name)
-
-  def __str__(self):
-    return f'{self.variable.name}'
-
-  def __repr__(self):
-    return str(self)
-
-  def __eq__(self, other):
-    isEq = self.variable == other.viewed() and self.memoryLayout == other.memoryLayout
-    return isEq
-
-  def setWritable(self, name):
-    self.variable.setWritable(name)
 
 class Expression(object):
   def __init__(self, node, memoryLayout, variables):

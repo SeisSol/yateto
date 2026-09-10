@@ -47,7 +47,6 @@ from yateto.controlflow.graph import (
     Expression,
     ProgramAction,
     Variable,
-    VariableView,
 )
 from yateto.controlflow.transformer import (
     liveness,

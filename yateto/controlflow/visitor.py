@@ -78,7 +78,7 @@ class AST2ControlFlow(Visitor):
   def visit_SliceView(self, node):
     var = self.visit(node.term())
     ml = node.getMemoryLayout(var.memoryLayout)
-    return VariableView(var, ml, node.eqspp())
+    return Variable.view(var, ml, node.eqspp())
 
   def visit_Accumulate(self, node):
     variables = [self.visit(child) for child in node]

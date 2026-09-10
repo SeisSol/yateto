@@ -45,6 +45,7 @@ from yateto.ast.visitor import FindIndexPermutations
 from yateto.ast.transformer import SelectIndexPermutations
 from yateto.controlflow.graph import (
     Expression,
+    Guard,
     ProgramAction,
     Variable,
 )
@@ -56,6 +57,7 @@ from yateto.controlflow.transformer import (
     SubstituteBackward,
     SubstituteForward,
 )
+from yateto.controlflow.verify import verify
 from yateto.controlflow.visitor import AST2ControlFlow
 
 
@@ -256,3 +258,80 @@ class TestMergeActions:
         before = len(cfg)
         cfg = MergeActions().visit(cfg)
         assert len(cfg) <= before
+
+
+# ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+
+
+class TestVerify:
+    """The three things the copy-propagating passes read the graph as though.
+
+    None of them is enforced anywhere: they hold because of how the graph is
+    built. Asking is what turns "holds today" into "held when this ran".
+    """
+
+    @staticmethod
+    def _ml():
+        from yateto.memory import DenseMemoryLayout
+        return DenseMemoryLayout((4, 4))
+
+    def _tmp(self, name='_tmp0'):
+        return Variable(name, True, self._ml(), is_temporary=True)
+
+    def _global(self, name='A', writable=False):
+        return Variable(name, writable, self._ml(), tensor=Tensor(name, (4, 4)))
+
+    def test_a_graph_that_is_as_it_is_taken_to_be_says_nothing(self, arch):
+        A, C = self._global('A'), self._global('C', writable=True)
+        tmp = self._tmp()
+        assert verify([ProgramAction(tmp, A, add=False),
+                       ProgramAction(C, tmp, add=False)]) == []
+
+    def test_one_definition_and_accumulations_into_it_is_one_definition(self, arch):
+        A, B, C = self._global('A'), self._global('B'), self._global('C', True)
+        tmp = self._tmp()
+        assert verify([ProgramAction(tmp, A, add=False),
+                       ProgramAction(tmp, B, add=True),
+                       ProgramAction(C, tmp, add=False)]) == []
+
+    def test_two_definitions_of_one_temporary_are_reported(self, arch):
+        A, B, C = self._global('A'), self._global('B'), self._global('C', True)
+        tmp = self._tmp()
+        found, = verify([ProgramAction(tmp, A, add=False),
+                         ProgramAction(tmp, B, add=False),
+                         ProgramAction(C, tmp, add=False)])
+        assert '_tmp0' in found and 'one definition' in found
+
+    def test_a_read_between_the_steps_of_a_definition_is_reported(self, arch):
+        A, B, C = self._global('A'), self._global('B'), self._global('C', True)
+        tmp, other = self._tmp(), self._tmp('_tmp1')
+        found, = verify([ProgramAction(tmp, A, add=False),
+                         ProgramAction(other, tmp, add=False),
+                         ProgramAction(tmp, B, add=True),
+                         ProgramAction(C, tmp, add=False)])
+        assert '_tmp0' in found and 'between the steps' in found
+
+    def test_a_view_of_a_temporary_is_reported(self, arch):
+        from yateto.memory import DenseMemoryLayout
+        A, C = self._global('A'), self._global('C', writable=True)
+        tmp = self._tmp()
+        sliced = Variable.view(tmp, DenseMemoryLayout((4, 4)).subslice(1, 0, 2), None)
+        found, = verify([ProgramAction(tmp, A, add=False),
+                         ProgramAction(C, sliced, add=False)])
+        assert '_tmp0' in found and 'view of a temporary' in found
+
+    def test_a_read_outside_the_guard_it_was_written_under_is_reported(self, arch):
+        A, C = self._global('A'), self._global('C', writable=True)
+        flag = self._global('flag')
+        tmp = self._tmp()
+        found, = verify([ProgramAction(tmp, A, add=False,
+                                       condition=Guard.literal(flag)),
+                         ProgramAction(C, tmp, add=False)])
+        assert '_tmp0' in found and 'does not imply' in found
+
+    def test_a_temporary_that_is_never_written_is_reported(self, arch):
+        C = self._global('C', writable=True)
+        found, = verify([ProgramAction(C, self._tmp(), add=False)])
+        assert '_tmp0' in found and 'never written' in found

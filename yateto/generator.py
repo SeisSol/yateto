@@ -15,6 +15,7 @@ from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
+from .controlflow.verify import verify
 from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike
 from typing import List
 from io import StringIO
@@ -105,12 +106,25 @@ class Kernel(object):
     for ast in self.ast:
       ast2cf.visit(ast)
     self.cfg = ast2cf.cfg()
+    self._reportGraph('as it is built')
     self.cfg = MergeScalarMultiplications().visit(self.cfg)
     self.cfg = SubstituteForward().visit(self.cfg)
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
+    self._reportGraph('after the passes')
     self._reportUnreachable()
+
+  def _reportGraph(self, when):
+    """Say where the graph is not shaped the way the passes take it to be.
+
+    Nothing downstream checks; propagating a copy and dropping a dead one
+    read the graph as though a temporary had one definition, no views and one
+    guard. Where that is not so, the answer they arrive at is not wrong in a
+    way that shows.
+    """
+    for finding in verify(self.cfg):
+      print(f'Note: in kernel "{self.name}" {when}, {finding}.')
 
   def _reportUnreachable(self):
     """Say which statements can never run, and what leaves with them.

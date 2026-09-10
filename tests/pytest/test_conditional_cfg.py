@@ -165,15 +165,17 @@ class TestEmittedCode:
     """The guards have to survive all the way into the generated C++."""
 
     @staticmethod
-    def emit(arch, statements):
+    def emit(arch, statements, header=False):
         from yateto import Generator, GeneratorCollection
         import tempfile, os
         generator = Generator(arch)
         for i, statement in enumerate(statements):
             generator.add(f'k{i}', statement)
         with tempfile.TemporaryDirectory() as out:
-            generator.generate(out, gemm_cfg=GeneratorCollection([]))
-            return open(os.path.join(out, 'kernel.cpp')).read()
+            with contextlib.redirect_stdout(io.StringIO()):
+                generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            name = 'kernel.h' if header else 'kernel.cpp'
+            return open(os.path.join(out, name)).read()
 
     def test_a_guard_becomes_an_if(self, arch, tensors):
         t = tensors
@@ -254,3 +256,32 @@ class TestUnreachable:
         note, = self.note(arch, [t['o1']['ij'] <= t['S']['ij'],
                                  yf.assignIf(False, t['o2']['ij'], t['S']['ij'])])
         assert 'S' not in note.split('with them')[-1]
+
+
+class TestUnreachableInterface:
+    """What a kernel asks its caller for is what its statements name.
+
+    A statement that can never run stands nowhere, so it asks for nothing --
+    and a tensor no other statement names is not a member the caller has to
+    set, nor bytes the kernel is counted as moving.
+    """
+
+    @staticmethod
+    def struct(arch, statements):
+        header = TestEmittedCode.emit(arch, statements, header=True)
+        body = header[header.index('struct k0'):]
+        # the members stand between the counters and the entry point
+        return body[:body.index('void execute')]
+
+    def test_a_tensor_only_an_unreachable_statement_names_is_no_member(self, arch, tensors):
+        t = tensors
+        members = self.struct(arch, [[t['o1']['ij'] <= t['S']['ij'],
+                                      yf.assignIf(False, t['o2']['ij'], t['Y']['ij'])]])
+        assert 'o1' in members and 'S' in members
+        assert 'o2' not in members and 'Y' not in members
+
+    def test_a_tensor_a_reachable_statement_names_stays_a_member(self, arch, tensors):
+        t = tensors
+        members = self.struct(arch, [[t['o1']['ij'] <= t['S']['ij'],
+                                      yf.assignIf(False, t['o2']['ij'], t['S']['ij'])]])
+        assert 'S' in members

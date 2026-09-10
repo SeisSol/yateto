@@ -13,7 +13,7 @@ import pytest
 from yateto import Generator, GeneratorCollection, Tensor, ops
 from yateto.arch import useArchitectureIdentifiedBy
 from yateto.ast.cost import BoundingBoxCostEstimator
-from yateto.controlflow.visitor import DerivedScalarsList, ScalarsSet
+from yateto.controlflow.visitor import ScalarsSet
 from yateto.generator import Kernel
 from yateto.type import Datatype, DerivedScalar, Scalar, ScalarExpression
 
@@ -143,9 +143,11 @@ class TestPrologue:
             return (open(os.path.join(out, 'kernel.cpp')).read(),
                     open(os.path.join(out, 'kernel.h')).read())
 
-    def test_a_derived_scalar_is_listed_for_the_prologue(self, arch, q):
-        kernel = self.lower(arch, q['C']['ij'] <= (q['alpha'] * q['beta']) * q['A']['ij'])
-        assert len(DerivedScalarsList().visit(kernel.cfg)) == 1
+    def test_a_derived_scalar_is_computed_once_in_the_prologue(self, arch, q):
+        code, _ = self.emit(arch, [q['C']['ij'] <= (q['alpha'] * q['beta']) * q['A']['ij']])
+        body = code[code.index('k0::execute'):]
+        body = body[:body.index('\n  }\n')]
+        assert len(re.findall(r'const _s\d+ =', body)) == 1
 
     def test_the_signature_holds_the_named_scalars(self, arch, q):
         kernel = self.lower(arch, q['C']['ij'] <= (q['alpha'] * q['beta']) * q['A']['ij'])

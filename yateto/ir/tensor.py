@@ -96,8 +96,12 @@ class LoopOverGEMM(TensorOp):
   """A contraction of two operands, run as a loop over matrix products."""
 
   def __init__(self, result, terms, transA=False, transB=False, alpha=1.0,
-               add=False, loopRanges=None, generator=None):
+               add=False, loopRanges=None, generator=None, prefetch=None):
     super().__init__(result, terms, alpha, add, loopRanges, generator=generator)
+    #: The tensor to fetch while the products run, where one was assigned. It
+    #: is nothing the statement computes with, and everything the kernel is
+    #: handed is in the statement that names it.
+    self.prefetch = prefetch
     #: Whether an operand is read with its two axes the other way round. Which
     #: axis goes where is in the index maps as well; the flags say it in the
     #: terms a matrix product is stated in.

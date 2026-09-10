@@ -206,14 +206,6 @@ class SortedGlobalsList(object):
       V = V | action.result.variables() | action.allVariables()
     return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
 
-class SortedPrefetchList(object):
-  def visit(self, cfg):
-    V = set()
-    for action in cfg:
-      if action.isRHSExpression() and action.term.node.prefetch is not None:
-        V = V | {action.term.node.prefetch}
-    return sorted([v for v in V], key=lambda x: x.name())
-
 def _scalarsOf(cfg):
   S = set()
   for action in cfg:
@@ -230,13 +222,6 @@ class ScalarsSet(object):
     for derived in [s for s in scalars if isinstance(s, DerivedScalar)]:
       scalars = scalars | derived.dependencies()
     return {scalar for scalar in scalars if not scalar.temporary}
-
-class DerivedScalarsList(object):
-  """The scalars the kernel computes before it does anything else."""
-
-  def visit(self, cfg):
-    derived = [s for s in _scalarsOf(cfg) if isinstance(s, DerivedScalar)]
-    return sorted(derived, key=lambda s: s.name())
 
 class PrettyPrinter(object):
   def __init__(self, printPPState = False):

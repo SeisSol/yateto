@@ -9,7 +9,7 @@ from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, Float
 import hashlib
 
 class TensorDescription(object):
-  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
+  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, tensor=None, writable=False):
     """
 
     Args:
@@ -23,6 +23,11 @@ class TensorDescription(object):
       values (Union[np.ndarray, None]): the values of the compute_constant tensor, if they are known at compile time
       datatype (Datatype): the datatype of the tensor elements
       addressing (AddressingMode): the addressing mode for the tensor
+      tensor (Union[Tensor, None]): the tensor this names, where it names one.
+          A statement is described in the kernel's own terms; which tensor of
+          the caller's stands behind a name is what the kernel's interface is
+          built from, and only the outermost operands have one.
+      writable (bool): whether the kernel writes what this names, anywhere
     """
     self.name = name
     self.memoryLayout = memoryLayout
@@ -32,14 +37,20 @@ class TensorDescription(object):
     self.values = values
     self.datatype = datatype
     self.addressing = addressing
+    self.tensor = tensor
+    self.writable = writable
+
+  def isGlobal(self):
+    """Whether the caller hands this over, which is what puts it in the interface."""
+    return self.tensor is not None and not self.tensor.temporary
 
   @classmethod
   def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())
 
 class IndexedTensorDescription(TensorDescription):
-  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
-    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing)
+  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, tensor=None, writable=False):
+    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing, tensor, writable)
     self.indices = indices
 
   @classmethod
@@ -56,7 +67,7 @@ class IndexedTensorDescription(TensorDescription):
       if is_const:
         values = baseNode.tensor.values()
       addressing = baseNode.tensor.addressing
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
 
   @classmethod
   def fromVar(cls, var, indices):
@@ -71,7 +82,7 @@ class IndexedTensorDescription(TensorDescription):
         if is_const:
           values = var.tensor.values()
         addressing = var.tensor.addressing
-    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, fixed={}, indexNo=None):
   flops = 0

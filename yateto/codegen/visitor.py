@@ -5,13 +5,14 @@ from functools import reduce
 from io import StringIO
 from ..memory import DenseMemoryLayout
 from .. import aspp
-from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
+from ..controlflow.visitor import ScalarsSet, SortedGlobalsList
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
 from .code import Cpp
 from .. import ir
 from .factory import *
 from .lowering import lower as lowerStatements
+from . import signature
 from .common import BatchedOperationsAux, KernelAttributes
 from ..type import Scalar, Tensor, Datatype
 
@@ -66,7 +67,7 @@ class KernelGenerator(object):
   def deduce_scalar(self, action):
     return self.deduce_single_scalar(action.scalar)
 
-  def _generateScalarPrologue(self, cpp, cfg):
+  def _generateScalarPrologue(self, cpp, region):
     """Compute every scalar-only expression up front.
 
     They read nothing the kernel produces, so hoisting them here means they are
@@ -74,18 +75,16 @@ class KernelGenerator(object):
     statement. A guarded statement gets its factor computed regardless of the
     guard, which only matters for an expression that can trap.
     """
-    for scalar in DerivedScalarsList().visit(cfg):
+    for scalar in signature.derivedScalars(region):
       datatype = scalar.getDatatype(self._arch)
       cpp(f'{datatype.ctype()} const {scalar.name()} = {scalar.expression.ccode(self._arch)};')
 
-  def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
-    """The kernel, as one region, written out once.
+  def build(self, cfg, factory, routineCache, gemm_cfg):
+    """The kernel as one region, stated over tensors.
 
-    Every statement of the control-flow graph lowers into the same region, so
-    what stands next to what is a question the region can answer. The region
-    is built, lowered and improved before anything is written, which is also
-    what decides how much storage the kernel needs: a buffer the passes leave
-    nothing reading is not declared at all.
+    Every statement of the control-flow graph goes into the same region, so
+    what stands next to what is a question the region can answer -- and so is
+    what the kernel needs from whoever calls it. Nothing is written yet.
     """
     region = ir.Region()
     for action in cfg:
@@ -95,7 +94,15 @@ class KernelGenerator(object):
         region.extend(factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
       else:
         region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
+    return region
 
+  def emit(self, cpp, region, factory, routineCache, gemm_cfg):
+    """The region, improved and written out once.
+
+    It is lowered and improved before anything is written, which is also what
+    decides how much storage the kernel needs: a buffer the passes leave
+    nothing reading is not declared at all.
+    """
     factory.chain(region, gemm_cfg)
     lowerStatements(region, gemm_cfg)
     if factory.optimizes():
@@ -104,7 +111,6 @@ class KernelGenerator(object):
     datatypes = {name: buffer.datatype
                  for name, buffer in ir.buffers(region).items()}
 
-    self._generateScalarPrologue(cpp, cfg)
     # temporary memory required (per element in case of gpu)
     # NOTE: it is required to know in case if the memory is allocated on the heap
     #       an provided by the user
@@ -124,6 +130,11 @@ class KernelGenerator(object):
 
     ir.CppEmitter(cpp, routineCache).emit(region)
     return ir.countFlops(region), required_tmp_mem
+
+  def generate(self, cpp, cfg, factory, routineCache, gemm_cfg):
+    region = self.build(cfg, factory, routineCache, gemm_cfg)
+    self._generateScalarPrologue(cpp, region)
+    return self.emit(cpp, region, factory, routineCache, gemm_cfg)
 
 class OptimizedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'
@@ -200,10 +211,12 @@ class OptimizedKernelGenerator(KernelGenerator):
         tensors[base_name] = {group}
 
   def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target, attrs=None):
-    # NOTE: sorted, because these become the kernel's scalar members and a set
-    #       enumerates in an order PYTHONHASHSEED varies between runs.
-    scalarsP = sorted(ScalarsSet().visit(cfg), key=str)
-    variables = SortedGlobalsList().visit(cfg)
+    """What the kernel costs and what it needs, and the function itself.
+
+    The region is built first and the interface is read off it, so what the
+    kernel asks its caller for is what its statements name -- and a statement
+    that stands nowhere, because it can never run, asks for nothing.
+    """
     tensors = collections.OrderedDict()
     writable = dict()
     is_compute_constant_tensors = dict()
@@ -214,60 +227,71 @@ class OptimizedKernelGenerator(KernelGenerator):
     inTensors = {}
     outTensors = {}
 
-    # A by-value operand is a scalar wherever it turns up, not only in the
-    # scaling slot of an action. Collected here rather than only from there,
-    # because a kernel that uses one both ways would otherwise declare the name
-    # twice -- once by value and once as a pointer -- and not compile.
-    byValue = [var.tensor for var in variables if var.tensor.isPassedByValue()]
-    variables = [var for var in variables if not var.tensor.isPassedByValue()]
-    for scalar in sorted(set(scalarsP) | set(byValue), key=str):
-      self.KernelOutline._addTensor(scalar, scalars)
-      datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
-    for var in variables:
-      self.KernelOutline._addTensor(var.tensor, tensors)
-      bn = var.tensor.baseNameWithNamespace()
-
-      datatype[bn] = var.datatype
-
-      if bn in writable:
-        if var.writable:
-          writable[bn] = True
-      else:
-        writable[bn] = var.writable
-
-      is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
-
-      nm = var.tensor.nameWithNamespace()
-
-      size = var.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
-      if var.tensor.is_compute_constant():
-        inConstTensors[nm] = size
-      else:
-        if var.writable:
-          outTensors[nm] = size
-        else:
-          inTensors[nm] = size
-
-    inConstBytes = sum(size for size in inConstTensors.values())
-    inBytes = sum(size for size in inTensors.values())
-    outBytes = sum(size for size in outTensors.values())
-
-    prefetchTensors = SortedPrefetchList().visit(cfg)
-    prefetch = collections.OrderedDict()
-    for tensor in prefetchTensors:
-      self.KernelOutline._addTensor(tensor, prefetch)
-
     functionIO = StringIO()
     function = ''
     with Cpp(functionIO) as fcpp:
       attrs = attrs if attrs is not None else KernelAttributes()
       factory = self._routine_factories[target](fcpp, self._arch, target, attrs)
-      hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
+      region = self.build(cfg, factory, self._routineCache, gemm_cfg)
+
+      # NOTE: sorted, because these become the kernel's scalar members and a set
+      #       enumerates in an order PYTHONHASHSEED varies between runs.
+      scalarsP = sorted(signature.scalars(region), key=str)
+      operands = signature.globals(region)
+
+      # A by-value operand is a scalar wherever it turns up, not only in the
+      # scaling slot of an action. Collected here rather than only from there,
+      # because a kernel that uses one both ways would otherwise declare the name
+      # twice -- once by value and once as a pointer -- and not compile.
+      byValue = [operand.tensor for operand in operands
+                 if operand.tensor.isPassedByValue()]
+      operands = [operand for operand in operands
+                  if not operand.tensor.isPassedByValue()]
+      for scalar in sorted(set(scalarsP) | set(byValue), key=str):
+        self.KernelOutline._addTensor(scalar, scalars)
+        datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
+      for operand in operands:
+        self.KernelOutline._addTensor(operand.tensor, tensors)
+        bn = operand.tensor.baseNameWithNamespace()
+
+        datatype[bn] = operand.datatype
+
+        if bn in writable:
+          if operand.writable:
+            writable[bn] = True
+        else:
+          writable[bn] = operand.writable
+
+        is_compute_constant_tensors[bn] = operand.tensor.is_compute_constant()
+
+        nm = operand.tensor.nameWithNamespace()
+
+        size = operand.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
+        if operand.tensor.is_compute_constant():
+          inConstTensors[nm] = size
+        else:
+          if operand.writable:
+            outTensors[nm] = size
+          else:
+            inTensors[nm] = size
+
+      prefetch = collections.OrderedDict()
+      for tensor in signature.prefetch(region):
+        self.KernelOutline._addTensor(tensor, prefetch)
+
+      self._generateScalarPrologue(fcpp, region)
+      hwFlops, tmp_memory = self.emit(fcpp, region, factory, self._routineCache,
+                                      gemm_cfg)
       factory.post_generate(self._routineCache)
       factory.freeTmp()
       factory.reset_stream()
       factory.reset_flags()
       function = functionIO.getvalue()
+
+    inConstBytes = sum(size for size in inConstTensors.values())
+    inBytes = sum(size for size in inTensors.values())
+    outBytes = sum(size for size in outTensors.values())
+
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
                               inConstBytes,

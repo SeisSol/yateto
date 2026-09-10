@@ -210,7 +210,8 @@ class OptimizedKernelFactory(KernelFactory):
       prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description, self._target, self._attrs)
-    return self._conditional(condition, log.tensorOp(description, generator))
+    return self._conditional(condition,
+                             log.tensorOp(description, generator, node.prefetch))
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     return self._elementwise(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)

@@ -653,6 +653,10 @@ class FusedElementwise(Op):
       self.sources = [None] * operands
       # a reduction walks an axis of its own inside the nest
       self.reduction = None
+      # the step whose value this one accumulates into, or None where it
+      # overwrites -- a step that accumulates reads what it writes, and inside
+      # the nest that is a value of the loop body rather than a buffer
+      self.accumulateFrom = None
 
     @classmethod
     def fromElementwise(cls, node, scalar=None):

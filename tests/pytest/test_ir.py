@@ -244,6 +244,37 @@ class TestElementwise:
         assert body.index('double const _alpha = s;') < body.index('for (')
         assert body.count('_alpha *') == 1
 
+    def test_a_sum_that_feeds_the_nest_stays_in_it(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= (A['ij'] + B['ij']) * D['ij']])
+        assert body.count('#pragma omp simd') == 1
+        assert '_tmp' not in body
+        assert f'A[1*_i + {N}*_j] + B[1*_i + {N}*_j]' in body
+
+    def test_a_longer_sum_stays_in_the_nest_too(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        E = Tensor('E', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= (A['ij'] + B['ij'] + E['ij']) * D['ij']])
+        assert body.count('#pragma omp simd') == 1
+        assert '_tmp' not in body
+
+    def test_a_sum_written_straight_to_the_result_is_left_alone(self):
+        # The destination is a buffer the caller sees, so every step of the
+        # chain has to reach it; keeping the running value in the body would
+        # store it once.
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= A['ij'] + B['ij'] + D['ij']])
+        assert body.count('#pragma omp simd') == 3
+
     def test_a_sparse_operand_reads_a_zero_where_it_has_no_entry(self):
         left = np.zeros((N, N), dtype=bool)
         left[0, 0] = left[1, 1] = True

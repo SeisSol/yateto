@@ -58,18 +58,28 @@ def lowerFusedElementwise(op):
   produced = {}
   for position, member in enumerate(op.members):
     last = position + 1 == len(op.members)
-    assert last or not member.step.add, \
-      'only the last step of a nest accumulates, and it does so into the result'
+    assert last or not member.step.add or member.step.accumulateFrom is not None, \
+      'a step accumulates into what an earlier step of the nest computed'
     args = [produced[source] if source is not None
             else _operand(body, term, indices, member.datatype)
             for term, source in zip(member.terms, member.step.sources)]
-    produced[position] = _step(body, member, args, factors)
+    produced[position] = _accumulate(
+      body, _step(body, member, args, factors), member, produced)
     if not last and produced[position] not in args:
       produced[position].name = f'_fused{position}'
       produced[position].materialize = True
 
   _store(body, op, indices, produced[len(op.members) - 1], factors)
   return region
+
+
+def _accumulate(builder, value, member, produced):
+  """The value combined with what the step accumulates into, if it does."""
+  source = member.step.accumulateFrom
+  if source is None:
+    return value
+  return builder.add(Arith(operations.Add(), [produced[source], value],
+                           member.datatype))
 
 
 def _step(builder, member, args, factors):

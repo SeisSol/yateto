@@ -273,13 +273,27 @@ class FindFusedElementwise(object):
     """
     return (self._agree(self._box(cfg[first].action), self._box(cfg[next].action))
             and cfg[first].action.getGuard() == cfg[next].action.getGuard()
-            and not cfg[next - 1].action.add
+            and (not cfg[next - 1].action.add
+                 or self._accumulatesInside(cfg, first, next - 1))
             # NOTE: not isLocal(), which is true only of an anonymous
             #       temporary. A named one -- SeisSol's `Iprev`, `IAcc` -- is
             #       neither local nor global by that pair of predicates, and it
             #       is a buffer like any other: nobody outside the kernel sees
             #       it, so it may become a variable of the loop body.
             and not cfg[next - 1].action.result.isGlobal())
+
+  @staticmethod
+  def _accumulatesInside(cfg, first, position):
+    """Whether the action at `position` accumulates into what the group holds.
+
+    A step that accumulates reads the destination it writes. Inside the nest
+    that destination is a value of the loop body, and it is one only where an
+    earlier step of the group wrote it: accumulating into anything else would
+    read a buffer the nest never filled.
+    """
+    action = cfg[position].action
+    return action.add and any(cfg[k].action.result == action.result
+                              for k in range(first, position))
 
   @staticmethod
   def _contained(cfg, first, last):
@@ -315,7 +329,11 @@ class FindFusedElementwise(object):
         m += 1
       # ... and then back until nothing the group writes is read outside it
       j = m
-      while j > i and not self._contained(cfg, i, j):
+      # ... and then back until nothing the group writes is read outside it,
+      # and until the step that ends it is one that stores rather than one
+      # that accumulates into a value the group would no longer keep
+      while j > i and (not self._contained(cfg, i, j)
+                       or self._accumulatesInside(cfg, i, j)):
         j -= 1
       members = [cfg[k].action for k in range(i, j + 1)]
       if len(members) > 1:
@@ -341,6 +359,10 @@ class FindFusedElementwise(object):
           # per operand: the step that wrote it, or None if it comes from
           # outside the group and the code generator reads it as usual
           step.sources = [produced.get(variable) for variable in operands]
+          if action.add:
+            # None for the last step, whose accumulation is the group's and is
+            # performed by the store
+            step.accumulateFrom = produced.get(action.result)
           outside.extend(variable for variable, source in zip(operands, step.sources)
                          if source is None)
           produced[action.result] = k

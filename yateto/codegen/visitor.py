@@ -63,14 +63,8 @@ class KernelGenerator(object):
   def deduce_single_scalar(self, scalar):
     return 1.0 if scalar is None else scalar
 
-  def deduce_scalar_list(self, action):
-    return [self.deduce_single_scalar(scalar) for scalar in action.scalar]
-
   def deduce_scalar(self, action):
-    if isinstance(action.scalar, list):
-      return self.deduce_scalar_list(action)
-    else:
-      return self.deduce_single_scalar(action.scalar)
+    return self.deduce_single_scalar(action.scalar)
 
   def _generateScalarPrologue(self, cpp, cfg):
     """Compute every scalar-only expression up front.
@@ -104,6 +98,7 @@ class KernelGenerator(object):
         else:
           region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
 
+    factory.chain(region, gemm_cfg)
     lowerStatements(region, gemm_cfg)
     if factory.optimizes():
       ir.fuseLoops(region)

@@ -15,10 +15,9 @@ from .codegen.test_framework import *
 from .codegen.visitor import *
 from .controlflow.visitor import AST2ControlFlow
 from .controlflow.transformer import *
-from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike, tinytc, GemmForge
+from .gemm_configuration import GeneratorCollection, DefaultGeneratorCollection, BLASlike
 from typing import List
 from io import StringIO
-import importlib.util
 
 
 class Kernel(object):
@@ -75,7 +74,7 @@ class Kernel(object):
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
 
-  def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool, exported=frozenset()):
+  def prepareUntilCodeGen(self, cost_estimator, exported=frozenset()):
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
@@ -113,9 +112,6 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
-    if self.target == 'gpu' and enableFusedGemm:
-      self.cfg = FindFusedGemms().visit(self.cfg)
-      self.cfg = LivenessAnalysis().visit(self.cfg)
 
   def prefetch(self):
     return self._prefetch
@@ -192,9 +188,9 @@ class KernelFamily(object):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest(arch)
 
-  def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool, exported=frozenset()):
+  def prepareUntilCodeGen(self, costEstimator, exported=frozenset()):
     for kernel in self._kernels.values():
-      kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm, exported)
+      kernel.prepareUntilCodeGen(costEstimator, exported)
 
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
@@ -317,12 +313,6 @@ class Generator(object):
     if not gemm_cfg:
       gemm_cfg = DefaultGeneratorCollection(self._arch)
 
-    hasGemmforge = any([isinstance(tool, GemmForge) for tool in gemm_cfg.gemmTools])
-    hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
-
-    chainforge_spec = importlib.util.find_spec('chainforge')
-    enableFusedGemm = (hasGemmforge and bool(chainforge_spec)) or hasTinytc
-
     print('Deducing indices...')
     for kernel in self._kernels:
       kernel.prepareUntilUnitTest(self._arch)
@@ -354,10 +344,10 @@ class Generator(object):
     print('Optimizing ASTs...')
     for kernel in self._kernels:
       print(f'{kernel.name} ({len(kernel.ast)} AST(s))')
-      kernel.prepareUntilCodeGen(cost_estimator, enableFusedGemm, frozenset(routine_exporters))
+      kernel.prepareUntilCodeGen(cost_estimator, frozenset(routine_exporters))
     for family in self._kernelFamilies.values():
       print(f'{family.name} ({sum(len(kernel.ast) for kernel in family.kernels())} AST(s))')
-      family.prepareUntilCodeGen(cost_estimator, enableFusedGemm, frozenset(routine_exporters))
+      family.prepareUntilCodeGen(cost_estimator, frozenset(routine_exporters))
 
     # Create mapping from namespace to kernel/family
     kernel_dict = {}

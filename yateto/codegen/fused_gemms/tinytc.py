@@ -1,7 +1,6 @@
-from ..common import TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, makeMemrefType, makeBatchType, makeLoad
+from ..common import TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, makeMemrefType, makeBatchType, makeLoad, toTinyTCType, toTinyTCImmediate
 from ...ast.indices import BoundingBox
 from ..cache import TinytcWriter
-from ...ast.node import IndexedTensor
 from ...type import Tensor
 from ..tiny_tensor_language import *
 
@@ -14,17 +13,18 @@ class FusedGemmsTinytc:
         self._arch = arch
         self._descr = descr
 
-    def generate(self, cpp, routineCache, cfg):
+    def generate(self, cpp, routineCache):
         args = dict()
         vals = dict()
+        tensors = dict()
         is_constant = dict()
         modified = set()
         bb = RegionBuilder()
         gid = bb.add(GroupIdInst())
 
-        def addVal(var, node):
-            if var not in vals:
-                name = str(var)
+        def addVal(tensor):
+            if tensor.name not in vals:
+                name = tensor.name
                 if not name.startswith('_'):
                     groups = Tensor.getGroup(name)
                     name = Tensor.getBaseName(name)
@@ -33,46 +33,46 @@ class FusedGemmsTinytc:
                 else:
                     # Names starting with underscore are illegal in tinytc
                     name = ''
-                is_constant[var] = node.tensor.is_compute_constant(
-                ) if isinstance(node, IndexedTensor) else False
+                is_constant[tensor.name] = tensor.is_compute_constant
                 arg = LocalValue(
-                    makeBatchType(toTinyTCType(var.datatype), node.memoryLayout(),
-                                  is_constant[var], var.is_temporary), name)
-                args[var] = arg
-                vals[var] = makeLoad(bb, arg, gid, is_constant[var], var.is_temporary)
+                    makeBatchType(toTinyTCType(tensor.datatype), tensor.memoryLayout,
+                                  tensor.is_compute_constant, tensor.is_temporary), name)
+                args[tensor.name] = arg
+                tensors[tensor.name] = tensor
+                vals[tensor.name] = makeLoad(bb, arg, gid, tensor.is_compute_constant,
+                                             tensor.is_temporary)
 
         flops = 0
-        for item in self._descr:
-            node, variables, add, scalar = item
-            res, op1, op2 = variables
+        for statement in self._descr:
+            res, op1, op2 = statement.result, *statement.terms
 
-            addVal(op1, node.leftTerm())
-            op1_val = vals[op1]
-            addVal(op2, node.rightTerm())
-            op2_val = vals[op2]
+            addVal(op1)
+            op1_val = vals[op1.name]
+            addVal(op2)
+            op2_val = vals[op2.name]
 
             res_val = None
             if res.is_temporary:
                 res_val = bb.add(
                     AllocaInst(
-                        makeMemrefType(toTinyTCType(res.datatype), res.memoryLayout(), False, True)))
-                vals[res] = res_val
+                        makeMemrefType(toTinyTCType(res.datatype), res.memoryLayout, False, True)))
+                vals[res.name] = res_val
             else:
-                modified.add(res)
-                addVal(res, node)
-                res_val = vals[res]
+                modified.add(res.name)
+                addVal(res)
+                res_val = vals[res.name]
 
-            bbA = BoundingBox.fromSpp(node.leftTerm().eqspp())
-            bbB = BoundingBox.fromSpp(node.rightTerm().eqspp())
+            bbA = BoundingBox.fromSpp(op1.eqspp)
+            bbB = BoundingBox.fromSpp(op2.eqspp)
 
-            k_op1 = 0 if node.transA() else 1
-            k_op2 = 1 if node.transB() else 0
+            k_op1 = 0 if statement.transA else 1
+            k_op2 = 1 if statement.transB else 0
             k = bbA[k_op1] & bbB[k_op2]
             m = bbA[1 - k_op1]
             n = bbB[1 - k_op2]
 
-            if not node.transA() and node.leftTerm().memoryLayout(
-            ).alignedStride() and node.memoryLayout().alignedStride():
+            if not statement.transA and op1.memoryLayout.alignedStride() \
+               and res.memoryLayout.alignedStride():
                 m = m.aligned(self._arch)
 
             def offsetSizeLists(ml, range0, range1):
@@ -82,23 +82,21 @@ class FusedGemmsTinytc:
                 return ([IntImmValue(IntegerType.index, o) for o in offsets],
                         [IntImmValue(IntegerType.index, s) for s in sizes])
 
-            alpha = bb.add(ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype), scalar)))
+            alpha = bb.add(
+                ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype), statement.alpha)))
             op1_sub = bb.add(
-                SubviewInst(
-                    op1_val,
-                    *offsetSizeLists(node.leftTerm().memoryLayout(), m, k)))
+                SubviewInst(op1_val, *offsetSizeLists(op1.memoryLayout, m, k)))
             op2_sub = bb.add(
-                SubviewInst(
-                    op2_val,
-                    *offsetSizeLists(node.rightTerm().memoryLayout(), k, n)))
-            beta = bb.add(ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype), 1.0 if add else 0.0)))
+                SubviewInst(op2_val, *offsetSizeLists(op2.memoryLayout, k, n)))
+            beta = bb.add(
+                ConstantInst(toTinyTCImmediate(toTinyTCType(res.datatype),
+                                               1.0 if statement.add else 0.0)))
             res_sub = bb.add(
-                SubviewInst(res_val,
-                            *offsetSizeLists(node.memoryLayout(), m, n)))
+                SubviewInst(res_val, *offsetSizeLists(res.memoryLayout, m, n)))
 
             trans = lambda t: Transpose.t if t else Transpose.n
             bb.add(
-                GemmInst(trans(node.transA()), trans(node.transB()), alpha,
+                GemmInst(trans(statement.transA), trans(statement.transB), alpha,
                          op1_sub, op2_sub, beta, res_sub))
 
             flops += 2 * m.size() * n.size() * k.size()
@@ -112,8 +110,8 @@ class FusedGemmsTinytc:
         for key, val in args.items():
             name = f'_tmp{val.name}' if val.name.isnumeric() else val.name
             wrapper_args.append(
-                TinytcKernelArgument(name, str(key), is_constant[key],
-                                     key.is_temporary, key in modified))
+                TinytcKernelArgument(name, key, is_constant[key],
+                                     tensors[key].is_temporary, key in modified))
         wrapper = TinytcWrapper(kernel, wrapper_args)
         cpp(wrapper.call())
         prototype = wrapper.prototype()

@@ -1,4 +1,4 @@
-from ..ast.node import Node, FusedGEMMs, LoopOverGEMM
+from ..ast.node import Node
 from .. import ops
 from ..guard import Guard
 from collections import OrderedDict
@@ -247,48 +247,6 @@ class ProgramAction(object):
 
 
 # TODO: probably should be a subclass of ProgramAction
-class FusedActions(object):
-  def __init__(self):
-    self._actions: List[ProgramAction] = []
-    self._variables: List[Variable] = []
-    self._adds: List[bool] = []
-    self._scalars = []
-    self._conditions = []
-
-  def add(self, action: ProgramAction) -> None:
-    if not isinstance(action.term.node, LoopOverGEMM):
-      raise ValueError(f'fused actions are applied only to LoopOverGEMM, '
-                       f'given: {type(action.term.node)}')
-
-    self._actions.append(action)
-    self._variables.append(action.result)
-    self._variables.extend(action.term.variableList())
-    self._adds.append(action.add)
-    self._scalars.append(action.scalar)
-    self._conditions.append(action.condition)
-
-  def gen_program_action(self) -> ProgramAction:
-    last_action: ProgramAction = self._actions[-1]
-    return ProgramAction(result=last_action.result,
-                         term=self._gen_expr(),
-                         add=self._adds,
-                         scalar=self._scalars,
-                         condition=self._conditions)
-
-  def _gen_expr(self) -> Expression:
-    node = FusedGEMMs()
-    for action in self._actions:
-      node.add(action.term.node)
-
-    result: Variable = self._actions[-1].result
-    return Expression(node=node,
-                      memoryLayout=result.memoryLayout(),
-                      variables=self._variables)
-
-  def is_empty(self) -> bool:
-    return len(self._actions) == 0
-
-
 class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
@@ -358,8 +316,3 @@ class LiveSet:
 
   def __repr__(self):
     return f'LiveSet({self.data})'
-
-
-class FusedProgramPoint(ProgramPoint):
-  def __init__(self, action: FusedActions):
-    super().__init__(action.gen_program_action())

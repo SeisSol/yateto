@@ -24,7 +24,7 @@ This module checks that:
   are enforced,
 * the per-node sparsity-pattern / flop-count helpers are correct,
 * the specialised nodes used by the middle-end (``Elementwise``, ``Reduction``,
-  ``Contraction``, ``LoopOverGEMM``, ``FusedGEMMs``, ``SliceView``,
+  ``Contraction``, ``LoopOverGEMM``, ``SliceView``,
   ``Permute``, ``Broadcast``) behave as advertised.
 """
 from __future__ import annotations
@@ -43,7 +43,6 @@ from yateto.ast.node import (
     Broadcast,
     Contraction,
     Einsum,
-    FusedGEMMs,
     IndexedTensor,
     Reduction,
     LoopOverGEMM,
@@ -378,37 +377,6 @@ class TestLoopOverGEMM:
         )
         assert log.transA() is True
         assert log.transB() is False
-
-
-# ---------------------------------------------------------------------------
-# FusedGEMMs - list-like container of (pure GEMM) LoGs
-# ---------------------------------------------------------------------------
-
-
-class TestFusedGEMMs:
-    def _log(self):
-        a = IndexedTensor(Tensor("A", (3, 4)), "ij")
-        b = IndexedTensor(Tensor("B", (4, 5)), "jk")
-        return LoopOverGEMM(
-            indices=Indices("ik", (3, 5)),
-            aTerm=a, bTerm=b,
-            m=Indices("i", (3,)),
-            n=Indices("k", (5,)),
-            k=Indices("j", (4,)),
-        )
-
-    def test_is_empty_on_construction(self):
-        fg = FusedGEMMs()
-        assert fg.is_empty()
-
-    def test_add_accepts_only_log(self):
-        fg = FusedGEMMs()
-        fg.add(self._log())
-        assert not fg.is_empty()
-        assert len(fg.get_children()) == 1
-        # Non-LoG child -> rejected.
-        with pytest.raises(ValueError, match="expected LoopOverGEMM"):
-            fg.add(IndexedTensor(Tensor("x", (2, 2)), "ij"))
 
 
 # ---------------------------------------------------------------------------

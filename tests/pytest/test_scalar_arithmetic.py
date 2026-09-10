@@ -130,7 +130,7 @@ class TestPrologue:
     def lower(arch, statement):
         kernel = Kernel('k', statement)
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         return kernel
 
     @staticmethod

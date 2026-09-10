@@ -39,7 +39,7 @@ def tensors():
 def build(arch, statements):
     kernel = Kernel('k', statements)
     kernel.prepareUntilUnitTest(arch)
-    kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+    kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
     return kernel
 
 

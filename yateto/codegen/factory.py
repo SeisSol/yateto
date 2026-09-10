@@ -79,6 +79,14 @@ class KernelFactory(object):
     """
     return False
 
+  def chain(self, region, gemm_cfg):
+    """Put the statements a backend takes together into one statement.
+
+    Only where there is such a backend, which is a question about what the
+    kernel is generated for and which tools it may use.
+    """
+    return region
+
   def post_generate(self, routine_cache):
     pass
 
@@ -184,6 +192,10 @@ class OptimizedKernelFactory(KernelFactory):
     # together is the external generator's business
     return self._target == 'cpu'
 
+  def chain(self, region, gemm_cfg):
+    return fused_gemms.fuseChains(region, self._arch, gemm_cfg, self._target,
+                                  self._attrs)
+
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = log.Description(
@@ -199,14 +211,6 @@ class OptimizedKernelFactory(KernelFactory):
     )
     generator = log.generator(self._arch, description, self._target, self._attrs)
     return self._conditional(condition, log.tensorOp(description, generator))
-
-  def create_FusedGEMMs(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    description = fused_gemms.Description(node, result, arguments, condition, add, scalar)
-    generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target,
-                                      self._attrs)
-    return self._conditional(condition,
-                             lambda: generator.generate(self._cpp, routineCache, gemm_cfg),
-                             touches=[result] + list(arguments), writes=[result])
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     return self._elementwise(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)

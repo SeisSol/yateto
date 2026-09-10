@@ -715,3 +715,96 @@ class TestStatementLowering:
         region = ir.Region([guarded])
         lower(region, None)
         assert guarded.region.ops == [loop]
+
+
+class TestChains:
+    """Adjacent matrix products a backend takes as one chain.
+
+    Whether it may is a question about what stands next to what, which is what
+    the region answers. The backends themselves cannot be exercised here --
+    neither chainforge nor the tiny tensor compiler is installed -- so what is
+    pinned down is which statements are put together and which are not.
+    """
+
+    class _Chains:
+        """A configuration with a backend that takes chains."""
+
+        def __init__(self):
+            self.gemmTools = []
+            self.chained = []
+
+        def __call__(self, arch, descr, gemm_cfg, target, attrs=None):
+            self.chained.append(list(descr))
+            return self
+
+    def _gemm(self, name, left='A', right='B', indices=('ij', 'ik', 'kj')):
+        result, a, b = indices
+        return ir.LoopOverGEMM(
+            description(name, result, (N,) * len(result)),
+            [description(left, a, (N,) * len(a)),
+             description(right, b, (N,) * len(b))])
+
+    @pytest.fixture
+    def fuse(self, monkeypatch):
+        """`fuseChains`, with a backend that records the chains it is given."""
+        from yateto.codegen.fused_gemms import chain
+
+        def run(region, backend, available=True):
+            monkeypatch.setattr(chain, 'available',
+                                lambda gemm_cfg, target: available)
+            monkeypatch.setattr(chain, 'generator', backend)
+            return chain.fuseChains(region, None, backend, 'gpu')
+
+        return run
+
+    def test_adjacent_products_become_one_statement(self, fuse):
+        backend = self._Chains()
+        region = ir.Region([self._gemm('T'), self._gemm('C', left='T')])
+        fuse(region, backend)
+        chained, = region.ops
+        assert isinstance(chained, ir.FusedGEMMs)
+        assert len(chained.statements) == 2
+        assert chained.result.name == 'C'
+
+    def test_what_the_chain_reaches_is_what_its_members_reach(self, fuse):
+        backend = self._Chains()
+        region = ir.Region([self._gemm('T'), self._gemm('C', left='T')])
+        fuse(region, backend)
+        reached, written = region.ops[0].touched()
+        assert {term.name for term in reached} == {'A', 'B', 'T', 'C'}
+        assert [term.name for term in written] == ['T', 'C']
+
+    def test_a_statement_between_them_ends_the_chain(self, fuse):
+        backend = self._Chains()
+        between = ir.Copy(description('D', 'ij', (N, N)),
+                          [description('A', 'ij', (N, N))])
+        region = ir.Region([self._gemm('T'), between, self._gemm('C', left='T')])
+        fuse(region, backend)
+        assert [type(op) for op in region.ops] == \
+            [ir.FusedGEMMs, ir.Copy, ir.FusedGEMMs]
+
+    def test_a_contraction_that_is_not_a_matrix_product_is_left_alone(self, fuse):
+        backend = self._Chains()
+        looped = self._gemm('C', indices=('ijl', 'ikl', 'kjl'))
+        assert not looped.isPureGEMM()
+        region = ir.Region([looped])
+        fuse(region, backend)
+        assert region.ops == [looped]
+
+    def test_nothing_is_chained_where_no_backend_takes_chains(self, fuse):
+        backend = self._Chains()
+        first, second = self._gemm('T'), self._gemm('C', left='T')
+        region = ir.Region([first, second])
+        fuse(region, backend, available=False)
+        assert region.ops == [first, second]
+
+    def test_a_guarded_statement_is_chained_only_with_its_own_guard(self, fuse):
+        """Each guard is a region of its own, so a chain never spans two."""
+        backend = self._Chains()
+        guarded = ir.If('flag', ir.Region([self._gemm('T')]))
+        region = ir.Region([guarded, self._gemm('C', left='T')])
+        fuse(region, backend)
+        assert len(guarded.region.ops) == 1
+        assert isinstance(guarded.region.ops[0], ir.FusedGEMMs)
+        assert len(guarded.region.ops[0].statements) == 1
+        assert len(region.ops[1].statements) == 1

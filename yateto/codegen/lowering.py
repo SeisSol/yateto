@@ -53,8 +53,7 @@ def _written(op, gemm_cfg):
   if lowering is not None:
     return lowering(*arguments).ops
 
-  operands = [term for term in [op.result] + op.terms
-              if hasattr(term, 'memoryLayout')]
+  reached, written = op.touched()
   return [ir.Call(lambda cpp, cache: op.generator.generate(cpp, cache, *arguments),
-                  reads=[ir.Buffer.fromDescription(term) for term in operands],
-                  writes=[ir.Buffer.fromDescription(op.result)])]
+                  reads=[ir.Buffer.fromDescription(term) for term in reached],
+                  writes=[ir.Buffer.fromDescription(term) for term in written])]

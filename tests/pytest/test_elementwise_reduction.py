@@ -196,14 +196,14 @@ class TestFlopCounts:
         A = Tensor('A', (N, N)); s = Tensor('s', ())
         kernel = Kernel('k', s[''] <= yf.sum(A['ij'], 'ij'))
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         assert kernel.nonZeroFlops > 0
 
     def test_an_elementwise_counts_its_entries(self, arch):
         A = Tensor('A', (N, N)); out = Tensor('out', (N, N))
         kernel = Kernel('k', out['ij'] <= yf.sqrt(A['ij']))
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         assert kernel.nonZeroFlops == N * N
 
 

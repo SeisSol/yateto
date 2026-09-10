@@ -219,7 +219,7 @@ def _scalarsOf(cfg):
   S = set()
   for pp in cfg:
     if pp.action:
-      scalars = pp.action.scalar if isinstance(pp.action.scalar, list) else [pp.action.scalar]
+      scalars = [pp.action.scalar]
       S = S | {scalar for scalar in scalars if isinstance(scalar, Tensor)}
   return S
 

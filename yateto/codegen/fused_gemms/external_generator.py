@@ -1,4 +1,4 @@
-from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
+from ..common import BatchedOperationsAux, KernelAttributes
 from ...ast.indices import BoundingBox
 from ..cache import RoutineGenerator, GpuRoutineGenerator
 from chainforge.interfaces import YatetoInterface as yi
@@ -12,31 +12,29 @@ class FusedGemms:
     self._arch = arch
     self._descr = descr
     self._attrs = attrs if attrs is not None else KernelAttributes()
-    self._datatype = self._descr[0].node.datatype
+    self._datatype = self._descr.datatype
     self._batch_aux = BatchedOperationsAux()
     self._cache = {}
     self._tmp_matrices = {}
 
-  def generate(self, cpp, routineCache, cfg):
+  def generate(self, cpp, routineCache):
     self._tmp_matrices = {}
     self._cache = {}
     gemm_list = []
     flops = 0
-    for item in self._descr:
-      node, args, add, scalar = item
-      res, op1, op2 = args
+    for statement in self._descr:
+      result, left, right = statement.result, *statement.terms
 
-      self._cache_matrices(node, res, op1, op2)
-      can_be_aligned = self._can_be_aligned(node, res, op1)
-      gemm_list.append(GemmDescr(trans_a=node.transA(),
-                                 trans_b=node.transB(),
-                                 a=self._cache[op1.name],
-                                 b=self._cache[op2.name],
-                                 c=self._cache[res.name],
-                                 alpha=scalar,
-                                 beta=1.0 if add else 0.0,
+      self._cache_matrices(statement)
+      gemm_list.append(GemmDescr(trans_a=statement.transA,
+                                 trans_b=statement.transB,
+                                 a=self._cache[left.name],
+                                 b=self._cache[right.name],
+                                 c=self._cache[result.name],
+                                 alpha=statement.alpha,
+                                 beta=1.0 if statement.add else 0.0,
                                  strict_match=False,
-                                 prefer_align=can_be_aligned))
+                                 prefer_align=self._can_be_aligned(statement)))
       flops += gemm_list[-1].compute_flops()
 
     context = Context(arch=self._arch.name,
@@ -51,73 +49,63 @@ class FusedGemms:
     routineCache.addRoutine(routine_name, ChainForgeWriter(chainforge_generator))
     return flops
 
-  def _can_be_aligned(self, node, res, op1):
-    res_tensor = IndexedTensorDescription.fromNode(res, node)
-    op1_tensor = IndexedTensorDescription.fromNode(op1, node.leftTerm())
-
-    aligned_res = res_tensor.memoryLayout.alignedStride()
-    aligned_op1 = not node.transA() and op1_tensor.memoryLayout.alignedStride()
+  def _can_be_aligned(self, statement):
+    aligned_res = statement.result.memoryLayout.alignedStride()
+    aligned_op1 = not statement.transA \
+                  and statement.terms[0].memoryLayout.alignedStride()
     return aligned_res and aligned_op1
 
-  def _cache_matrices(self, node, res, op1, op2):
-    res_tensor = IndexedTensorDescription.fromNode(res, node)
-    op1_tensor = IndexedTensorDescription.fromNode(op1, node.leftTerm())
-    op2_tensor = IndexedTensorDescription.fromNode(op2, node.rightTerm())
-    m, n, k = FusedGemms._get_gemm_mnk(op1=op1_tensor,
-                                       trans_op1=node.transA(),
-                                       op2=op2_tensor,
-                                       trans_op2=node.transB())
+  def _cache_matrices(self, statement):
+    result, left, right = statement.result, *statement.terms
+    m, n, k = FusedGemms._get_gemm_mnk(op1=left,
+                                       trans_op1=statement.transA,
+                                       op2=right,
+                                       trans_op2=statement.transB)
 
-    can_be_aligned = self._can_be_aligned(node, res, op1)
-    if can_be_aligned:
+    if self._can_be_aligned(statement):
       aligned_m = m.aligned(self._arch)
       m.stop = aligned_m.stop
 
-    matrix = self._get_chainforge_matrix(tensor=op1_tensor,
-                                         tensor_variable=op1,
-                                         range=(m, k))
+    matrix = self._get_chainforge_matrix(tensor=left, range=(m, k))
 
-    if not (op1.name in self._cache and matrix.is_same(self._cache[op1.name])):
-      self._cache[op1.name] = matrix
+    if not (left.name in self._cache and matrix.is_same(self._cache[left.name])):
+      self._cache[left.name] = matrix
 
-    matrix = self._get_chainforge_matrix(tensor=op2_tensor,
-                                         tensor_variable=op2,
-                                         range=(k, n))
+    matrix = self._get_chainforge_matrix(tensor=right, range=(k, n))
 
-    if not (op2.name in self._cache and matrix.is_same(self._cache[op2.name])):
-      self._cache[op2.name] = matrix
+    if not (right.name in self._cache and matrix.is_same(self._cache[right.name])):
+      self._cache[right.name] = matrix
 
-    if res.is_temporary:
-      self._cache[res.name] = self._gen_tmp_matix(op1, op2, node, res.name)
+    if result.is_temporary:
+      self._cache[result.name] = self._gen_tmp_matix(statement)
     else:
-      matrix = self._get_chainforge_matrix(tensor=res_tensor,
-                                           tensor_variable=res,
-                                           range=(m, n))
+      matrix = self._get_chainforge_matrix(tensor=result, range=(m, n))
 
-      if not (res.name in self._cache and matrix.is_same(self._cache[res.name])):
-        self._cache[res.name] = matrix
+      if not (result.name in self._cache and matrix.is_same(self._cache[result.name])):
+        self._cache[result.name] = matrix
 
-  def _get_chainforge_matrix(self, tensor, tensor_variable, range):
+  def _get_chainforge_matrix(self, tensor, range):
     addr_mode = self._batch_aux.deduce_addresing(tensor)
-    if tensor_variable.is_temporary:
-      if not tensor_variable.name in self._tmp_matrices:
-        raise RuntimeError(f'expected tmp. tensor {tensor_variable.name} to be cached '
+    if tensor.is_temporary:
+      if not tensor.name in self._tmp_matrices:
+        raise RuntimeError(f'expected tmp. tensor {tensor.name} to be cached '
                            f'while code generation for fused-gemms')
       else:
-        return self._tmp_matrices[tensor_variable.name]
+        return self._tmp_matrices[tensor.name]
 
     return yi.gen_dense_matrix(range,
                                tensor.memoryLayout.bbox(),
                                addressing=Addressing.str2addr(addr_mode),
-                               name=tensor_variable.name,
-                               is_tmp=tensor_variable.is_temporary)
+                               name=tensor.name,
+                               is_tmp=tensor.is_temporary)
 
-  def _gen_tmp_matix(self, op1, op2, res_node, res_name):
-    tmp_matrix = generate_tmp_matrix(op1=self._cache[op1.name],
-                                     op2=self._cache[op2.name],
-                                     trans_op1=res_node.transA(),
-                                     trans_op2=res_node.transB())
-    self._tmp_matrices[res_name] = tmp_matrix
+  def _gen_tmp_matix(self, statement):
+    left, right = statement.terms
+    tmp_matrix = generate_tmp_matrix(op1=self._cache[left.name],
+                                     op2=self._cache[right.name],
+                                     trans_op1=statement.transA,
+                                     trans_op2=statement.transB)
+    self._tmp_matrices[statement.result.name] = tmp_matrix
     return tmp_matrix
 
   def _gen_call_site(self, generator):
@@ -135,8 +123,8 @@ class FusedGemms:
       else:
         offset_name_map[name] = f'{BatchedOperationsAux.EXTRA_OFFSET_NAME}_{name}'
 
-    beta = 1.0 if self._descr.add[-1] else 0.0
-    alpha = self._descr.scalar[-1]
+    beta = 1.0 if self._descr.last.add else 0.0
+    alpha = self._descr.last.alpha
     return generator.generate_call_site(mat_name_map,
                                         offset_name_map,
                                         alpha,

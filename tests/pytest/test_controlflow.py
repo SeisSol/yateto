@@ -45,7 +45,6 @@ from yateto.ast.visitor import FindIndexPermutations
 from yateto.ast.transformer import SelectIndexPermutations
 from yateto.controlflow.graph import (
     Expression,
-    FusedActions,
     ProgramAction,
     ProgramPoint,
     Variable,
@@ -271,23 +270,3 @@ class TestMergeActions:
         cfg = MergeActions().visit(cfg)
         # After merging, liveness must still be up to date.
         assert all(pp.live is not None for pp in cfg)
-
-
-class TestFusedActions:
-    def test_is_empty_on_construction(self):
-        fa = FusedActions()
-        assert fa.is_empty()
-
-    def test_add_rejects_non_log_term(self, arch):
-        from yateto.memory import DenseMemoryLayout
-        ml = DenseMemoryLayout((3, 3))
-        # Construct a trivially non-LoG ProgramAction to check the guard.
-        result = Variable("R", True, ml)
-        term = Variable("X", False, ml)  # a plain Variable, not Expression
-        action = ProgramAction(result, term, add=False)
-
-        fa = FusedActions()
-        # The term is not an Expression at all (it's a Variable), so
-        # ``action.term.node`` would error - but the check happens first.
-        with pytest.raises(AttributeError):
-            fa.add(action)

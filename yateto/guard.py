@@ -42,12 +42,6 @@ class Guard:
       return value
     if isinstance(value, bool):
       return cls.always() if value else cls.never()
-    if isinstance(value, list):
-      # FusedActions carry one guard per fused GEMM
-      guard = cls.always()
-      for entry in value:
-        guard = guard & cls.coerce(entry)
-      return guard
     return cls.literal(value)
 
   def isAlways(self):

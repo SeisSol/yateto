@@ -9,6 +9,7 @@ from ...memory import DenseMemoryLayout
 def tensorOp(descr, generator=None):
   """The statement a contraction description states."""
   return ir.LoopOverGEMM(descr.result, [descr.leftTerm, descr.rightTerm],
+                         transA=descr.transA, transB=descr.transB,
                          alpha=descr.alpha, add=descr.add,
                          loopRanges=descr.loopRanges, generator=generator)
 

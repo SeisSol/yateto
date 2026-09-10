@@ -1,1 +1,2 @@
-from .factory import Description, generator
+from .chain import fuseChains
+from .factory import Description, available, generator

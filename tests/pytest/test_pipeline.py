@@ -123,7 +123,7 @@ class TestFlopRegression:
         counts = []
         for kernel in g.kernels():
             kernel.prepareUntilUnitTest(arch)
-            kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+            kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
             counts.append(kernel.nonZeroFlops)
 
         # 2*N^3 - N^2 = 65536 - 1024 = 64512 (Yateto's accounting).
@@ -136,7 +136,7 @@ class TestFlopRegression:
         mod.add(g)
         kernel = g.kernels()[0]
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         # The ``minimal`` example's single kernel should come out with
         # a sensible (positive) flop count.
         assert kernel.nonZeroFlops > 0

@@ -146,7 +146,7 @@ class TestScalingLowering:
         A, C = quantities['matrix'], Tensor('C', (N, N))
         kernel = Kernel('k', C['ij'] <= 2.0 * A['ij'])
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         scalars = [pp.action.scalar for pp in kernel.cfg if pp.action is not None]
         assert 2.0 in scalars
 
@@ -179,14 +179,14 @@ class TestScalingSemantics:
         A, C = quantities['matrix'], Tensor('C', (N, N))
         kernel = Kernel('k', C['ij'] <= -A['ij'])
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         assert kernel.nonZeroFlops == 0
 
     def test_a_general_factor_is_not_free(self, arch, quantities):
         A, C = quantities['matrix'], Tensor('C', (N, N))
         kernel = Kernel('k', C['ij'] <= 2.0 * A['ij'])
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         assert kernel.nonZeroFlops > 0
 
     def test_scaling_a_product_keeps_the_product(self, quantities):

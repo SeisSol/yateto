@@ -120,7 +120,7 @@ class TestKernelPreparation:
         C = Tensor("C", (8, 8))
         kernel = Kernel("k", C["ij"] <= A["ik"] * B["kj"])
         kernel.prepareUntilUnitTest(arch)
-        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
         # The exact flop count for a dense 8x8 matmul is 960 - same
         # value we pinned down in test_ast_visitor.
         assert kernel.nonZeroFlops == 960

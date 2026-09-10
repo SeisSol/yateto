@@ -1,5 +1,4 @@
 from .graph import *
-from .fused_gemm_automata import Context as FusedGemmsContext
 
 
 class MergeScalarMultiplications(object):
@@ -142,14 +141,3 @@ class MergeActions(object):
             n -= 1
       i += 1
     return LivenessAnalysis().visit(cfg)
-
-class FindFusedGemms(object):
-  def visit(self, cfg):
-    context = FusedGemmsContext.get_finite_automata()
-    try:
-      for pp in cfg:
-        context.process(pp)
-      cfg = context.get_cfg()
-    except Exception as err:
-      print(f'Warning: {err}')
-    return cfg

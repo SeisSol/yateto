@@ -2,7 +2,7 @@ from ..codegen.common import INDEX_PREFIX
 from ..ops import CBinaryOperatorMixin
 from .address import address
 from .core import ValueOp
-from .ops import (Arith, Call, Const, Fold, Load, Loop, Memset, Pointer,
+from .ops import (Arith, Call, Const, Fold, If, Load, Loop, Memset, Pointer,
                   Read, Scope, Store, Yield)
 
 
@@ -82,6 +82,10 @@ class CppEmitter:
     if isinstance(op, Memset):
       pointer = op.buffer.name if op.offset == 0 else f'{op.buffer.name} + {op.offset}'
       self._cpp.memset(pointer, op.count, op.buffer.datatype.ctype())
+      return
+    if isinstance(op, If):
+      with self._cpp.If(op.condition):
+        self._emitRegion(op.region)
       return
     if isinstance(op, Scope):
       with self._cpp.AnonymousScope():

@@ -8,6 +8,7 @@ from .common import forLoops, loopRanges, INDEX_PREFIX, TensorDescription, Index
 from . import copyscaleadd, log, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
+from .. import ir
 from ..ops import Add, Mul
 
 class KernelFactory(object):
@@ -105,15 +106,28 @@ class KernelFactory(object):
     shape = var.memoryLayout().shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
-  def _conditional(self, condition, generate):
+  def _conditional(self, condition, statement):
+    """One statement of the kernel, as a region, guarded where it is guarded.
+
+    `statement` is the region the statement lowers to, or a callable for a
+    generator that still writes itself -- which becomes a call, since what
+    such a generator does is its own to write and its own to report.
+    """
     guard = Guard.coerce(condition)
-    if guard.isAlways():
-      return generate()
     if guard.isNever():
-      return 0
+      return ir.Region()
+    region = statement if isinstance(statement, ir.Region) \
+             else ir.Region([ir.Call(lambda cpp, cache: statement())])
+    if guard.isAlways():
+      return region
     self._checkGuardIsReadable(guard)
-    with self._cpp.If(f'({guard.ccode()})'):
-      return generate()
+    return ir.Region([ir.If(f'({guard.ccode()})', region)])
+
+  @staticmethod
+  def _statement(generator, write, *lowering):
+    """The region a generator makes, or the call that still writes it."""
+    lower = getattr(generator, 'lower', None)
+    return lower(*lowering) if lower is not None else write
 
   def _checkGuardIsReadable(self, guard):
     """A guard emitted here is read on the host, so it has to live there.
@@ -152,7 +166,8 @@ class OptimizedKernelFactory(KernelFactory):
       prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description, self._target, self._attrs)
-    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
+    return self._conditional(condition, self._statement(
+      generator, lambda: generator.generate(self._cpp, routineCache, gemm_cfg), gemm_cfg))
 
   def create_FusedGEMMs(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = fused_gemms.Description(node, result, arguments, condition, add, scalar)
@@ -174,7 +189,8 @@ class OptimizedKernelFactory(KernelFactory):
       nodeTermIndices = node.nodeTermIndices
     )
     generator = elementwise.generator(self._arch, description, self._target)
-    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+    return self._conditional(condition, self._statement(
+      generator, lambda: generator.generate(self._cpp, routineCache)))
 
   def create_FusedElementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     # The pass collected the operands step by step, so walking the steps the
@@ -193,7 +209,8 @@ class OptimizedKernelFactory(KernelFactory):
     description = elementwise.FusedDescription(
       scalar, add, resultDescr, members, loopRanges(resultDescr, resultDescr.indices))
     generator = elementwise.fusedGenerator(self._arch, description, self._target)
-    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+    return self._conditional(condition, self._statement(
+      generator, lambda: generator.generate(self._cpp, routineCache)))
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = reduction.Description(
@@ -204,7 +221,8 @@ class OptimizedKernelFactory(KernelFactory):
       optype = node.optype,
     )
     generator = reduction.generator(self._arch, description, self._target)
-    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+    return self._conditional(condition, self._statement(
+      generator, lambda: generator.generate(self._cpp, routineCache)))
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromNode(result, node)
@@ -230,7 +248,8 @@ class OptimizedKernelFactory(KernelFactory):
     )
     generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target,
                                        self._attrs)
-    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+    return self._conditional(condition, self._statement(
+      generator, lambda: generator.generate(self._cpp, routineCache)))
 
 class UnitTestFactory(KernelFactory):
   def __init__(self, cpp, arch, nameFun, testFramework):
@@ -256,15 +275,19 @@ class UnitTestFactory(KernelFactory):
     if scalar and scalar != 1.0:
       terms.insert(0, str(scalar))
 
-    if not add:
-      self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
-
     class EinsumBody(object):
       def __call__(s):
         self._cpp(f"{resultTerm} += {' * '.join(terms)};")
         return len(terms)
 
-    return self._conditional(condition, lambda: forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False))
+    def statement():
+      # the zeroing belongs to this statement, so it is written where the
+      # statement is and not where the statement was built
+      if not add:
+        self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
+      return forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False)
+
+    return self._conditional(condition, statement)
 
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -573,10 +596,9 @@ class ExportFactory(KernelFactory):
       # unguarded one -- both `None` and `[]` are falsy -- would run always
       return 0
     self.operations.append(description)
-    # The flop count used to come back from here and be added to the
-    # kernel's `hwFlops`. Nothing is built yet at this point, so there is
-    # nothing to count; the exporter that cared already returned zero.
-    return 0
+    # Nothing is built here, so the statement is an empty region: there is no
+    # code to write and no arithmetic to count.
+    return ir.Region()
 
   def allocateTemporary(self):
     return False

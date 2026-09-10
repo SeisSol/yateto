@@ -15,7 +15,5 @@ class Generic(object):
     self._arch = arch
     self._descr = descr
 
-  def generate(self, cpp, routineCache):
-    region = ir.unroll(tensorOp(self._descr).lower())
-    ir.CppEmitter(cpp).emit(region)
-    return ir.countFlops(region)
+  def lower(self):
+    return ir.unroll(tensorOp(self._descr).lower())

@@ -382,6 +382,38 @@ class TestContraction:
             ir.countFlops(region)
 
 
+class TestKernelRegion:
+    def test_the_storage_statements_share_is_settled_before_they_run(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        C = Tensor('C', (N, N))
+        # two statements with a temporary between them: both reach the same
+        # region, and what stands next to what is a question it can answer
+        body = emit([C['ij'] <= A['ik'] * B['kj'] * D['ij']])
+        assert '_tmp0 = reinterpret_cast' in body
+        assert body.index('reinterpret_cast') < body.index('for (')
+
+    def test_a_guarded_statement_is_written_inside_its_condition(self):
+        import yateto.functions as functions
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        flag = Tensor('flag', (), addressing='scalar')
+        body = emit([functions.assignIf(flag[''], C['ij'], A['ij'])])
+        assert body.count('if (') == 1
+        assert body.index('if (') < body.index('C[')
+
+    def test_a_statement_whose_guard_never_holds_is_not_written(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        from yateto.codegen.factory import OptimizedKernelFactory
+        from yateto.controlflow.graph import Guard
+        factory = OptimizedKernelFactory(None, useArchitectureIdentifiedBy('dhsw'), 'cpu')
+        region = factory._conditional(Guard.never(), lambda: 1 / 0)
+        assert len(region) == 0
+        assert ir.countFlops(region) == 0
+
+
 class TestEmission:
     def test_a_copy_carries_no_factor(self):
         A = Tensor('A', (N, N))

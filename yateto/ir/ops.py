@@ -231,6 +231,20 @@ class Fold(ValueOp):
     return f'Fold({self.index.name}, {self.operation})'
 
 
+class If(Op):
+  """A region that runs only where a condition holds."""
+
+  def __init__(self, condition, region=None):
+    self.condition = condition
+    self.region = region if region is not None else Region()
+
+  def regions(self):
+    return (self.region,)
+
+  def __repr__(self):
+    return f'If({self.condition})'
+
+
 class Scope(Op):
   """A region emitted inside braces of its own."""
 

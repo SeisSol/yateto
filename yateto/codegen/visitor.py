@@ -10,6 +10,7 @@ from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
 from .code import Cpp
+from .. import ir
 from .factory import *
 from .common import BatchedOperationsAux, KernelAttributes
 from ..type import Scalar, Tensor, Datatype
@@ -84,7 +85,14 @@ class KernelGenerator(object):
       cpp(f'{datatype.ctype()} const {scalar.name()} = {scalar.expression.ccode(self._arch)};')
 
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
-    hwFlops = 0
+    """The kernel, as one region, written out once.
+
+    Every statement of the control-flow graph lowers into the same region, so
+    what stands next to what is a question the region can answer. The storage
+    the statements share is set up first: which buffer a local points at is
+    settled before anything runs, and two locals that share one only ever do
+    so where the first is already dead.
+    """
     # temporary memory required (per element in case of gpu)
     # NOTE: it is required to know in case if the memory is allocated on the heap
     #       an provided by the user
@@ -97,25 +105,30 @@ class KernelGenerator(object):
         localPtrs.update(pp.bufferMap.keys())
       for localPtr in sorted(localPtrs, key=str):
         cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
-    for pp in cfg:
-      if factory.allocateTemporary():
+      for pp in cfg:
         for buf, size in pp.initBuffer.items():
           required_tmp_mem += size
           bufname = self._bufferName(buf)
           # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
           factory.temporary(bufname, size, None)
+      for pp in cfg:
         for local, buf in pp.bufferMap.items():
           # buffers are untyped storage; each pointer is cast to its own type
           cpp(f'{local} = reinterpret_cast<{local.datatype.ctype()}*>({self._bufferName(buf)});')
+
+    region = ir.Region()
+    for pp in cfg:
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)
         if action.isRHSExpression():
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
-          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg)
+          region.extend(factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
         else:
-          hwFlops += factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg)
-    return hwFlops, required_tmp_mem
+          region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
+
+    ir.CppEmitter(cpp, routineCache).emit(region)
+    return ir.countFlops(region), required_tmp_mem
 
 class OptimizedKernelGenerator(KernelGenerator):
   NAMESPACE = 'kernel'

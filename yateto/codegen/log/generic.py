@@ -82,7 +82,7 @@ class Generic(object):
       return builder
     return ir.loopNest(builder, free, ranges, simd=False)
 
-  def _lower(self, gemm_cfg):
+  def lower(self, gemm_cfg):
     d = self._descr
 
     unrollNeeded = set()
@@ -226,8 +226,3 @@ class Generic(object):
       generator = gemm.generator(self._arch, call, gemm_cfg, self._target,
                                  self._attrs)
       inner.add(ir.Call(generator.generate))
-
-  def generate(self, cpp, routineCache, gemm_cfg):
-    region = self._lower(gemm_cfg)
-    ir.CppEmitter(cpp, routineCache).emit(region)
-    return ir.countFlops(region)

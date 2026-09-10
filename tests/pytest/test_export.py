@@ -6,13 +6,17 @@ for that target.
 
 import json
 import os
+import pathlib
 import tempfile
 
 import pytest
 
 from yateto import Generator, GeneratorCollection, Tensor
 from yateto.arch import useArchitectureIdentifiedBy
-from yateto.codegen.factory import ExportGenerator
+from yateto import ir
+from yateto.codegen.factory import ExportedStatement, ExportFactory, ExportGenerator
+from yateto.codegen.lowering import lower
+from yateto.guard import Guard
 from yateto.type import Datatype
 
 import yateto.functions as yf
@@ -54,6 +58,22 @@ def export(statements, target='gpu'):
         generator.generate(out, gemm_cfg=GeneratorCollection([]),
                            routine_exporters={target: make})
     return collector['it']
+
+
+def emitted(statements, target='gpu'):
+    """The generated kernel source for statements handed to an exporter."""
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+
+    def make(a, attrs=None):
+        return Collector(a, attrs)
+
+    generator = Generator(arch)
+    for i, statement in enumerate(statements):
+        generator.add(f'k{i}', statement, target=target)
+    with tempfile.TemporaryDirectory() as out:
+        generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                           routine_exporters={target: make})
+        return (pathlib.Path(out) / 'kernel.cpp').read_text()
 
 
 @pytest.fixture
@@ -171,9 +191,11 @@ class TestExportedGuards:
         factory = ExportFactory.__new__(ExportFactory)
         factory.operations = []
         assert factory._handleCondition(Guard.never()) is None
-        factory._emit({'condition': factory._handleCondition(Guard.never())})
+        factory._emit({'condition': factory._handleCondition(Guard.never())},
+                      Guard.never(), None)
         assert factory.operations == []
-        factory._emit({'condition': factory._handleCondition(Guard.always())})
+        factory._emit({'condition': factory._handleCondition(Guard.always())},
+                      Guard.always(), None)
         assert len(factory.operations) == 1
 
     def test_a_rewritten_condition_gets_a_new_version(self, tensors):
@@ -302,3 +324,50 @@ class TestTheDescriptionIsData:
         for operation in collector.operations:
             for ref in [operation['result']] + operation['args']:
                 assert ref['name'] in known
+
+
+class TestExportedRegion:
+    """A statement the exporter takes away still stands in the kernel's region.
+
+    That is what lets the kernel be asked what it touches: the exporter writes
+    the statement into its own output, but which tensors the statement names,
+    and under which guard it runs, are questions about this kernel.
+    """
+
+    @staticmethod
+    def _factory():
+        factory = ExportFactory.__new__(ExportFactory)
+        factory.operations = []
+        factory._target = 'gpu'
+        return factory
+
+    def test_a_statement_stands_in_the_region(self):
+        statement = ir.TensorOp(None, [])
+        region = self._factory()._emit({'condition': []}, Guard.always(), statement)
+        assert list(region) == [statement]
+
+    def test_a_guarded_statement_stands_under_its_guard(self):
+        statement = ir.TensorOp(None, [])
+        guard = Guard.literal('flag')
+        region = self._factory()._emit({'condition': [{}]}, guard, statement)
+        guarded, = region
+        assert isinstance(guarded, ir.If)
+        assert guarded.condition == guard
+        assert list(guarded.region) == [statement]
+
+    def test_one_that_can_never_run_stands_nowhere(self):
+        statement = ir.TensorOp(None, [])
+        region = self._factory()._emit({'condition': None}, Guard.never(), statement)
+        assert len(region) == 0
+
+    def test_what_the_exporter_takes_away_leaves_nothing_behind(self):
+        region = ir.Region([ir.TensorOp(None, [], generator=ExportedStatement)])
+        lower(region, None)
+        assert len(region) == 0
+
+    def test_a_guard_around_nothing_is_not_written(self, tensors):
+        """The statement is gone by the time the region is emitted, so what is
+        left is a test with nothing behind it, and nothing to test for."""
+        source = emitted([yf.assignIf(tensors['flag'][''], tensors['out']['ij'],
+                                      yf.sqrt(tensors['A']['ij']))])
+        assert 'if (' not in source

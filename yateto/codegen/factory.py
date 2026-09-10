@@ -555,6 +555,20 @@ class ExportGenerator:
     """
     pass
 
+class ExportedStatement:
+  """A statement the exporter takes away.
+
+  It goes into whatever the exporter produces and not into this kernel, so
+  once the region is lowered there is nothing standing in its place. Until
+  then the statement stands there like any other, which is what lets the
+  kernel be asked what it touches.
+  """
+
+  @staticmethod
+  def lower():
+    return ir.Region()
+
+
 class ExportFactory(KernelFactory):
   @classmethod
   def makeFactory(cls, generator):
@@ -617,16 +631,22 @@ class ExportFactory(KernelFactory):
     })
     self.generator.generate(self._cpp, routine_cache)
 
-  def _emit(self, description):
+  def _emit(self, description, condition, statement):
     if description['condition'] is None:
       # a guard that can never hold: the C++ factory emits no action for one
       # either, and an operation the receiving side cannot tell from an
       # unguarded one -- both `None` and `[]` are falsy -- would run always
       return ir.Region()
     self.operations.append(description)
-    # Nothing is built here, so the statement is an empty region: there is no
-    # code to write and no arithmetic to count.
-    return ir.Region()
+    return self._conditional(condition, statement)
+
+  def _checkGuardIsReadable(self, guard):
+    """Nothing is decided here.
+
+    The guard is handed over as data and read by whoever generates the
+    statement from it, wherever that is. Whether this generator could read it
+    on the host is not a question about the statement.
+    """
 
   def allocateTemporary(self):
     return False
@@ -871,8 +891,11 @@ class ExportFactory(KernelFactory):
     } for var, version, polarity in guard.literals()]
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    result = self._nodeTensor(result, node)
-    preArgs = [self._nodeTensor(argument, term) for argument, term in zip(arguments, node)]
+    resultTerm = IndexedTensorDescription.fromNode(result, node)
+    result = self._handleTensorDesc(resultTerm)
+    terms = [IndexedTensorDescription.fromNode(argument, term)
+             for argument, term in zip(arguments, node)]
+    preArgs = [self._handleTensorDesc(term) for term in terms]
     # immediate (non-Node) operands have to be exported as scalars, not raw values
     args = [arg if isinstance(arg, dict) else self._scalarTensor(arg)
             for arg in node.fillTerms(preArgs)]
@@ -888,12 +911,15 @@ class ExportFactory(KernelFactory):
       },
       'optype': str(node.optype)
     }
-    return self._emit(description)
+    return self._emit(description, condition,
+                      self._statement(resultTerm, node.fillTerms(terms), add, scalar))
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 1
-    result = self._nodeTensor(result, node)
-    argnodes = [self._nodeTensor(arguments[0], node.term())]
+    resultTerm = IndexedTensorDescription.fromNode(result, node)
+    result = self._handleTensorDesc(resultTerm)
+    terms = [IndexedTensorDescription.fromNode(arguments[0], node.term())]
+    argnodes = [self._handleTensorDesc(term) for term in terms]
 
     description = {
       'type': 'reduction',
@@ -906,26 +932,46 @@ class ExportFactory(KernelFactory):
       },
       'optype': str(node.optype)
     }
-    return self._emit(description)
+    return self._emit(description, condition,
+                      self._statement(resultTerm, terms, add, scalar))
 
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     # NOTE: no transposition flags. Which axis of an operand goes where is
     #       already in `target`, and a flag saying it again could disagree.
-    argnodes = [self._nodeTensor(arguments[0], node[0]), self._nodeTensor(arguments[1], node[1])]
-    return self.handleLinear(self._nodeTensor(result, node), argnodes, condition, add, scalar)
-
+    resultTerm = IndexedTensorDescription.fromNode(result, node)
+    terms = [IndexedTensorDescription.fromNode(arguments[0], node[0]),
+             IndexedTensorDescription.fromNode(arguments[1], node[1])]
+    return self.handleLinear(resultTerm, terms, condition, add, scalar)
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
-    return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar)
+    return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices),
+                             [IndexedTensorDescription.fromVar(term, node.term().indices)],
+                             condition, add, scalar)
 
   def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     term = arguments[0]
-    return self.handleLinear(self._varTensor(result, node.indices), [self._varTensor(term, node.term().indices)], condition, add, scalar)
+    return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices),
+                             [IndexedTensorDescription.fromVar(term, node.term().indices)],
+                             condition, add, scalar)
 
   def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
-    return self.handleLinear(self._varTensor(result, self._indices(result)), [self._varTensor(term, self._indices(term))], condition, add, scalar)
+    return self.handleLinear(IndexedTensorDescription.fromVar(result, self._indices(result)),
+                             [IndexedTensorDescription.fromVar(term, self._indices(term))],
+                             condition, add, scalar)
+
+  @staticmethod
+  def _statement(result, terms, add, scalar):
+    """The statement, at the level the exporter is handed it.
+
+    Which kind of statement it is, is what the exported description says, in
+    the words the receiving side reads it in; here it is a destination,
+    operands with their index maps, a factor and an accumulation, which is
+    what every one of them has in common.
+    """
+    return ir.TensorOp(result, terms, alpha=scalar, add=add,
+                       generator=ExportedStatement)
 
   def getIndices(self, dest, ops):
     if dest is None:
@@ -947,8 +993,10 @@ class ExportFactory(KernelFactory):
 
     return target, permute
 
-  def handleLinear(self, dest, ops, condition, add, scalar):
+  def handleLinear(self, result, terms, condition, add, scalar):
     # convert indices to loop numbers
+    dest = self._handleTensorDesc(result)
+    ops = [self._handleTensorDesc(term) for term in terms]
 
     target, permute = self.getIndices(dest, ops)
 
@@ -969,4 +1017,5 @@ class ExportFactory(KernelFactory):
       },
       # 'optype': node.optype
     }
-    return self._emit(description)
+    return self._emit(description, condition,
+                      self._statement(result, terms, add, scalar))

@@ -1,4 +1,3 @@
-from ..ast.node import Node
 from .. import ops
 from ..guard import Guard
 from ..ir.tensor import mayFuseGroups
@@ -14,35 +13,47 @@ def _productGroups(node):
 
 
 class Expression(object):
+  """One statement, stated over tensors.
+
+  Everything about it is here: what it computes and over which indices, which
+  kind of statement it is and what that kind states beyond its operands. The
+  tree it was first written down in answers none of it.
+  """
+
+  #: What a statement says beyond its operands, per kind. Read off the node
+  #: once, where the node still is, and never again.
+  _FACTS = ('groups', 'prefetch', 'optype', 'termTemplate', 'nodeTermIndices',
+            'loopIndices', 'transA', 'transB', 'sumIndex', 'datatype')
+
   @classmethod
   def of(cls, node, memoryLayout, variables):
     """The statement a node states, over these operands."""
-    return cls(node, memoryLayout, variables, node.indices, node.eqspp(),
-               _productGroups(node), node.prefetch,
-               getattr(node, 'optype', None), getattr(node, 'termTemplate', None),
-               getattr(node, 'nodeTermIndices', None))
+    product = _productGroups(node)
+    ask = lambda name: getattr(node, name)() if hasattr(node, name) else None
+    return cls(type(node).__name__, memoryLayout, variables, node.indices,
+               node.eqspp(),
+               groups=product,
+               prefetch=node.prefetch,
+               optype=getattr(node, 'optype', None),
+               termTemplate=getattr(node, 'termTemplate', None),
+               nodeTermIndices=getattr(node, 'nodeTermIndices', None),
+               loopIndices=ask('loopIndices'),
+               transA=ask('transA'),
+               transB=ask('transB'),
+               sumIndex=ask('sumIndexName'),
+               datatype=node.datatype)
 
-  def __init__(self, node, memoryLayout, variables, indices, eqspp, groups,
-               prefetch, optype=None, termTemplate=None, nodeTermIndices=None):
-    #: The node this was built from, for the generator that is to write it:
-    #: which backend takes the statement, and what that backend is told
-    #: beyond the operands, is read off it and off nothing else here.
-    self.node = node
+  def __init__(self, kind, memoryLayout, variables, indices, eqspp, **facts):
+    #: Which kind of statement it is, which is what decides who writes it.
+    self.kind = kind
     self.memoryLayout = memoryLayout
     self._variables = variables
     #: What the statement computes -- the indices it is stated over and the
     #: entries it has values at.
     self.indices = indices
     self.eqspp = eqspp
-    #: The index groups a product is formed over, where the statement is one.
-    self.groups = groups
-    #: The tensor to fetch while the statement runs, where one was assigned.
-    self.prefetch = prefetch
-    #: The operation an element-wise statement or a reduction applies, and how
-    #: its operands are filled in around the immediates it was written with.
-    self.optype = optype
-    self.termTemplate = termTemplate
-    self.nodeTermIndices = nodeTermIndices
+    for name in self._FACTS:
+      setattr(self, name, facts.get(name))
 
   def fillTerms(self, terms):
     """The operands in their original order, with the immediates put back."""
@@ -74,10 +85,10 @@ class Expression(object):
        and mayFuseGroups(self._variables[1].indices, (k, n), layouts[1])
 
   def substituted(self, when, by, memoryLayout):
-    return Expression(self.node, memoryLayout,
+    return Expression(self.kind, memoryLayout,
                       [var.substituted(when, by) for var in self._variables],
-                      self.indices, self.eqspp, self.groups, self.prefetch,
-                      self.optype, self.termTemplate, self.nodeTermIndices)
+                      self.indices, self.eqspp,
+                      **{name: getattr(self, name) for name in self._FACTS})
 
   def resultCompatible(self, result):
     c1 = result.memoryLayout.isCompatible(self.eqspp)
@@ -86,7 +97,7 @@ class Expression(object):
     return c1 and c2
 
   def __str__(self):
-    return '{}({})'.format(type(self.node).__name__, ', '.join([str(var) for var in self._variables]))
+    return '{}({})'.format(self.kind, ', '.join([str(var) for var in self._variables]))
 
   def setWritable(self, name):
     for v in self._variables:

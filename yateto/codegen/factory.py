@@ -26,7 +26,7 @@ class KernelFactory(object):
 
   def create(self, term, *args):
     """The statement, handed to whichever of these writes its kind."""
-    method = 'create_' + term.node.__class__.__name__
+    method = 'create_' + term.kind
     factory = getattr(self, method, self.generic_create)
     return factory(term, *args)
 
@@ -174,7 +174,6 @@ class OptimizedKernelFactory(KernelFactory):
                                   self._attrs)
 
   def create_LoopOverGEMM(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     assert len(arguments) == 2
     description = log.Description(
       alpha = scalar,
@@ -182,20 +181,19 @@ class OptimizedKernelFactory(KernelFactory):
       result = result,
       leftTerm = arguments[0],
       rightTerm = arguments[1],
-      loopIndices = node.loopIndices(),
-      transA = node.transA(),
-      transB = node.transB(),
+      loopIndices = term.loopIndices,
+      transA = term.transA,
+      transB = term.transB,
       prefetchName = prefetchName,
-      m = node.m(),
-      n = node.n(),
-      k = node.k()
+      m = term.groups[0],
+      n = term.groups[1],
+      k = term.groups[2]
     )
     generator = log.generator(self._arch, description, self._target, self._attrs)
     return self._conditional(condition,
-                             log.tensorOp(description, generator, node.prefetch))
+                             log.tensorOp(description, generator, term.prefetch))
 
   def create_Elementwise(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     return self._elementwise(term, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
 
   def _elementwise(self, term, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
@@ -212,7 +210,6 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition, elementwise.tensorOp(description, generator))
 
   def create_Reduction(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     description = reduction.Description(
       alpha = scalar,
       add = add,
@@ -224,12 +221,10 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition, reduction.tensorOp(description, generator))
 
   def create_Permute(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     return self._csa(result, arguments[0], condition, add, scalar, routineCache,
                      gemm_cfg)
 
   def create_Broadcast(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     return self._csa(result, arguments[0], condition, add, scalar, routineCache,
                      gemm_cfg)
 
@@ -275,15 +270,14 @@ class UnitTestFactory(KernelFactory):
     return ir.TensorOp(result, terms, alpha=scalar, add=add, generator=Reference)
 
   def create_Einsum(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
-    g = node.indices
-    for child in node:
-      g = g.merged(child.indices - g)
+    g = term.indices
+    for operand in arguments:
+      g = g.merged(operand.indices - g)
 
     ranges = {idx: Range(0, g.indexSize(idx)) for idx in g}
 
-    resultTerm = self._formatTerm(result, node.indices)
-    terms = [self._formatTerm(arguments[i], child.indices) for i,child in enumerate(node)]
+    resultTerm = self._formatTerm(result, term.indices)
+    terms = [self._formatTerm(operand, operand.indices) for operand in arguments]
 
     if scalar and scalar != 1.0:
       terms.insert(0, str(scalar))
@@ -306,53 +300,50 @@ class UnitTestFactory(KernelFactory):
 
 
   def create_Permute(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
-    assert node.indices <= node.term().indices and node.term().indices <= node.indices
-    resultTerm = self._formatTerm(result, node.indices)
-    termTerm = self._formatTerm(arguments[0], node.term().indices)
+    assert term.indices <= arguments[0].indices \
+       and arguments[0].indices <= term.indices
+    resultTerm = self._formatTerm(result, term.indices)
+    termTerm = self._formatTerm(arguments[0], arguments[0].indices)
     dest, operands = result, list(arguments)
     return self._conditional(condition, self._statement(
       dest, operands, add, scalar,
-      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, term.indices)))
 
   def create_Broadcast(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
-    assert node.term().indices <= node.indices
-    resultTerm = self._formatTerm(result, node.indices)
-    termTerm = self._formatTerm(arguments[0], node.term().indices)
+    assert arguments[0].indices <= term.indices
+    resultTerm = self._formatTerm(result, term.indices)
+    termTerm = self._formatTerm(arguments[0], arguments[0].indices)
     dest, operands = result, list(arguments)
     return self._conditional(condition, self._statement(
       dest, operands, add, scalar,
-      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, term.indices)))
 
   def create_Elementwise(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
-    # the loops below run over node.indices, so the address strings have to be
+    # the loops below run over term.indices, so the address strings have to be
     # built from those very indices
-    resultTerm = self._formatTerm(result, node.indices)
+    resultTerm = self._formatTerm(result, term.indices)
 
-    argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
+    argTerms = [self._formatTerm(operand, operand.indices) for operand in arguments]
     termTerm = term.optype.callstr(*term.fillTerms(argTerms))
 
     dest, operands = result, list(arguments)
     return self._conditional(condition, self._statement(
       dest, operands, add, scalar,
-      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
+      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, term.indices)))
 
   def create_Reduction(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
-    resultTerm = self._formatTerm(result, node.indices)
-    termTerm = self._formatTerm(arguments[0], node.term().indices)
-    datatype = node.datatype
+    resultTerm = self._formatTerm(result, term.indices)
+    termTerm = self._formatTerm(arguments[0], arguments[0].indices)
+    datatype = term.datatype
 
     # the reference implementation folds the reduced index explicitly
     def body():
-      sumIndex = node.sumIndexName()
-      size = node.term().indices.indexSize(sumIndex)
+      sumIndex = term.sumIndex
+      size = arguments[0].indices.indexSize(sumIndex)
       accumulator = '_acc'
       init = f'{datatype.ctype()} {accumulator} = {term.optype.neutralLiteral(datatype)};'
       inner = f'{accumulator} = {term.optype.callstr(accumulator, termTerm)};'
-      return self._simpleBody(resultTerm, accumulator, add, scalar, node.indices,
+      return self._simpleBody(resultTerm, accumulator, add, scalar, term.indices,
                               reduceIdx=(sumIndex, size, init, inner))
 
     dest, operands = result, list(arguments)
@@ -873,7 +864,6 @@ class ExportFactory(KernelFactory):
     } for var, version, polarity in guard.literals()]
 
   def create_Elementwise(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     resultTerm = result
     result = self._handleTensorDesc(resultTerm)
     terms = list(arguments)
@@ -897,7 +887,6 @@ class ExportFactory(KernelFactory):
                       self._statement(resultTerm, term.fillTerms(terms), add, scalar))
 
   def create_Reduction(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     assert len(arguments) == 1
     resultTerm = result
     result = self._handleTensorDesc(resultTerm)
@@ -919,7 +908,6 @@ class ExportFactory(KernelFactory):
                       self._statement(resultTerm, terms, add, scalar))
 
   def create_LoopOverGEMM(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
     assert len(arguments) == 2
     # NOTE: no transposition flags. Which axis of an operand goes where is
     #       already in `target`, and a flag saying it again could disagree.
@@ -929,18 +917,16 @@ class ExportFactory(KernelFactory):
     return self.handleLinear(resultTerm, terms, condition, add, scalar)
 
   def create_Permute(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
-    term = arguments[0]
-    return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices),
-                             [IndexedTensorDescription.fromVar(term, node.term().indices)],
-                             condition, add, scalar)
+    return self.handleLinear(
+      IndexedTensorDescription.fromVar(result, term.indices),
+      [IndexedTensorDescription.fromVar(arguments[0], arguments[0].indices)],
+      condition, add, scalar)
 
   def create_Broadcast(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    node = term.node
-    term = arguments[0]
-    return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices),
-                             [IndexedTensorDescription.fromVar(term, node.term().indices)],
-                             condition, add, scalar)
+    return self.handleLinear(
+      IndexedTensorDescription.fromVar(result, term.indices),
+      [IndexedTensorDescription.fromVar(arguments[0], arguments[0].indices)],
+      condition, add, scalar)
 
   def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     return self.handleLinear(IndexedTensorDescription.fromVar(result, self._indices(result)),
@@ -1001,7 +987,7 @@ class ExportFactory(KernelFactory):
         'alpha': self._scalarTensor(scalar),
         'add': self._addMask(dest, add),
       },
-      # 'optype': node.optype
+      # 'optype': term.optype
     }
     return self._emit(description, condition,
                       self._statement(result, terms, add, scalar))

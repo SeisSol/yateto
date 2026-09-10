@@ -484,8 +484,8 @@ class TestExpressionWithoutItsNode:
         import numpy as np
         from yateto import aspp
         spp = aspp.general(np.tril(np.ones((4, 4), dtype=bool)))
-        expression = Expression(None, None, [self._operand("A", "ij")],
-                                Indices("ij", (4, 4)), spp, None, None)
+        expression = Expression("Elementwise", None, [self._operand("A", "ij")],
+                                Indices("ij", (4, 4)), spp)
         assert expression.eqspp is spp
         assert list(expression.indices) == ["i", "j"]
         assert expression.prefetch is None
@@ -496,14 +496,15 @@ class TestExpressionWithoutItsNode:
         # index sits between them
         for left, matrices in (("ilk", True), ("ikl", False)):
             operands = [self._operand("A", left), self._operand("B", "kjl")]
-            expression = Expression(None, None, operands,
-                                    Indices("ilj", (4, 4, 4)), None, groups, None)
+            expression = Expression("LoopOverGEMM", None, operands,
+                                    Indices("ilj", (4, 4, 4)), None,
+                                    groups=groups)
             layouts = [operand.memoryLayout for operand in operands]
             assert expression.mayReadOperands(layouts) is matrices
 
     def test_anything_that_is_not_a_product_asks_nothing(self, arch):
-        expression = Expression(None, None, [self._operand("A", "ij")],
-                                Indices("ij", (4, 4)), None, None, None)
+        expression = Expression("Elementwise", None, [self._operand("A", "ij")],
+                                Indices("ij", (4, 4)), None)
         assert expression.mayReadOperands([None])
 
     def test_the_operation_and_the_immediates_are_the_statement_s(self, arch):
@@ -518,3 +519,25 @@ class TestExpressionWithoutItsNode:
         assert 'max' in str(elementwise.optype).lower()
         filled = elementwise.fillTerms(["<operand>"])
         assert "<operand>" in filled and 0.0 in filled
+
+    def test_the_statement_knows_its_kind_without_the_tree(self, arch):
+        """Which backend writes a statement is decided by what kind it is, and
+        the kind is the statement's to say."""
+        A = Tensor("A", (4, 4))
+        B = Tensor("B", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
+        expression = next(a.term for a in cfg if a.isRHSExpression())
+        assert expression.kind == "LoopOverGEMM"
+        assert not hasattr(expression, "node")
+
+    def test_a_contraction_says_what_it_contracts_and_how_it_reads(self, arch):
+        A = Tensor("A", (4, 4))
+        B = Tensor("B", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
+        expression = next(a.term for a in cfg if a.isRHSExpression())
+        m, n, k = expression.groups
+        assert (str(m), str(n), str(k)) == ("i", "j", "k")
+        assert expression.transA is False and expression.transB is False
+        assert expression.loopIndices is not None

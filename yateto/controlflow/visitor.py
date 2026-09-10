@@ -161,7 +161,7 @@ class AST2ControlFlow(Visitor):
                     node.datatype,
                     is_compute_constant=constant,
                     values=node.tensor.values() if constant else None,
-                    addressing=node.tensor.addressing)
+                    addressing=node.tensor.addressing, indices=node.indices)
 
   def _bindName(self, name, tensor, datatype):
     """One name, one tensor: a name yields one declaration in the signature.
@@ -197,7 +197,8 @@ class AST2ControlFlow(Visitor):
   def _nextTemporary(self, node):
     name = f'{self.TEMPORARY_RESULT}{self._tmp}'
     self._tmp += 1
-    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True, datatype=node.datatype)
+    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True,
+                    datatype=node.datatype, indices=node.indices)
 
   def updateWritable(self, name):
     self._writable = self._writable | {name}

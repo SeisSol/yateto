@@ -1,37 +1,32 @@
 from ..ast.node import Node
 from .. import ops
+from ..description import IndexedTensorDescription
 from ..guard import Guard
 from collections import OrderedDict
 from typing import Dict, List
 
-class Variable(object):
-  """A name the generated code addresses, and what stands behind it.
+class Variable(IndexedTensorDescription):
+  """An operand the graph names, and what stands behind it.
 
-  A variable may view another: then it names a slice of the same storage
-  under another layout. It stands for the same tensor and answers for the
-  same name -- a slice of C is written into C -- but for fewer of its
-  entries, which is what tells two slices of one variable apart.
+  It is the operand a statement is stated with -- a name, a layout, a pattern,
+  the tensor of the caller's behind it -- and it answers as one. What it adds
+  is what the graph needs of it: that two of them are the same where they name
+  the same storage, and that one may view another, naming a slice of the same
+  storage under another layout. A view stands for the same tensor and answers
+  for the same name -- a slice of C is written into C -- but for fewer of its
+  entries, which is what tells two slices of one apart.
   """
 
   def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None,
                is_temporary=False, datatype=None, views=None,
-               is_compute_constant=False, values=None, addressing=None):
-    self.name = name
-    self.tensor = tensor
-    #: Whether its values are known before the kernel runs, and what they are.
-    self.is_compute_constant = is_compute_constant
-    self.values = values
-    #: How the generated code reaches it, where the tensor says so.
-    self.addressing = addressing
-    #: Where its entries sit, and which of them it has a value at. Asked for
-    #: rather than called, which is how a buffer and a tensor description
-    #: answer the same two questions.
-    self.memoryLayout = memoryLayout
-    self.eqspp = eqspp
-    self.is_temporary = is_temporary
-    self.datatype = datatype
+               is_compute_constant=False, values=None, addressing=None,
+               indices=None):
+    #: What it views, where it views something. Set before anything else,
+    #: because whether the kernel writes it is asked of what it views.
     self._views = views
-    self.writable = writable
+    super().__init__(name, indices, memoryLayout, eqspp, is_compute_constant,
+                     is_temporary, values, datatype, addressing, tensor,
+                     writable)
 
   @classmethod
   def view(cls, variable, memoryLayout, eqspp):
@@ -39,7 +34,7 @@ class Variable(object):
     base = variable.viewed()
     return cls(base.name, base.writable, memoryLayout, eqspp, base.tensor,
                base.is_temporary, base.datatype, base, base.is_compute_constant,
-               base.values, base.addressing)
+               base.values, base.addressing, base.indices)
 
   def viewed(self):
     """The variable whose storage this names, which for most is itself."""
@@ -58,6 +53,10 @@ class Variable(object):
   def writable(self, value):
     self.viewed()._writable = value
 
+  def isPassedByValue(self):
+    """Whether this operand is handed over by value rather than by pointer."""
+    return self.tensor is not None and self.tensor.isPassedByValue()
+
   def variables(self):
     return {self.viewed()}
 
@@ -70,24 +69,8 @@ class Variable(object):
   def resultCompatible(self, result):
     return result.memoryLayout.isCompatible(self.eqspp)
 
-  def isPassedByValue(self):
-    """Whether this operand is handed over by value rather than by pointer."""
-    return self.tensor is not None and self.tensor.isPassedByValue()
-
-  def isGlobal(self):
-    return self.tensor is not None and not self.tensor.temporary
-
-  def isLocal(self):
-    return not self.isGlobal() and (self.tensor is None or not self.tensor.temporary)
-
   def __hash__(self):
     return hash(self.name)
-
-  def __str__(self):
-    return self.name
-
-  def __repr__(self):
-    return str(self)
 
   def __eq__(self, other):
     # Two variables of the same name denote the same storage. Whether the

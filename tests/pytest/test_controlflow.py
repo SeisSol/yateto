@@ -412,3 +412,23 @@ class TestStorageFacts:
         for field in ('name', 'memoryLayout', 'is_compute_constant',
                       'is_temporary', 'values', 'addressing', 'tensor', 'writable'):
             assert getattr(read, field) is getattr(fromVar, field)
+
+    def test_a_variable_is_the_operand_it_names(self, arch):
+        """It answers as a description, so the graph and the code generators
+        ask it the same questions and get the same answers."""
+        from yateto.description import IndexedTensorDescription
+        A = Tensor("A", (4, 4))
+        C = Tensor("C", (4, 4))
+        cfg = self._cfg(arch, C["ij"] <= A["ij"])
+        var = next(v for a in cfg for v in a.term.variables() if v.name == "A")
+        assert isinstance(var, IndexedTensorDescription)
+        assert list(var.indices) == ["i", "j"]
+        assert var.tensor is A and not var.is_temporary
+
+    def test_a_temporary_says_what_it_is_read_over(self, arch):
+        A = Tensor("A", (4, 4))
+        B = Tensor("B", (4, 4))
+        C = Tensor("C", (4, 4))
+        cfg = self._cfg(arch, C["ij"] <= A["ik"] * B["kj"])
+        temporary = next(a.result for a in cfg if a.result.isLocal())
+        assert temporary.indices is not None

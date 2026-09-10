@@ -105,10 +105,6 @@ class TensorDescription(object):
   def __repr__(self):
     return self.name
 
-  @classmethod
-  def fromNode(cls, name, node):
-    return cls(name, node.memoryLayout(), node.eqspp())
-
 class IndexedTensorDescription(TensorDescription):
   def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, tensor=None, writable=False):
     super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing, tensor, writable)
@@ -146,12 +142,6 @@ class IndexedTensorDescription(TensorDescription):
   def statement(cls, indices, eqspp, datatype):
     """What a statement says about an operand, before it is read anywhere."""
     return cls(None, indices, None, eqspp, datatype=datatype)
-
-  @classmethod
-  def fromNode(cls, var, node):
-    """The operand: what the node says about it, read from where the variable is."""
-    return cls.statement(node.indices, node.eqspp(),
-                         node.viewed().datatype).readFrom(var)
 
   def readFrom(self, source):
     """The same operand, read from `source`'s storage instead of its own.

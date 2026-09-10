@@ -944,3 +944,39 @@ class TestReadFrom:
         read = self._operand().readFrom(source)
         assert read.name == '_tmp1' and read.is_temporary
         assert read.tensor is None
+
+
+class TestOperandsAreHandedOver:
+    """The factory is given the operands; it does not build them again.
+
+    Which is what makes an operand one thing: the graph states the statement,
+    and what reaches the backend describing it is what the graph stated, not a
+    second description assembled from the tree beside it.
+    """
+
+    @staticmethod
+    def _description(statements):
+        from yateto.ast.cost import BoundingBoxCostEstimator
+        from yateto.codegen.factory import OptimizedKernelFactory
+        from yateto.codegen.visitor import OptimizedKernelGenerator
+        from yateto.gemm_configuration import GeneratorCollection
+        from yateto.generator import Kernel
+
+        arch = useArchitectureIdentifiedBy('dhsw')
+        kernel = Kernel('k', statements)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kernel.prepareUntilUnitTest(arch)
+            kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
+        generator = OptimizedKernelGenerator(arch, None, {})
+        factory = OptimizedKernelFactory(Cpp(io.StringIO()), arch, 'cpu')
+        region = generator.build(kernel.cfg, factory, None, GeneratorCollection([]))
+        return kernel.cfg, region
+
+    def test_a_contraction_is_stated_with_the_operands_the_graph_holds(self):
+        A, B, C = (Tensor(name, (N, N)) for name in 'ABC')
+        cfg, region = self._description(C['ij'] <= A['ik'] * B['kj'])
+        statement, = [op for op in region.walk()
+                      if isinstance(op, ir.LoopOverGEMM)]
+        action = next(a for a in cfg if a.isRHSExpression())
+        assert statement.result is action.result
+        assert statement.terms == action.term.variableList()

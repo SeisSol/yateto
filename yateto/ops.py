@@ -278,6 +278,15 @@ class Add(CBinaryOperatorMixin, BinaryArgsMixin, CommutativeMonoidMixin, ZeroPre
     def neutral(self, datatype=None):
         return 0
 
+class Sub(CBinaryOperatorMixin, BinaryArgsMixin, ZeroPreservingMixin, Operation):
+    # Not a monoid: there is no element to start an accumulation from, since
+    # subtracting from the left and from the right are different things.
+    def cppname(self):
+        return '-'
+    def call(self, *args):
+        return args[0] - args[1]
+
+
 class Mul(CBinaryOperatorMixin, BinaryArgsMixin, CommutativeMonoidMixin, RingMixin, Operation):
     def cppname(self):
         return '*'

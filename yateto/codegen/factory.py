@@ -24,10 +24,11 @@ class KernelFactory(object):
     #: member such a call would name only exists when the kernel declares it.
     self._attrs = attrs if attrs is not None else KernelAttributes()
 
-  def create(self, node, *args):
-    method = 'create_' + node.__class__.__name__
+  def create(self, term, *args):
+    """The statement, handed to whichever of these writes its kind."""
+    method = 'create_' + term.node.__class__.__name__
     factory = getattr(self, method, self.generic_create)
-    return factory(node, *args)
+    return factory(term, *args)
 
   def generic_create(self, node, *args):
     raise NotImplementedError
@@ -172,7 +173,8 @@ class OptimizedKernelFactory(KernelFactory):
     return fused_gemms.fuseChains(region, self._arch, gemm_cfg, self._target,
                                   self._attrs)
 
-  def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_LoopOverGEMM(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     assert len(arguments) == 2
     description = log.Description(
       alpha = scalar,
@@ -192,38 +194,42 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition,
                              log.tensorOp(description, generator, node.prefetch))
 
-  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    return self._elementwise(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
+  def create_Elementwise(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
+    return self._elementwise(term, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
 
-  def _elementwise(self, node, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
+  def _elementwise(self, term, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
     description = elementwise.Description(
       alpha = scalar,
       add = add,
       result = result,
       terms = list(arguments),
-      optype = node.optype,
-      termTemplate = node.termTemplate,
-      nodeTermIndices = node.nodeTermIndices
+      optype = term.optype,
+      termTemplate = term.termTemplate,
+      nodeTermIndices = term.nodeTermIndices
     )
     generator = elementwise.generator(self._arch, description, self._target)
     return self._conditional(condition, elementwise.tensorOp(description, generator))
 
-  def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Reduction(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     description = reduction.Description(
       alpha = scalar,
       add = add,
       result = result,
       term = arguments[0],
-      optype = node.optype,
+      optype = term.optype,
     )
     generator = reduction.generator(self._arch, description, self._target)
     return self._conditional(condition, reduction.tensorOp(description, generator))
 
-  def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Permute(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     return self._csa(result, arguments[0], condition, add, scalar, routineCache,
                      gemm_cfg)
 
-  def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Broadcast(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     return self._csa(result, arguments[0], condition, add, scalar, routineCache,
                      gemm_cfg)
 
@@ -268,7 +274,8 @@ class UnitTestFactory(KernelFactory):
 
     return ir.TensorOp(result, terms, alpha=scalar, add=add, generator=Reference)
 
-  def create_Einsum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Einsum(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     g = node.indices
     for child in node:
       g = g.merged(child.indices - g)
@@ -298,7 +305,8 @@ class UnitTestFactory(KernelFactory):
                              self._statement(dest, operands, add, scalar, statement))
 
 
-  def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Permute(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     assert node.indices <= node.term().indices and node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
@@ -307,7 +315,8 @@ class UnitTestFactory(KernelFactory):
       dest, operands, add, scalar,
       lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
-  def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Broadcast(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     assert node.term().indices <= node.indices
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
@@ -316,33 +325,22 @@ class UnitTestFactory(KernelFactory):
       dest, operands, add, scalar,
       lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
-  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Elementwise(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     # the loops below run over node.indices, so the address strings have to be
     # built from those very indices
     resultTerm = self._formatTerm(result, node.indices)
 
     argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
-    termTerm = node.optype.callstr(*node.fillTerms(argTerms))
+    termTerm = term.optype.callstr(*term.fillTerms(argTerms))
 
     dest, operands = result, list(arguments)
     return self._conditional(condition, self._statement(
       dest, operands, add, scalar,
       lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
-  def create_Accumulate(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    resultTerm = self._formatTerm(result, node.indices)
-
-    argTerms = [self._formatTerm(argument, term.indices) for argument, term in zip(arguments, node)]
-    termTerm = argTerms[0]
-    for argTerm in argTerms[1:]:
-      termTerm = node.optype.callstr(termTerm, argTerm)
-
-    dest, operands = result, list(arguments)
-    return self._conditional(condition, self._statement(
-      dest, operands, add, scalar,
-      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
-
-  def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Reduction(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     resultTerm = self._formatTerm(result, node.indices)
     termTerm = self._formatTerm(arguments[0], node.term().indices)
     datatype = node.datatype
@@ -352,27 +350,14 @@ class UnitTestFactory(KernelFactory):
       sumIndex = node.sumIndexName()
       size = node.term().indices.indexSize(sumIndex)
       accumulator = '_acc'
-      init = f'{datatype.ctype()} {accumulator} = {node.optype.neutralLiteral(datatype)};'
-      inner = f'{accumulator} = {node.optype.callstr(accumulator, termTerm)};'
+      init = f'{datatype.ctype()} {accumulator} = {term.optype.neutralLiteral(datatype)};'
+      inner = f'{accumulator} = {term.optype.callstr(accumulator, termTerm)};'
       return self._simpleBody(resultTerm, accumulator, add, scalar, node.indices,
                               reduceIdx=(sumIndex, size, init, inner))
 
     dest, operands = result, list(arguments)
     return self._conditional(condition,
                              self._statement(dest, operands, add, scalar, body))
-
-  def create_IfThenElse(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    resultTerm = self._formatTerm(result, node.indices)
-    yesTerm = self._formatTerm(arguments[0], node.yesTerm().indices)
-    noTerm = self._formatTerm(arguments[1], node.noTerm().indices)
-    conditionTerm = self._formatTerm(arguments[2], node.condition().indices)
-
-    termTerm = f'(({conditionTerm}) ? ({yesTerm}) : ({noTerm}))'
-
-    dest, operands = result, list(arguments)
-    return self._conditional(condition, self._statement(
-      dest, operands, add, scalar,
-      lambda: self._simpleBody(resultTerm, termTerm, add, scalar, node.indices)))
 
   def _simpleBody(self, resultTerm, termTerm, add, scalar, indices, reduceIdx = None):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
@@ -887,14 +872,15 @@ class ExportFactory(KernelFactory):
       'negated': not polarity,
     } for var, version, polarity in guard.literals()]
 
-  def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Elementwise(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     resultTerm = result
     result = self._handleTensorDesc(resultTerm)
     terms = list(arguments)
     preArgs = [self._handleTensorDesc(term) for term in terms]
     # immediate (non-Node) operands have to be exported as scalars, not raw values
     args = [arg if isinstance(arg, dict) else self._scalarTensor(arg)
-            for arg in node.fillTerms(preArgs)]
+            for arg in term.fillTerms(preArgs)]
 
     description = {
       'type': 'elementwise',
@@ -905,12 +891,13 @@ class ExportFactory(KernelFactory):
         'alpha': self._scalarTensor(scalar),
         'add': self._addMask(result, add),
       },
-      'optype': str(node.optype)
+      'optype': str(term.optype)
     }
     return self._emit(description, condition,
-                      self._statement(resultTerm, node.fillTerms(terms), add, scalar))
+                      self._statement(resultTerm, term.fillTerms(terms), add, scalar))
 
-  def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Reduction(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     assert len(arguments) == 1
     resultTerm = result
     result = self._handleTensorDesc(resultTerm)
@@ -926,12 +913,13 @@ class ExportFactory(KernelFactory):
         'alpha': self._scalarTensor(scalar),
         'add': self._addMask(result, add),
       },
-      'optype': str(node.optype)
+      'optype': str(term.optype)
     }
     return self._emit(description, condition,
                       self._statement(resultTerm, terms, add, scalar))
 
-  def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_LoopOverGEMM(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     assert len(arguments) == 2
     # NOTE: no transposition flags. Which axis of an operand goes where is
     #       already in `target`, and a flag saying it again could disagree.
@@ -940,13 +928,15 @@ class ExportFactory(KernelFactory):
              arguments[1]]
     return self.handleLinear(resultTerm, terms, condition, add, scalar)
 
-  def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Permute(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     term = arguments[0]
     return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices),
                              [IndexedTensorDescription.fromVar(term, node.term().indices)],
                              condition, add, scalar)
 
-  def create_Broadcast(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+  def create_Broadcast(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    node = term.node
     term = arguments[0]
     return self.handleLinear(IndexedTensorDescription.fromVar(result, node.indices),
                              [IndexedTensorDescription.fromVar(term, node.term().indices)],

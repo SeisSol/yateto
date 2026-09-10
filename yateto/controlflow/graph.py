@@ -18,10 +18,12 @@ class Expression(object):
   def of(cls, node, memoryLayout, variables):
     """The statement a node states, over these operands."""
     return cls(node, memoryLayout, variables, node.indices, node.eqspp(),
-               _productGroups(node), node.prefetch)
+               _productGroups(node), node.prefetch,
+               getattr(node, 'optype', None), getattr(node, 'termTemplate', None),
+               getattr(node, 'nodeTermIndices', None))
 
   def __init__(self, node, memoryLayout, variables, indices, eqspp, groups,
-               prefetch):
+               prefetch, optype=None, termTemplate=None, nodeTermIndices=None):
     #: The node this was built from, for the generator that is to write it:
     #: which backend takes the statement, and what that backend is told
     #: beyond the operands, is read off it and off nothing else here.
@@ -36,6 +38,16 @@ class Expression(object):
     self.groups = groups
     #: The tensor to fetch while the statement runs, where one was assigned.
     self.prefetch = prefetch
+    #: The operation an element-wise statement or a reduction applies, and how
+    #: its operands are filled in around the immediates it was written with.
+    self.optype = optype
+    self.termTemplate = termTemplate
+    self.nodeTermIndices = nodeTermIndices
+
+  def fillTerms(self, terms):
+    """The operands in their original order, with the immediates put back."""
+    return [terms[index] if template is None else template
+            for template, index in zip(self.termTemplate, self.nodeTermIndices)]
 
   def variables(self):
     return set([var.viewed() for var in self._variables])
@@ -64,7 +76,8 @@ class Expression(object):
   def substituted(self, when, by, memoryLayout):
     return Expression(self.node, memoryLayout,
                       [var.substituted(when, by) for var in self._variables],
-                      self.indices, self.eqspp, self.groups, self.prefetch)
+                      self.indices, self.eqspp, self.groups, self.prefetch,
+                      self.optype, self.termTemplate, self.nodeTermIndices)
 
   def resultCompatible(self, result):
     c1 = result.memoryLayout.isCompatible(self.eqspp)

@@ -505,3 +505,16 @@ class TestExpressionWithoutItsNode:
         expression = Expression(None, None, [self._operand("A", "ij")],
                                 Indices("ij", (4, 4)), None, None, None)
         assert expression.mayReadOperands([None])
+
+    def test_the_operation_and_the_immediates_are_the_statement_s(self, arch):
+        """An element-wise statement says which operation it applies and where
+        the numbers it was written with go, without being asked the tree."""
+        import yateto.functions as yf
+        A = Tensor("A", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= yf.maximum(A["ij"], 0.0), arch)
+        elementwise = next(a.term for a in cfg
+                           if a.isRHSExpression() and a.term.optype is not None)
+        assert 'max' in str(elementwise.optype).lower()
+        filled = elementwise.fillTerms(["<operand>"])
+        assert "<operand>" in filled and 0.0 in filled

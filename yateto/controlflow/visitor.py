@@ -39,7 +39,7 @@ class AST2ControlFlow(Visitor):
       permute.computeMemoryLayout()
     permute.datatype = permute[0].datatype
     result = self._nextTemporary(permute)
-    action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False, condition=self._guard[-1])
+    action = ProgramAction(result, Expression.of(permute, self._ml(permute), [variable]), False, condition=self._guard[-1])
     self._addAction(action)
     return result
 
@@ -71,7 +71,7 @@ class AST2ControlFlow(Visitor):
     variables = [self.visit(child) for child in node]
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, Expression(node, self._ml(node), variables), False, condition=self._guard[-1])
+    action = ProgramAction(result, Expression.of(node, self._ml(node), variables), False, condition=self._guard[-1])
     self._addAction(action)
 
     return result

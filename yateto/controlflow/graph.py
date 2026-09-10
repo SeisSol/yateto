@@ -1,18 +1,41 @@
 from ..ast.node import Node
 from .. import ops
 from ..guard import Guard
+from ..ir.tensor import mayFuseGroups
 from collections import OrderedDict
 from typing import Dict, List
 
+def _productGroups(node):
+  """The index groups a product is formed over, or None where it is no product."""
+  from ..ast.node import LoopOverGEMM
+  if not isinstance(node, LoopOverGEMM):
+    return None
+  return node.m(), node.n(), node.k()
+
+
 class Expression(object):
-  def __init__(self, node, memoryLayout, variables):
+  @classmethod
+  def of(cls, node, memoryLayout, variables):
+    """The statement a node states, over these operands."""
+    return cls(node, memoryLayout, variables, node.indices, node.eqspp(),
+               _productGroups(node), node.prefetch)
+
+  def __init__(self, node, memoryLayout, variables, indices, eqspp, groups,
+               prefetch):
+    #: The node this was built from, for the generator that is to write it:
+    #: which backend takes the statement, and what that backend is told
+    #: beyond the operands, is read off it and off nothing else here.
     self.node = node
     self.memoryLayout = memoryLayout
     self._variables = variables
-
-  @property
-  def eqspp(self):
-    return self.node.eqspp()
+    #: What the statement computes -- the indices it is stated over and the
+    #: entries it has values at.
+    self.indices = indices
+    self.eqspp = eqspp
+    #: The index groups a product is formed over, where the statement is one.
+    self.groups = groups
+    #: The tensor to fetch while the statement runs, where one was assigned.
+    self.prefetch = prefetch
 
   def variables(self):
     return set([var.viewed() for var in self._variables])
@@ -21,17 +44,32 @@ class Expression(object):
     return self._variables
 
   def maySubstitute(self, when, by):
-    layouts = [var.substituted(when, by).memoryLayout for var in self._variables]
+    operands = [var.substituted(when, by) for var in self._variables]
+    layouts = [operand.memoryLayout for operand in operands]
     c1 = all(layouts[i].isCompatible(var.eqspp) for i,var in enumerate(self._variables))
-    c2 = self.node.argumentsCompatible(layouts)
-    return c1 and c2
+    return c1 and self.mayReadOperands(layouts)
+
+  def mayReadOperands(self, layouts):
+    """Whether the operands can be read as matrices, laid out like this.
+
+    Only a product asks anything: everything else reads an operand entry by
+    entry, and no layout stops that.
+    """
+    if self.groups is None:
+      return True
+    m, n, k = self.groups
+    return mayFuseGroups(self._variables[0].indices, (m, k), layouts[0]) \
+       and mayFuseGroups(self._variables[1].indices, (k, n), layouts[1])
 
   def substituted(self, when, by, memoryLayout):
-    return Expression(self.node, memoryLayout, [var.substituted(when, by) for var in self._variables])
+    return Expression(self.node, memoryLayout,
+                      [var.substituted(when, by) for var in self._variables],
+                      self.indices, self.eqspp, self.groups, self.prefetch)
 
   def resultCompatible(self, result):
     c1 = result.memoryLayout.isCompatible(self.eqspp)
-    c2 = self.node.resultCompatible(result.memoryLayout)
+    c2 = self.groups is None or mayFuseGroups(
+      self.indices, (self.groups[0], self.groups[1]), result.memoryLayout)
     return c1 and c2
 
   def __str__(self):

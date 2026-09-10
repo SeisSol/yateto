@@ -48,6 +48,7 @@ from yateto.controlflow.graph import (
     Guard,
     ProgramAction,
 )
+from yateto.ast.indices import Indices
 from yateto.description import IndexedTensorDescription as Operand
 from yateto.controlflow.transformer import (
     liveness,
@@ -460,3 +461,47 @@ class TestStorageFacts:
         one = Operand("B", None, ml, None)
         assert one.substituted(Operand("A", None, ml, None),
                                Operand("C", None, ml, None)) is one
+
+
+class TestExpressionWithoutItsNode:
+    """What a statement computes, it says itself.
+
+    The node it was built from is the generator's to read -- which backend
+    takes the statement, and what that backend is told beyond the operands --
+    and nothing here asks it anything else.
+    """
+
+    @staticmethod
+    def _operand(name, indices):
+        import numpy as np
+        from yateto import aspp
+        from yateto.memory import DenseMemoryLayout
+        shape = (4,) * len(indices)
+        return Operand(name, Indices(indices, shape), DenseMemoryLayout(shape),
+                       aspp.general(np.ones(shape, dtype=bool)))
+
+    def test_what_it_computes_it_says(self, arch):
+        import numpy as np
+        from yateto import aspp
+        spp = aspp.general(np.tril(np.ones((4, 4), dtype=bool)))
+        expression = Expression(None, None, [self._operand("A", "ij")],
+                                Indices("ij", (4, 4)), spp, None, None)
+        assert expression.eqspp is spp
+        assert list(expression.indices) == ["i", "j"]
+        assert expression.prefetch is None
+
+    def test_a_product_asks_whether_its_operands_are_matrices(self, arch):
+        groups = (Indices("il", (4, 4)), Indices("j", (4,)), Indices("k", (4,)))
+        # `i` and `l` are one dimension of the product; in `ikl` the summed
+        # index sits between them
+        for left, matrices in (("ilk", True), ("ikl", False)):
+            operands = [self._operand("A", left), self._operand("B", "kjl")]
+            expression = Expression(None, None, operands,
+                                    Indices("ilj", (4, 4, 4)), None, groups, None)
+            layouts = [operand.memoryLayout for operand in operands]
+            assert expression.mayReadOperands(layouts) is matrices
+
+    def test_anything_that_is_not_a_product_asks_nothing(self, arch):
+        expression = Expression(None, None, [self._operand("A", "ij")],
+                                Indices("ij", (4, 4)), None, None, None)
+        assert expression.mayReadOperands([None])

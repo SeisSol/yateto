@@ -1,6 +1,24 @@
 from .graph import *
 
 
+def _blocks(cfg):
+  """The runs of statements that run together.
+
+  Two statements under different guards never run in the same case, so
+  nothing one of them writes is something the other may be rewritten to read.
+  Standing next to each other is not what makes two statements a pair; running
+  at all in the same case is.
+  """
+  block = []
+  for statement in cfg:
+    if block and block[-1].getGuard() != statement.getGuard():
+      yield block
+      block = []
+    block.append(statement)
+  if block:
+    yield block
+
+
 class GraphPass(object):
   """A rewrite of the graph, and how much of it there was.
 
@@ -12,9 +30,17 @@ class GraphPass(object):
   def __init__(self):
     self.rewrites = 0
 
+  def visit(self, cfg):
+    """Rewrite each run of statements that runs together, and nothing across."""
+    rewritten = []
+    for block in _blocks(cfg):
+      rewritten.extend(self.rewrite(block))
+    cfg[:] = rewritten
+    return cfg
+
 
 class MergeScalarMultiplications(GraphPass):
-  def visit(self, cfg):
+  def rewrite(self, cfg):
     n = len(cfg)
     i = 1
     while i < n:
@@ -110,15 +136,8 @@ def _dropIfEmptied(cfg, position):
   return False
 
 
-def _guardsCompatible(cfg, rng, definition):
-  """Every touched action must run at least as restrictively as `definition`.
-
-  Otherwise the substituted variable may be read where it was never written.
-  """
-  return all(cfg[j].getGuard().implies(definition) for j in rng)
-
 class SubstituteForward(GraphPass):
-  def visit(self, cfg):
+  def rewrite(self, cfg):
     live = liveness(cfg)
     i = 0
     while i < len(cfg):
@@ -134,8 +153,7 @@ class SubstituteForward(GraphPass):
 
         when = ua.result
         by = ua.copied()
-        maySubs = all([maySubstitute(cfg[j], when, by) for j in range(i, n)]) \
-                  and _guardsCompatible(cfg, range(i, n), ua.getGuard())
+        maySubs = all([maySubstitute(cfg[j], when, by) for j in range(i, n)])
         if maySubs:
           for j in range(i, n):
             # a read substitution; the downstream guards stay as they are
@@ -151,7 +169,7 @@ class SubstituteForward(GraphPass):
     return cfg
 
 class SubstituteBackward(GraphPass):
-  def visit(self, cfg):
+  def rewrite(self, cfg):
     n = len(cfg)
     live = liveness(cfg)
     for i in reversed(range(n)):
@@ -167,8 +185,7 @@ class SubstituteBackward(GraphPass):
         if found >= 0:
           when = cfg[found].result
           maySubs = maySubstitute(cfg[found], when, by, term=False) \
-                    and all([maySubstitute(cfg[j], when, by) for j in range(found+1,i+1)]) \
-                    and _guardsCompatible(cfg, range(found, i+1), va.getGuard())
+                    and all([maySubstitute(cfg[j], when, by) for j in range(found+1,i+1)])
           if maySubs:
             # only the producing action changes its write target and hence
             # inherits va's guard; the remaining ones merely read `by`
@@ -181,7 +198,7 @@ class SubstituteBackward(GraphPass):
     return cfg
 
 class MergeActions(GraphPass):
-  def visit(self, cfg):
+  def rewrite(self, cfg):
     n = len(cfg)
     i = 0
     while i < n:

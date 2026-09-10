@@ -321,3 +321,44 @@ class TestUnreachableUnitTest:
                                     yf.assignIf(False, t['o2']['ij'],
                                                 alpha * t['Y']['ij'])])
         assert 'alpha' not in code
+
+
+class TestGuardBlocks:
+    """A pass rewrites within a run of statements that run together.
+
+    Two statements under different guards never run in the same case, so
+    nothing one writes is something the other may be rewritten to read. The
+    boundary is where the pass stops, rather than something it checks after
+    reaching across.
+    """
+
+    def test_a_run_ends_where_the_guard_changes(self, arch, tensors):
+        from yateto.controlflow.transformer import _blocks
+        t = tensors
+        kernel = build(arch, [t['o1']['ij'] <= t['S']['ij'],
+                              yf.assignIf(t['flag'][''], t['o2']['ij'],
+                                          t['Y']['ij']),
+                              t['Z']['ij'] <= t['S']['ij']])
+        runs = list(_blocks(kernel.cfg))
+        assert len(runs) > 1
+        for run in runs:
+            assert len({action.getGuard() for action in run}) == 1
+
+    def test_an_unguarded_kernel_is_one_run(self, arch, tensors):
+        from yateto.controlflow.transformer import _blocks
+        t = tensors
+        kernel = build(arch, [t['o1']['ij'] <= t['S']['ij'],
+                              t['o2']['ij'] <= t['Y']['ij']])
+        assert len(list(_blocks(kernel.cfg))) == 1
+
+    def test_a_copy_is_not_propagated_into_another_case(self, arch, tensors):
+        """The one thing the boundary is there for."""
+        from yateto.controlflow.transformer import SubstituteForward, _blocks
+        t = tensors
+        kernel = build(arch, [yf.assignIf(t['flag'][''], t['o1']['ij'],
+                                          t['S']['ij']),
+                              yf.assignIf(t['other'][''], t['o2']['ij'],
+                                          t['o1']['ij'])])
+        SubstituteForward().visit(kernel.cfg)
+        for run in _blocks(kernel.cfg):
+            assert len({action.getGuard() for action in run}) == 1

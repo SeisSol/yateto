@@ -110,7 +110,7 @@ class Guard:
       return 'false'
     # a by-value operand is named directly, a by-pointer one is dereferenced
     printvar = lambda var: f'{var}' if var.isPassedByValue() \
-                           else f'{var}[{var.memoryLayout().addressString(Indices())}]'
+                           else f'{var}[{var.memoryLayout.addressString(Indices())}]'
     formatlit = lambda var, polarity: printvar(var) if polarity else f'!{printvar(var)}'
     return ' && '.join(f'({formatlit(var, polarity)})'
                        for var, _, polarity in self.literals())

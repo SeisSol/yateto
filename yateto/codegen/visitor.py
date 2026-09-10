@@ -705,9 +705,9 @@ class UnitTestGenerator(KernelGenerator):
          factory.tensor(var.tensor, self._tensorName(var),
                         caseVar=self.CASE_VAR if (bit is not None and cases > 1) else None,
                         caseBit=bit)
-         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
+         factory.temporary(self._name(var), var.memoryLayout.requiredReals(), var.datatype, iniZero=True)
 
-         shape = var.memoryLayout().shape()
+         shape = var.memoryLayout.shape()
          cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
              supportNS = SUPPORT_LIBRARY_NAMESPACE,
              dim=len(shape),
@@ -716,8 +716,8 @@ class UnitTestGenerator(KernelGenerator):
              utName=self._name(var),
              viewName=self._viewName(var),
              shape=', '.join([str(s) for s in shape]),
-             start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
-             stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
+             start=', '.join([str(s.start) for s in var.memoryLayout.bbox()]),
+             stop=', '.join([str(s.stop) for s in var.memoryLayout.bbox()])
            )
          )
          prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''

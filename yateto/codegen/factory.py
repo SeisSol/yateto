@@ -120,7 +120,7 @@ class KernelFactory(object):
       raise RuntimeError('unknown compute target')
 
   def _indices(self, var):
-    shape = var.memoryLayout().shape()
+    shape = var.memoryLayout.shape()
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
   def _conditional(self, condition, statement, touches=(), writes=()):
@@ -157,11 +157,7 @@ class KernelFactory(object):
     other answers when asked -- and a statement is described with whichever
     of them its generator was handed.
     """
-    layout = term.memoryLayout
-    eqspp = term.eqspp
-    return ir.Buffer(term.name, term.datatype,
-                     layout() if callable(layout) else layout,
-                     eqspp() if callable(eqspp) else eqspp,
+    return ir.Buffer(term.name, term.datatype, term.memoryLayout, term.eqspp,
                      getattr(term, 'is_temporary', False))
 
   def _checkGuardIsReadable(self, guard):
@@ -274,7 +270,7 @@ class UnitTestFactory(KernelFactory):
     self._testFramework = testFramework
 
   def _formatTerm(self, var, indices):
-    address = var.memoryLayout().addressString(indices)
+    address = var.memoryLayout.addressString(indices)
     return f'{self._name(var)}[{address}]'
 
   def create_Einsum(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -299,7 +295,7 @@ class UnitTestFactory(KernelFactory):
       # the zeroing belongs to this statement, so it is written where the
       # statement is and not where the statement was built
       if not add:
-        self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
+        self._cpp.memset(self._name(result), result.memoryLayout.requiredReals(), result.datatype.ctype())
       return forLoops(self._cpp, g, ranges, EinsumBody(), pragmaSimd=False)
 
     return self._conditional(condition, statement,
@@ -426,7 +422,7 @@ class UnitTestFactory(KernelFactory):
         self._cpp( 'refNorm += ref * ref;' )
         return 0
 
-    targetBBox = target.memoryLayout().bbox()
+    targetBBox = target.memoryLayout.bbox()
     ranges = {idx: Range(targetBBox[i].start, min(targetBBox[i].stop, g.indexSize(idx))) for i,idx in enumerate(g)}
     with self._cpp.AnonymousScope():
       self._cpp('double error = 0.0;')

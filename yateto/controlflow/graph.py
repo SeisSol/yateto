@@ -9,8 +9,11 @@ class Variable(object):
     self.name = name
     self.writable = writable
     self.tensor = tensor
-    self._memoryLayout = memoryLayout
-    self._eqspp = eqspp
+    #: Where its entries sit, and which of them it has a value at. Asked for
+    #: rather than called, which is how a buffer and a tensor description
+    #: answer the same two questions.
+    self.memoryLayout = memoryLayout
+    self.eqspp = eqspp
     self.is_temporary = is_temporary
     self.datatype = datatype
 
@@ -18,13 +21,13 @@ class Variable(object):
     return {self}
 
   def maySubstitute(self, when, by):
-    return self.substituted(when, by).memoryLayout().isCompatible(self.eqspp())
+    return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
 
   def substituted(self, when, by, memoryLayout=None):
     return by if self == when else self
 
   def resultCompatible(self, result):
-    return result.memoryLayout().isCompatible(self.eqspp())
+    return result.memoryLayout.isCompatible(self.eqspp)
 
   def isPassedByValue(self):
     """Whether this operand is handed over by value rather than by pointer."""
@@ -35,12 +38,6 @@ class Variable(object):
 
   def isLocal(self):
     return not self.isGlobal() and (self.tensor is None or not self.tensor.temporary)
-
-  def memoryLayout(self):
-    return self._memoryLayout
-
-  def eqspp(self):
-    return self._eqspp
 
   def __hash__(self):
     return hash(self.name)
@@ -69,8 +66,8 @@ class Variable(object):
 class VariableView(object):
   def __init__(self, variable, memoryLayout, eqspp):
     self.variable = variable.viewed()
-    self._memoryLayout = memoryLayout
-    self._eqspp = eqspp
+    self.memoryLayout = memoryLayout
+    self.eqspp = eqspp
 
   @property
   def name(self):
@@ -89,7 +86,7 @@ class VariableView(object):
     return self.variable.is_temporary
 
   def maySubstitute(self, when, by):
-    return self.substituted(when, by).memoryLayout().isCompatible(self.eqspp())
+    return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
 
   def substituted(self, when, by, memoryLayout=None):
     return by if self == when else self
@@ -108,19 +105,13 @@ class VariableView(object):
     return {self.variable}
 
   def resultCompatible(self, result):
-    return result.memoryLayout().isCompatible(self.eqspp())
+    return result.memoryLayout.isCompatible(self.eqspp)
 
   def isGlobal(self):
     return self.variable.isGlobal()
 
   def isLocal(self):
     return self.variable.isLocal()
-
-  def memoryLayout(self):
-    return self._memoryLayout
-
-  def eqspp(self):
-    return self._eqspp
 
   def __hash__(self):
     return hash(self.variable.name)
@@ -132,7 +123,7 @@ class VariableView(object):
     return str(self)
 
   def __eq__(self, other):
-    isEq = self.variable == other.viewed() and self._memoryLayout == other._memoryLayout
+    isEq = self.variable == other.viewed() and self.memoryLayout == other.memoryLayout
     return isEq
 
   def setWritable(self, name):
@@ -141,12 +132,10 @@ class VariableView(object):
 class Expression(object):
   def __init__(self, node, memoryLayout, variables):
     self.node = node
-    self._memoryLayout = memoryLayout
+    self.memoryLayout = memoryLayout
     self._variables = variables
 
-  def memoryLayout(self):
-    return self._memoryLayout
-
+  @property
   def eqspp(self):
     return self.node.eqspp()
 
@@ -157,8 +146,8 @@ class Expression(object):
     return self._variables
 
   def maySubstitute(self, when, by):
-    layouts = [var.substituted(when, by).memoryLayout() for var in self._variables]
-    c1 = all(layouts[i].isCompatible(var.eqspp()) for i,var in enumerate(self._variables))
+    layouts = [var.substituted(when, by).memoryLayout for var in self._variables]
+    c1 = all(layouts[i].isCompatible(var.eqspp) for i,var in enumerate(self._variables))
     c2 = self.node.argumentsCompatible(layouts)
     return c1 and c2
 
@@ -166,8 +155,8 @@ class Expression(object):
     return Expression(self.node, memoryLayout, [var.substituted(when, by) for var in self._variables])
 
   def resultCompatible(self, result):
-    c1 = result.memoryLayout().isCompatible(self.eqspp())
-    c2 = self.node.resultCompatible(result.memoryLayout())
+    c1 = result.memoryLayout.isCompatible(self.eqspp)
+    c2 = self.node.resultCompatible(result.memoryLayout)
     return c1 and c2
 
   def __str__(self):
@@ -219,7 +208,7 @@ class ProgramAction(object):
     maySubsResult = self.result.maySubstitute(when, by)
 
     rsubs = self.result.substituted(when, by) if result else self.result
-    tsubs = self.term.substituted(when, by, rsubs.memoryLayout()) if term else self.term
+    tsubs = self.term.substituted(when, by, rsubs.memoryLayout) if term else self.term
 
     compatible = tsubs.resultCompatible(rsubs)
 
@@ -234,7 +223,7 @@ class ProgramAction(object):
     there would restrict statements that are not themselves conditional.
     """
     rsubs = self.result.substituted(when, by) if result else self.result
-    tsubs = self.term.substituted(when, by, rsubs.memoryLayout()) if term else self.term
+    tsubs = self.term.substituted(when, by, rsubs.memoryLayout) if term else self.term
     gsubs = self.condition if guard is None else (self.getGuard() & guard)
     return ProgramAction(rsubs, tsubs, self.add, self.scalar, gsubs)
 

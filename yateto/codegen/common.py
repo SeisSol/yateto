@@ -67,7 +67,7 @@ class IndexedTensorDescription(TensorDescription):
       if is_const:
         values = baseNode.tensor.values()
       addressing = baseNode.tensor.addressing
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
+    return cls(str(var), node.indices, var.memoryLayout, node.eqspp(), is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
 
   @classmethod
   def fromVar(cls, var, indices):
@@ -82,7 +82,7 @@ class IndexedTensorDescription(TensorDescription):
         if is_const:
           values = var.tensor.values()
         addressing = var.tensor.addressing
-    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
+    return cls(str(var), indices, var.memoryLayout, var.eqspp, is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, fixed={}, indexNo=None):
   flops = 0

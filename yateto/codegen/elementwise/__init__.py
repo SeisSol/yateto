@@ -1,1 +1,1 @@
-from .factory import Description, FusedDescription, FusedMember, generator, fusedGenerator
+from .factory import Description, generator

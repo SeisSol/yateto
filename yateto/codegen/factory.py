@@ -206,26 +206,6 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition, self._statement(
       generator, lambda: generator.generate(self._cpp, routineCache)))
 
-  def create_FusedElementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    # The pass collected the operands step by step, so walking the steps the
-    # same way pairs each one with its variable again. A step whose operand is
-    # an earlier step's result reads that step's local instead.
-    resultDescr = IndexedTensorDescription.fromNode(result, node)
-    supplied = iter(arguments)
-    members = []
-    for i, step in enumerate(node.steps):
-      last = i + 1 == len(node.steps)
-      indices = step.reduction.term().indices if step.reduction is not None else node.indices
-      terms = [locals[source] if source is not None
-               else IndexedTensorDescription.fromVar(next(supplied), indices)
-               for source in step.sources]
-      members.append(elementwise.FusedMember(step, terms, resultDescr.datatype))
-    description = elementwise.FusedDescription(
-      scalar, add, resultDescr, members, loopRanges(resultDescr, resultDescr.indices))
-    generator = elementwise.fusedGenerator(self._arch, description, self._target)
-    return self._conditional(condition, self._statement(
-      generator, lambda: generator.generate(self._cpp, routineCache)))
-
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = reduction.Description(
       alpha = scalar,

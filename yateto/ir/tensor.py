@@ -76,26 +76,6 @@ class Elementwise(TensorOp):
     return lowerElementwise(self)
 
 
-class FusedElementwise(TensorOp):
-  """Several element-wise steps over one index space.
-
-  A member states its operation, which of its operands come from an earlier
-  member, and what it scales by. What a member computes and a later one reads
-  never leaves the nest, so it is a value of the loop body rather than a
-  buffer.
-  """
-
-  def __init__(self, result, members, alpha=1.0, add=False, loopRanges=None):
-    terms = [term for member in members for term in member.terms
-             if term is not None]
-    super().__init__(result, terms, alpha, add, loopRanges)
-    self.members = list(members)
-
-  def lower(self):
-    from .lower import lowerFusedElementwise
-    return lowerFusedElementwise(self)
-
-
 class LoopOverGEMM(TensorOp):
   """A contraction of two operands, run as a loop over matrix products."""
 

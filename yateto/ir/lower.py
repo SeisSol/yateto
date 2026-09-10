@@ -3,7 +3,7 @@ from ..ast.indices import BoundingBox
 from ..codegen.common import scaleFactor
 from ..type import AddressingMode
 from .build import indexMap, load, loopNest, scaled, zero
-from .core import Buffer, Builder, Entries, Region, ValueOp
+from .core import Buffer, Builder, Entries, Region
 from .ops import Arith, Const, Fold, Loop, Read, Scope, Store, Yield
 
 
@@ -43,36 +43,6 @@ def lowerElementwise(op):
   return region
 
 
-def lowerFusedElementwise(op):
-  """Several element-wise steps in one loop nest.
-
-  A step reads what an earlier one computed, and since that value never leaves
-  the nest it is a value of the loop body rather than a buffer. The last step
-  writes the destination.
-  """
-  region, builder, factors = _prologue(
-    op, [member.step.scalar for member in op.members])
-  indices = indexMap(op.result.indices)
-  body = _iteration(builder, op, indices)
-
-  produced = {}
-  for position, member in enumerate(op.members):
-    last = position + 1 == len(op.members)
-    assert last or not member.step.add or member.step.accumulateFrom is not None, \
-      'a step accumulates into what an earlier step of the nest computed'
-    args = [produced[source] if source is not None
-            else _operand(body, term, indices, member.datatype)
-            for term, source in zip(member.terms, member.step.sources)]
-    produced[position] = _accumulate(
-      body, _step(body, member, args, factors), member, produced)
-    if not last and produced[position] not in args:
-      produced[position].name = f'_fused{position}'
-      produced[position].materialize = True
-
-  _store(body, op, indices, produced[len(op.members) - 1], factors)
-  return region
-
-
 def lowerReduction(op):
   """``result <op>= alpha * fold(term over one index)`` as loops.
 
@@ -105,33 +75,6 @@ def lowerReduction(op):
   return region
 
 
-def _accumulate(builder, value, member, produced):
-  """The value combined with what the step accumulates into, if it does."""
-  source = member.step.accumulateFrom
-  if source is None:
-    return value
-  return builder.add(Arith(operations.Add(), [produced[source], value],
-                           member.datatype))
-
-
-def _step(builder, member, args, factors):
-  """What one step of a nest computes.
-
-  A step either applies an operation to its operands or is a scaling of the
-  one operand it has. Either way it may carry a factor, and the factor applies
-  to what the step computed rather than to its first operand.
-  """
-  step = member.step
-  if step.optype is None:
-    return _scale(builder, args[0], factors.get(str(step.scalar)), member.datatype)
-
-  filled = [argument if isinstance(argument, ValueOp)
-            else builder.add(Const(argument, member.datatype))
-            for argument in step.fillTerms(args)]
-  value = builder.add(Arith(step.optype, filled, member.datatype))
-  return _scale(builder, value, factors.get(str(step.scalar)), member.datatype)
-
-
 def _scale(builder, value, factor, datatype):
   """`factor * value`, where there is a factor to apply."""
   scaledValue = scaled(value, factor, datatype)
@@ -140,13 +83,13 @@ def _scale(builder, value, factor, datatype):
   return scaledValue
 
 
-def _prologue(op, scalars=()):
+def _prologue(op):
   """The region, a builder for it, and the factors the statement scales by.
 
   Everything the destination is not going to be written over is zeroed first.
-  The factors are made once, outside the nest, and are found again by the
-  spelling of what they scale by: one kernel may well scale two statements by
-  the same name, and a nest may well scale two of its steps by it.
+  The factor is made once, outside the nest, and is found again by the
+  spelling of what it scales by: one kernel may well scale two statements by
+  the same name.
   """
   region = Region()
   builder = Builder(region)
@@ -159,7 +102,7 @@ def _prologue(op, scalars=()):
     zero(builder, Buffer.fromDescription(op.result), box)
 
   factors = {}
-  for alpha in (op.alpha, *scalars):
+  for alpha in (op.alpha,):
     if str(alpha) in factors:
       continue
     factor = _factor(alpha, op.result.datatype)

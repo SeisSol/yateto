@@ -165,23 +165,6 @@ class TestExport:
             kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, False, exported)
         return kernel.cfg
 
-    @staticmethod
-    def _fused(cfg):
-        from yateto.ast.node import FusedElementwise
-        return any(pp.action is not None and pp.action.isRHSExpression()
-                   and isinstance(pp.action.term.node, FusedElementwise)
-                   for pp in cfg)
-
-    def test_the_emitted_graph_is_fused(self):
-        assert self._fused(self._cfg(frozenset()))
-
-    def test_the_exported_graph_is_not(self):
-        """An exporter writes no loops -- it hands the operations to a
-        generator that decides for itself -- and has no reading for a fused
-        node."""
-        assert not self._fused(self._cfg(frozenset({'cpu'})))
-
-
 class TestReductionStep:
     """A reduction walks an axis of its own inside the nest.
 

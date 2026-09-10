@@ -25,5 +25,5 @@ from .scalarize import buffers, scalarize
 from .ops import (Arith, Call, Const, Fold, If, Load, Loop, Memset, Pointer,
                   Read, Scope, Store, Yield)
 from .passes import unroll
-from .tensor import (Broadcast, Copy, Elementwise, FusedElementwise,
-                     LoopOverGEMM, Reduction, TensorOp, Transpose)
+from .tensor import (Broadcast, Copy, Elementwise, LoopOverGEMM, Reduction,
+                     TensorOp, Transpose)

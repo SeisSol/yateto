@@ -220,9 +220,6 @@ def _scalarsOf(cfg):
   for pp in cfg:
     if pp.action:
       scalars = pp.action.scalar if isinstance(pp.action.scalar, list) else [pp.action.scalar]
-      # an action that carries several steps carries their factors with it
-      if pp.action.isRHSExpression():
-        scalars = scalars + getattr(pp.action.term.node, 'stepScalars', list)()
       S = S | {scalar for scalar in scalars if isinstance(scalar, Tensor)}
   return S
 

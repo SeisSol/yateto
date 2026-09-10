@@ -433,3 +433,30 @@ class TestStorageFacts:
         cfg = self._cfg(arch, C["ij"] <= A["ik"] * B["kj"])
         temporary = next(a.result for a in cfg if a.result.isLocal())
         assert temporary.indices is not None
+
+
+    def test_a_substituted_operand_keeps_what_the_statement_says(self, arch):
+        """Only where it reads from changes: it still reads the entries it
+        read, over the indices it read them with."""
+        from yateto.ast.indices import Indices
+        from yateto.memory import DenseMemoryLayout
+        import numpy as np
+        from yateto import aspp
+        ml = DenseMemoryLayout((4, 4))
+        narrow = aspp.general(np.tril(np.ones((4, 4), dtype=bool)))
+        whole = aspp.general(np.ones((4, 4), dtype=bool))
+        operand = Operand("_tmp0", Indices("ij", (4, 4)), ml, narrow,
+                          is_temporary=True, writable=True)
+        storage = Operand("A", Indices("kl", (4, 4)), ml, whole,
+                          tensor=Tensor("A", (4, 4)), writable=True)
+        read = operand.substituted(operand, storage)
+        assert read.name == "A" and read.tensor is storage.tensor
+        assert list(read.indices) == ["i", "j"]
+        assert read.eqspp is narrow
+
+    def test_an_operand_that_is_not_the_one_replaced_is_left_alone(self, arch):
+        from yateto.memory import DenseMemoryLayout
+        ml = DenseMemoryLayout((4, 4))
+        one = Operand("B", None, ml, None)
+        assert one.substituted(Operand("A", None, ml, None),
+                               Operand("C", None, ml, None)) is one

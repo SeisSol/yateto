@@ -72,13 +72,6 @@ class TensorDescription(object):
     """The storage this reaches, which for a slice is what it slices."""
     return {self.viewed()}
 
-  def maySubstitute(self, when, by):
-    """Whether it may be read from `by` instead, and still be read at all."""
-    return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
-
-  def substituted(self, when, by, memoryLayout=None):
-    return by if self == when else self
-
   def resultCompatible(self, result):
     """Whether what this holds fits in a destination laid out like that."""
     return result.memoryLayout.isCompatible(self.eqspp)
@@ -135,6 +128,19 @@ class IndexedTensorDescription(TensorDescription):
                  base.datatype, base.addressing, base.tensor, base.writable)
     sliced._views = base
     return sliced
+
+  def maySubstitute(self, when, by):
+    """Whether it may be read from `by` instead, and still be read at all."""
+    return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
+
+  def substituted(self, when, by, memoryLayout=None):
+    """Read from `by` where this is the operand being replaced.
+
+    What the statement says about the operand stays with the statement: it
+    still reads the entries it read, over the indices it read them with. Only
+    where it reads them from changes.
+    """
+    return self.readFrom(by) if self == when else self
 
   @classmethod
   def statement(cls, indices, eqspp, datatype):

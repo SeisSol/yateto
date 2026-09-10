@@ -9,7 +9,7 @@ a ``ProgramAction`` of the shape
 
     result [+]= [scalar *] term
 
-where ``term`` is either a single ``Variable`` or an ``Expression``
+where ``term`` is either a single operand or an ``Expression``
 (a LoopOverGEMM, a Permute, a Broadcast, ...).  Subsequent CFG-level
 passes do classic compiler things: liveness analysis, copy
 propagation, dead-store elimination, action merging.
@@ -47,8 +47,8 @@ from yateto.controlflow.graph import (
     Expression,
     Guard,
     ProgramAction,
-    Variable,
 )
+from yateto.description import IndexedTensorDescription as Operand
 from yateto.controlflow.transformer import (
     liveness,
     MergeActions,
@@ -95,7 +95,7 @@ def _live_var_names(live):
 
 
 # ---------------------------------------------------------------------------
-# Variable
+# Operand
 # ---------------------------------------------------------------------------
 
 
@@ -105,22 +105,22 @@ class TestVariable:
         # A variable with a non-temporary tensor is global.
         T = Tensor("A", (3, 3))
         ml = DenseMemoryLayout((3, 3))
-        v = Variable("A", writable=False, memoryLayout=ml, tensor=T)
+        v = Operand("A", None, ml, None, tensor=T)
         assert v.isGlobal()
         assert not v.isLocal()
 
     def test_pure_temporary_is_local(self, arch):
         from yateto.memory import DenseMemoryLayout
         ml = DenseMemoryLayout((3, 3))
-        v = Variable("_tmp0", writable=True, memoryLayout=ml, is_temporary=True)
+        v = Operand("_tmp0", None, ml, None, is_temporary=True, writable=True)
         assert v.isLocal()
         assert not v.isGlobal()
 
     def test_hash_is_by_name(self, arch):
         from yateto.memory import DenseMemoryLayout
         ml = DenseMemoryLayout((3, 3))
-        a = Variable("X", True, ml)
-        b = Variable("X", True, ml)
+        a = Operand("X", None, ml, None, writable=True)
+        b = Operand("X", None, ml, None, writable=True)
         # Same name -> same hash, insertable into a set without dups.
         s = {a, b}
         assert len(s) == 1
@@ -128,7 +128,7 @@ class TestVariable:
     def test_set_writable_only_matches_by_name(self, arch):
         from yateto.memory import DenseMemoryLayout
         ml = DenseMemoryLayout((3, 3))
-        v = Variable("X", False, ml)
+        v = Operand("X", None, ml, None)
         v.setWritable("Y")
         assert v.writable is False
         v.setWritable("X")
@@ -282,11 +282,12 @@ class TestVerify:
         return aspp.general(np.ones((4, 4), dtype=bool))
 
     def _tmp(self, name='_tmp0'):
-        return Variable(name, True, self._ml(), self._spp(), is_temporary=True)
+        return Operand(name, None, self._ml(), self._spp(),
+                       is_temporary=True, writable=True)
 
     def _global(self, name='A', writable=False):
-        return Variable(name, writable, self._ml(), self._spp(),
-                        tensor=Tensor(name, (4, 4)))
+        return Operand(name, None, self._ml(), self._spp(),
+                       tensor=Tensor(name, (4, 4)), writable=writable)
 
     def test_a_graph_that_is_as_it_is_taken_to_be_says_nothing(self, arch):
         A, C = self._global('A'), self._global('C', writable=True)
@@ -322,8 +323,8 @@ class TestVerify:
         from yateto.memory import DenseMemoryLayout
         A, C = self._global('A'), self._global('C', writable=True)
         tmp = self._tmp()
-        sliced = Variable.view(tmp, DenseMemoryLayout((4, 4)).subslice(1, 0, 2),
-                               self._spp())
+        sliced = Operand.view(tmp, DenseMemoryLayout((4, 4)).subslice(1, 0, 2),
+                              self._spp())
         # it does not stand up either -- the slice keeps room for fewer
         # entries than the pattern says it has values at -- so ask for the one
         # finding this is about
@@ -356,8 +357,8 @@ class TestVerify:
         # values at
         narrow = np.zeros((4, 4), dtype=bool)
         narrow[:2, :2] = True
-        C = Variable('C', True, DenseMemoryLayout.fromSpp(aspp.general(narrow)),
-                     self._spp(), tensor=Tensor('C', (4, 4)))
+        C = Operand('C', None, DenseMemoryLayout.fromSpp(aspp.general(narrow)),
+                    self._spp(), tensor=Tensor('C', (4, 4)), writable=True)
         found = verify([ProgramAction(C, A, add=False)])
         assert any('does not stand up' in f for f in found)
 

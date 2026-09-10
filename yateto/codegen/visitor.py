@@ -7,7 +7,6 @@ from ..memory import DenseMemoryLayout
 from .. import aspp
 from ..controlflow.visitor import ScalarsSet
 from ..controlflow.graph import Guard
-from ..controlflow.graph import Variable
 from .code import Cpp
 from .. import ir
 from .factory import *

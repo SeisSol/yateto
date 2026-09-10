@@ -37,7 +37,66 @@ class TensorDescription(object):
     self.datatype = datatype
     self.addressing = addressing
     self.tensor = tensor
+    #: What it names a slice of, where it names one. Set before the flag
+    #: below, because whether the kernel writes a slice is asked of what it
+    #: slices.
+    self._views = None
     self.writable = writable
+
+  @property
+  def writable(self):
+    # Asked of the storage: whether the kernel writes a slice of something is
+    # whether it writes that something.
+    return self.viewed()._writable
+
+  @writable.setter
+  def writable(self, value):
+    self.viewed()._writable = value
+
+  def viewed(self):
+    """What it names a slice of, which for most operands is itself."""
+    return self._views if self._views is not None else self
+
+  def isView(self):
+    return self._views is not None
+
+  def setWritable(self, name):
+    if self.name == name:
+      self.writable = True
+
+  def isPassedByValue(self):
+    """Whether this operand is handed over by value rather than by pointer."""
+    return self.tensor is not None and self.tensor.isPassedByValue()
+
+  def variables(self):
+    """The storage this reaches, which for a slice is what it slices."""
+    return {self.viewed()}
+
+  def maySubstitute(self, when, by):
+    """Whether it may be read from `by` instead, and still be read at all."""
+    return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
+
+  def substituted(self, when, by, memoryLayout=None):
+    return by if self == when else self
+
+  def resultCompatible(self, result):
+    """Whether what this holds fits in a destination laid out like that."""
+    return result.memoryLayout.isCompatible(self.eqspp)
+
+  def __hash__(self):
+    return hash(self.name)
+
+  def __eq__(self, other):
+    # Two operands of the same name name the same storage. Whether the tensors
+    # behind that name agree is a property of the kernel signature and is
+    # reported there, with the context needed for a useful message.
+    if not isinstance(other, TensorDescription):
+      return NotImplemented
+    if self.name != other.viewed().name:
+      return False
+    # A slice is the same as something else only where that something names
+    # the same slice.
+    return not self.isView() or self.memoryLayout == other.memoryLayout
 
   def isGlobal(self):
     """Whether the caller hands this over, which is what puts it in the interface."""
@@ -61,6 +120,21 @@ class IndexedTensorDescription(TensorDescription):
   def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, tensor=None, writable=False):
     super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing, tensor, writable)
     self.indices = indices
+
+  @classmethod
+  def view(cls, operand, memoryLayout, eqspp):
+    """A slice of what `operand` names: the same storage, another layout.
+
+    It stands for the same tensor and answers for the same name -- a slice of
+    C is written into C -- but for fewer of its entries, which is what tells
+    two slices of one operand apart.
+    """
+    base = operand.viewed()
+    sliced = cls(base.name, base.indices, memoryLayout, eqspp,
+                 base.is_compute_constant, base.is_temporary, base.values,
+                 base.datatype, base.addressing, base.tensor, base.writable)
+    sliced._views = base
+    return sliced
 
   @classmethod
   def statement(cls, indices, eqspp, datatype):

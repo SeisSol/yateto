@@ -4,12 +4,15 @@ import pytest
 
 from yateto import Tensor
 from yateto.aspp import dense
-from yateto.controlflow.graph import Guard, LiveSet, Variable
+from yateto.controlflow.graph import Guard, LiveSet
+from yateto.description import IndexedTensorDescription
 from yateto.memory import DenseMemoryLayout
 
 
 def var(name, shape=()):
-    return Variable(name, True, DenseMemoryLayout.fromSpp(dense(shape)), dense(shape))
+    return IndexedTensorDescription(name, None,
+                                    DenseMemoryLayout.fromSpp(dense(shape)),
+                                    dense(shape), writable=True)
 
 
 @pytest.fixture

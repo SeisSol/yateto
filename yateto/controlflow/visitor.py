@@ -4,6 +4,7 @@ from .. import ops
 from ..ast.visitor import Visitor
 from ..type import AddressingMode, Tensor, DerivedScalar
 from .graph import *
+from ..description import IndexedTensorDescription
 from .transformer import liveness
 from ..memory import DenseMemoryLayout
 from ..ast.node import Permute, Node, Broadcast
@@ -78,7 +79,7 @@ class AST2ControlFlow(Visitor):
   def visit_SliceView(self, node):
     var = self.visit(node.term())
     ml = node.getMemoryLayout(var.memoryLayout)
-    return Variable.view(var, ml, node.eqspp())
+    return IndexedTensorDescription.view(var, ml, node.eqspp())
 
   def visit_Accumulate(self, node):
     variables = [self.visit(child) for child in node]
@@ -156,12 +157,11 @@ class AST2ControlFlow(Visitor):
   def visit_IndexedTensor(self, node):
     self._bindName(node.name(), node.tensor, node.datatype)
     constant = node.tensor.is_compute_constant()
-    return Variable(node.name(), node.name() in self._writable, self._ml(node),
-                    node.eqspp(), node.tensor, node.tensor.temporary,
-                    node.datatype,
-                    is_compute_constant=constant,
-                    values=node.tensor.values() if constant else None,
-                    addressing=node.tensor.addressing, indices=node.indices)
+    return IndexedTensorDescription(
+      node.name(), node.indices, self._ml(node), node.eqspp(), constant,
+      node.tensor.temporary, node.tensor.values() if constant else None,
+      node.datatype, node.tensor.addressing, node.tensor,
+      node.name() in self._writable)
 
   def _bindName(self, name, tensor, datatype):
     """One name, one tensor: a name yields one declaration in the signature.
@@ -197,8 +197,9 @@ class AST2ControlFlow(Visitor):
   def _nextTemporary(self, node):
     name = f'{self.TEMPORARY_RESULT}{self._tmp}'
     self._tmp += 1
-    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True,
-                    datatype=node.datatype, indices=node.indices)
+    return IndexedTensorDescription(name, node.indices, self._ml(node),
+                                    node.eqspp(), is_temporary=True,
+                                    datatype=node.datatype, writable=True)
 
   def updateWritable(self, name):
     self._writable = self._writable | {name}

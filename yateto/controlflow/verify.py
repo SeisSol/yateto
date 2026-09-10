@@ -14,12 +14,12 @@ reason about the easy way.
 
 import collections
 
-from .graph import Variable
+from ..description import IndexedTensorDescription
 
 #: A substitution that replaces nothing: no variable is named this, so asking
 #: whether it may be made reduces to asking whether the statement stands up as
 #: it is.
-_NOTHING = Variable('', False, None)
+_NOTHING = IndexedTensorDescription('', None, None, None)
 
 
 def verify(cfg):

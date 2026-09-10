@@ -22,6 +22,7 @@ from .core import Buffer, Builder, Entries, Op, Region, ValueOp
 from .emit import INDEX_PREFIX, CppEmitter
 from .fusion import fuseLoops
 from .scalarize import buffers, scalarize
+from .storage import assign
 from .ops import (Arith, Call, Const, Fold, If, Load, Loop, Memset, Pointer,
                   Read, Scope, Store, Yield)
 from .passes import unroll

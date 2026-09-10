@@ -6,7 +6,6 @@ from io import StringIO
 from ..memory import DenseMemoryLayout
 from .. import aspp
 from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
-from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
 from .code import Cpp
@@ -107,6 +106,8 @@ class KernelGenerator(object):
     if factory.optimizes():
       ir.fuseLoops(region)
       ir.scalarize(region)
+    datatypes = {name: buffer.datatype
+                 for name, buffer in ir.buffers(region).items()}
 
     self._generateScalarPrologue(cpp, cfg)
     # temporary memory required (per element in case of gpu)
@@ -114,23 +115,17 @@ class KernelGenerator(object):
     #       an provided by the user
     required_tmp_mem = 0
     if factory.allocateTemporary():
-      cfg = DetermineLocalInitialization().visit(cfg)
-      mentioned = ir.buffers(region)
-      bindings = [(local, buf) for pp in cfg for local, buf in pp.bufferMap.items()
-                  if str(local) in mentioned]
-      used = {buf for _, buf in bindings}
-      for localPtr in sorted({local for local, _ in bindings}, key=str):
-        cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
-      for pp in cfg:
-        for buf, size in pp.initBuffer.items():
-          if buf not in used:
-            continue
-          required_tmp_mem += size
-          # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
-          factory.temporary(self._bufferName(buf), size, None)
-      for local, buf in bindings:
+      shares, sizes = ir.assign(region)
+      for name in sorted(shares):
+        cpp(f'{datatypes[name].ctype()}* {name};')
+      for share in sorted(sizes):
+        required_tmp_mem += sizes[share]
+        # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
+        factory.temporary(self._bufferName(share), sizes[share], None)
+      for name in sorted(shares):
         # buffers are untyped storage; each pointer is cast to its own type
-        cpp(f'{local} = reinterpret_cast<{local.datatype.ctype()}*>({self._bufferName(buf)});')
+        cpp(f'{name} = reinterpret_cast<{datatypes[name].ctype()}*>'
+            f'({self._bufferName(shares[name])});')
 
     ir.CppEmitter(cpp, routineCache).emit(region)
     return ir.countFlops(region), required_tmp_mem

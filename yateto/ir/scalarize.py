@@ -104,7 +104,7 @@ def _dropDeadStores(region):
       if not op.states():
         opaque = True
       else:
-        read |= op.touches()
+        read |= op.names()
   if opaque:
     return
 
@@ -149,11 +149,12 @@ def _dropEmptyRegions(region):
 
 
 def buffers(region):
-  """The names of every buffer the region still mentions."""
-  names = set()
+  """Every buffer the region still mentions, by name."""
+  found = {}
   for op in region.walk():
     if isinstance(op, (Load, Store, Memset, Pointer)):
-      names.add(op.buffer.name)
+      found.setdefault(op.buffer.name, op.buffer)
     elif isinstance(op, Call) and op.states():
-      names |= op.touches()
-  return names
+      for buffer in op.touches():
+        found.setdefault(buffer.name, buffer)
+  return found

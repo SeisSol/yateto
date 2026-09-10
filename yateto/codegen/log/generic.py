@@ -62,8 +62,15 @@ class Generic(object):
     return builder.add(ir.Pointer(buffer, coords, axes, name=name, const=const))
 
   def _buffer(self, term, name=None):
-    return ir.Buffer(name if name is not None else term.name, term.datatype,
-                     term.memoryLayout, term.eqspp, term.is_temporary)
+    """The tensor's storage, or a pointer's name for it.
+
+    A pointer names where a buffer starts; it is not storage of its own, so
+    it is nobody's temporary however temporary what it points into is.
+    """
+    if name is None:
+      return ir.Buffer(term.name, term.datatype, term.memoryLayout, term.eqspp,
+                       term.is_temporary)
+    return ir.Buffer(name, term.datatype, term.memoryLayout, term.eqspp)
 
   def _nest(self, builder, loopIndices, ranges, fixed, indices):
     """The nest over the indices that are not pinned, or None where it is empty.

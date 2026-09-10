@@ -73,6 +73,10 @@ class VariableView(object):
     self._eqspp = eqspp
 
   @property
+  def name(self):
+    return self.variable.name
+
+  @property
   def tensor(self):
     return self.variable.tensor
 
@@ -289,8 +293,6 @@ class ProgramPoint(object):
   def __init__(self, action):
     self.action = action
     self.live = None
-    self.initBuffer = None
-    self.bufferMap = None
 
 
 class LiveSet:

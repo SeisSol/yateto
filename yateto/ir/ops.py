@@ -181,8 +181,8 @@ class Call(Op):
     #: saying is not the same as touching nothing: a call that has not been
     #: asked what it reads may read anything, and nothing may be moved across
     #: it or dropped because of it.
-    self.reads = None if reads is None else [buffer.name for buffer in reads]
-    self.writes = None if writes is None else [buffer.name for buffer in writes]
+    self.reads = None if reads is None else list(reads)
+    self.writes = None if writes is None else list(writes)
     #: What the callee reported, once it has written itself.
     self.flops = None
 
@@ -191,7 +191,11 @@ class Call(Op):
     return self.reads is not None and self.writes is not None
 
   def touches(self):
-    return set(self.reads or ()) | set(self.writes or ())
+    """The buffers, whichever way it touches them."""
+    return list(self.reads or ()) + list(self.writes or ())
+
+  def names(self):
+    return {buffer.name for buffer in self.touches()}
 
   def operands(self):
     return tuple(self._operands)

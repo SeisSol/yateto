@@ -479,6 +479,55 @@ class TestFusion:
         assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 2
 
 
+class TestStorage:
+    def _buffer(self, name, temporary=True):
+        return ir.Buffer(name, Datatype.F64, DenseMemoryLayout((N,)),
+                         temporary=temporary)
+
+    def _statement(self, index, target, source):
+        body = ir.Region()
+        builder = ir.Builder(body)
+        builder.add(ir.Store(target, [index],
+                             builder.add(ir.Load(source, [index]))))
+        return ir.Loop([index], Range(0, N), body)
+
+    def test_temporaries_whose_lives_do_not_overlap_share(self):
+        A, C = self._buffer('A', False), self._buffer('C', False)
+        one, two = self._buffer('_t1'), self._buffer('_t2')
+        region = ir.Region([self._statement(ir.Index('i'), one, A),
+                            self._statement(ir.Index('i'), C, one),
+                            self._statement(ir.Index('i'), two, A),
+                            self._statement(ir.Index('i'), C, two)])
+        shares, sizes = ir.assign(region)
+        assert shares['_t1'] == shares['_t2']
+        assert len(sizes) == 1
+
+    def test_temporaries_that_overlap_do_not(self):
+        A = self._buffer('A', False)
+        one, two = self._buffer('_t1'), self._buffer('_t2')
+        region = ir.Region([self._statement(ir.Index('i'), one, A),
+                            self._statement(ir.Index('i'), two, one),
+                            self._statement(ir.Index('i'), one, two)])
+        shares, sizes = ir.assign(region)
+        assert shares['_t1'] != shares['_t2']
+        assert len(sizes) == 2
+
+    def test_what_the_caller_sees_gets_no_share(self):
+        A, C = self._buffer('A', False), self._buffer('C', False)
+        region = ir.Region([self._statement(ir.Index('i'), C, A)])
+        shares, sizes = ir.assign(region)
+        assert shares == {} and sizes == {}
+
+    def test_a_statement_that_does_not_say_stops_the_sharing(self):
+        A, C = self._buffer('A', False), self._buffer('C', False)
+        one, two = self._buffer('_t1'), self._buffer('_t2')
+        region = ir.Region([self._statement(ir.Index('i'), one, A),
+                            ir.Call(lambda cpp, cache: 0),
+                            self._statement(ir.Index('i'), two, A)])
+        shares, sizes = ir.assign(region)
+        assert shares['_t1'] != shares['_t2']
+
+
 class TestEmission:
     def test_a_copy_carries_no_factor(self):
         A = Tensor('A', (N, N))

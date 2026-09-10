@@ -1,5 +1,4 @@
 from .graph import *
-from collections import deque
 from .fused_gemm_automata import Context as FusedGemmsContext
 
 
@@ -143,56 +142,6 @@ class MergeActions(object):
             n -= 1
       i += 1
     return LivenessAnalysis().visit(cfg)
-
-class DetermineLocalInitialization(object):
-  def visit(self, cfg):
-    numBuffers = 0
-    usedBuffers = dict()
-    freeBuffers = deque()
-    bufferSize = dict()
-
-    for pp in cfg:
-      pp.initBuffer = dict()
-      pp.bufferMap = dict()
-
-    n = len(cfg)
-    for i in range(n-1):
-      ua = cfg[i].action
-      # assign buffer
-      if ua and not ua.isCompound() and not ua.result.isGlobal():
-        if ua.result in usedBuffers:
-          buf = usedBuffers[ua.result]
-        elif len(freeBuffers) > 0:
-          buf = freeBuffers.pop()
-        else:
-          buf = numBuffers
-          numBuffers += 1
-        cfg[i].bufferMap[ua.result] = buf
-        usedBuffers[ua.result] = buf
-
-        # size in bytes
-        datatype = ua.result.datatype
-        assert datatype is not None, \
-          f'No datatype deduced for {ua.result}; run SetDatatype before the code generator.'
-        size = ua.result.viewed().memoryLayout().storage().requiredReals() * datatype.size()
-        if buf in bufferSize:
-          bufferSize[buf] = max(bufferSize[buf], size)
-        else:
-          bufferSize[buf] = size
-
-      # free buffers
-      free = cfg[i].live.variables() - cfg[i+1].live.variables()
-      for local in free:
-        # warning: local.isLocal() check is suboptimal (but currently good enough)
-        # refactor liveness for better results
-        if local.isLocal():
-          if local in usedBuffers:
-            freeBuffers.appendleft(usedBuffers.pop(local))
-
-    if len(cfg) > 0:
-      cfg[0].initBuffer = bufferSize
-    return cfg
-
 
 class FindFusedGemms(object):
   def visit(self, cfg):

@@ -1,9 +1,14 @@
-from ..codegen.common import INDEX_PREFIX
 from ..ops import CBinaryOperatorMixin
 from .address import address
 from .core import ValueOp
 from .ops import (Arith, Call, Const, Fold, If, Load, Loop, Memset, Pointer,
                   Read, Scope, Store, Yield)
+
+
+#: What a loop variable is called in the generated code, before its index
+#: name. Anything that emits its own loops into the same scope has to spell
+#: them the same way.
+INDEX_PREFIX = '_'
 
 
 class CppEmitter:

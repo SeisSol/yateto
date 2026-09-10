@@ -17,9 +17,9 @@ an address for a known entry and none for an index -- becomes addressable.
 from .address import address, constantEntry, storesValue
 from .affine import Affine, Index
 from .analysis import countFlops
-from .build import indexMap, load, loopNest, scaled, zero
+from .build import indexMap, load, loopNest, scaleFactor, scaled, zero
 from .core import Buffer, Builder, Entries, Op, Region, ValueOp
-from .emit import CppEmitter
+from .emit import INDEX_PREFIX, CppEmitter
 from .fusion import fuseLoops
 from .scalarize import buffers, scalarize
 from .ops import (Arith, Call, Const, Fold, If, Load, Loop, Memset, Pointer,

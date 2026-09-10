@@ -6,6 +6,33 @@ from .core import Builder
 from .ops import Arith, Const, Load, Loop, Memset, Scope
 
 
+def scaleFactor(datatype, alpha):
+  """Spell a scale factor in the result's datatype.
+
+  A number becomes a literal of that type; a named scalar is a kernel argument
+  and is emitted by name, since it already carries its own type.
+
+  Writing the factor in the result's type is what keeps an int32 result from
+  being multiplied by a double literal, but it only works while the type can
+  hold the factor. It cannot always: every non-zero number is `true`, so a
+  boolean result silently scales by one, and an integer one truncates. Neither
+  is a scaling, so neither is written.
+  """
+  if not isinstance(alpha, (int, float)):
+    return str(alpha)
+  if datatype.isBool() and alpha != 1:
+    raise ValueError(
+      f'Cannot scale a {datatype} result by {alpha}: every non-zero factor is '
+      f'the same boolean, so the factor would be lost. Cast the result to a '
+      f'numeric type before scaling it.')
+  if datatype.isInteger() and alpha != int(alpha):
+    raise ValueError(
+      f'Cannot scale a {datatype} result by {alpha}: the factor is not whole '
+      f'and writing it in the result\'s type would truncate it. Cast the '
+      f'result to a floating type before scaling it.')
+  return datatype.literal(alpha)
+
+
 def load(buffer, coords):
   """Read an entry, or the zero the layout keeps in its place.
 

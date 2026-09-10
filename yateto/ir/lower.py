@@ -1,8 +1,7 @@
 from .. import ops as operations
 from ..ast.indices import BoundingBox
-from ..codegen.common import scaleFactor
 from ..type import AddressingMode
-from .build import indexMap, load, loopNest, scaled, zero
+from .build import indexMap, load, loopNest, scaleFactor, scaled, zero
 from .core import Buffer, Builder, Entries, Region
 from .ops import Arith, Const, Fold, Loop, Read, Scope, Store, Yield
 

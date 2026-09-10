@@ -7,7 +7,7 @@ from .. import aspp
 from .common import forLoops, loopRanges, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
 from . import copyscaleadd, log, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, Tensor
-from ..controlflow.graph import Guard
+from ..guard import Guard
 from .. import ir
 from ..ops import Add, Mul
 

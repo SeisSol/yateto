@@ -5,6 +5,7 @@ from ..ast.visitor import Visitor
 from ..type import AddressingMode, Tensor, DerivedScalar
 from .graph import *
 from ..description import IndexedTensorDescription
+from ..ir.core import Region
 from .transformer import liveness
 from ..memory import DenseMemoryLayout
 from ..ast.node import Permute, Node, Broadcast
@@ -28,7 +29,8 @@ class AST2ControlFlow(Visitor):
     self._bound = dict()
 
   def cfg(self):
-    return list(self._cfg)
+    """The statements the kernel is made of, as a region."""
+    return Region(list(self._cfg))
 
   def _ml(self, node):
     return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()

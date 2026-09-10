@@ -1,5 +1,6 @@
 from .. import ops
 from ..guard import Guard
+from ..ir.core import Op
 from ..ir.tensor import mayFuseGroups
 from collections import OrderedDict
 from typing import Dict, List
@@ -12,7 +13,7 @@ def _productGroups(node):
   return node.m(), node.n(), node.k()
 
 
-class ProgramAction(object):
+class ProgramAction(Op):
   """One statement of the kernel, stated over tensors.
 
   A destination, the operands read into it, whether the value is added to what

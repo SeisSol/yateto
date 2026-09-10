@@ -15,8 +15,9 @@ reason about the easy way.
 import collections
 
 
-def verify(cfg):
+def verify(region):
   """The findings, or an empty list where the graph is as it is taken to be."""
+  cfg = region.ops
   return _generatable(cfg) + _definitions(cfg) + _views(cfg) + _guards(cfg)
 
 

@@ -58,6 +58,7 @@ from yateto.controlflow.transformer import (
     SubstituteForward,
 )
 from yateto.controlflow.verify import verify
+from yateto.ir.core import Region
 from yateto.controlflow.visitor import AST2ControlFlow
 
 
@@ -293,31 +294,31 @@ class TestVerify:
     def test_a_graph_that_is_as_it_is_taken_to_be_says_nothing(self, arch):
         A, C = self._global('A'), self._global('C', writable=True)
         tmp = self._tmp()
-        assert verify([ProgramAction.copy(tmp, A, add=False),
-                       ProgramAction.copy(C, tmp, add=False)]) == []
+        assert verify(Region([ProgramAction.copy(tmp, A, add=False),
+                       ProgramAction.copy(C, tmp, add=False)])) == []
 
     def test_one_definition_and_accumulations_into_it_is_one_definition(self, arch):
         A, B, C = self._global('A'), self._global('B'), self._global('C', True)
         tmp = self._tmp()
-        assert verify([ProgramAction.copy(tmp, A, add=False),
+        assert verify(Region([ProgramAction.copy(tmp, A, add=False),
                        ProgramAction.copy(tmp, B, add=True),
-                       ProgramAction.copy(C, tmp, add=False)]) == []
+                       ProgramAction.copy(C, tmp, add=False)])) == []
 
     def test_two_definitions_of_one_temporary_are_reported(self, arch):
         A, B, C = self._global('A'), self._global('B'), self._global('C', True)
         tmp = self._tmp()
-        found, = verify([ProgramAction.copy(tmp, A, add=False),
+        found, = verify(Region([ProgramAction.copy(tmp, A, add=False),
                          ProgramAction.copy(tmp, B, add=False),
-                         ProgramAction.copy(C, tmp, add=False)])
+                         ProgramAction.copy(C, tmp, add=False)]))
         assert '_tmp0' in found and 'one definition' in found
 
     def test_a_read_between_the_steps_of_a_definition_is_reported(self, arch):
         A, B, C = self._global('A'), self._global('B'), self._global('C', True)
         tmp, other = self._tmp(), self._tmp('_tmp1')
-        found, = verify([ProgramAction.copy(tmp, A, add=False),
+        found, = verify(Region([ProgramAction.copy(tmp, A, add=False),
                          ProgramAction.copy(other, tmp, add=False),
                          ProgramAction.copy(tmp, B, add=True),
-                         ProgramAction.copy(C, tmp, add=False)])
+                         ProgramAction.copy(C, tmp, add=False)]))
         assert '_tmp0' in found and 'between the steps' in found
 
     def test_a_view_of_a_temporary_is_reported(self, arch):
@@ -329,22 +330,22 @@ class TestVerify:
         # it does not stand up either -- the slice keeps room for fewer
         # entries than the pattern says it has values at -- so ask for the one
         # finding this is about
-        found = verify([ProgramAction.copy(tmp, A, add=False),
-                        ProgramAction.copy(C, sliced, add=False)])
+        found = verify(Region([ProgramAction.copy(tmp, A, add=False),
+                        ProgramAction.copy(C, sliced, add=False)]))
         assert any('_tmp0' in f and 'view of a temporary' in f for f in found)
 
     def test_a_read_outside_the_guard_it_was_written_under_is_reported(self, arch):
         A, C = self._global('A'), self._global('C', writable=True)
         flag = self._global('flag')
         tmp = self._tmp()
-        found, = verify([ProgramAction.copy(tmp, A, add=False,
+        found, = verify(Region([ProgramAction.copy(tmp, A, add=False,
                                         condition=Guard.literal(flag)),
-                         ProgramAction.copy(C, tmp, add=False)])
+                         ProgramAction.copy(C, tmp, add=False)]))
         assert '_tmp0' in found and 'does not imply' in found
 
     def test_a_temporary_that_is_never_written_is_reported(self, arch):
         C = self._global('C', writable=True)
-        found, = verify([ProgramAction.copy(C, self._tmp(), add=False)])
+        found, = verify(Region([ProgramAction.copy(C, self._tmp(), add=False)]))
         assert '_tmp0' in found and 'never written' in found
 
     def test_a_statement_that_does_not_stand_up_is_reported(self, arch):
@@ -360,7 +361,7 @@ class TestVerify:
         narrow[:2, :2] = True
         C = Operand('C', None, DenseMemoryLayout.fromSpp(aspp.general(narrow)),
                     self._spp(), tensor=Tensor('C', (4, 4)), writable=True)
-        found = verify([ProgramAction.copy(C, A, add=False)])
+        found = verify(Region([ProgramAction.copy(C, A, add=False)]))
         assert any('does not stand up' in f for f in found)
 
 
@@ -610,3 +611,34 @@ class TestStatementWithoutItsNode:
                         DenseMemoryLayout.fromSpp(aspp.general(narrow)), spp,
                         tensor=Tensor("C", (4, 4)), writable=True)
         assert not ProgramAction.copy(tight, source, add=False).standsUp()
+
+
+class TestGraphIsARegion:
+    """The graph a kernel is made of is a region of statements.
+
+    Which is the same thing the code generators build and improve, so what
+    walks the one walks the other.
+    """
+
+    def test_the_graph_is_a_region(self, arch):
+        A = Tensor("A", (4, 4))
+        B = Tensor("B", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
+        assert isinstance(cfg, Region)
+        assert len(cfg) > 0
+
+    def test_a_statement_is_an_operation(self, arch):
+        from yateto.ir.core import Op
+        A = Tensor("A", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= A["ij"], arch)
+        assert all(isinstance(statement, Op) for statement in cfg)
+        assert all(statement.regions() == () for statement in cfg)
+
+    def test_the_region_can_be_walked(self, arch):
+        A = Tensor("A", (4, 4))
+        B = Tensor("B", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
+        assert list(cfg.walk()) == list(cfg)

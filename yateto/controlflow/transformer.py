@@ -30,13 +30,13 @@ class GraphPass(object):
   def __init__(self):
     self.rewrites = 0
 
-  def visit(self, cfg):
+  def visit(self, region):
     """Rewrite each run of statements that runs together, and nothing across."""
     rewritten = []
-    for block in _blocks(cfg):
+    for block in _blocks(region.ops):
       rewritten.extend(self.rewrite(block))
-    cfg[:] = rewritten
-    return cfg
+    region.ops[:] = rewritten
+    return region
 
 
 class MergeScalarMultiplications(GraphPass):

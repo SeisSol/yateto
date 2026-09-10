@@ -74,6 +74,9 @@ class Region:
   def __iter__(self):
     return iter(self.ops)
 
+  def __getitem__(self, position):
+    return self.ops[position]
+
   def __len__(self):
     return len(self.ops)
 

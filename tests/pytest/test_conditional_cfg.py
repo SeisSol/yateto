@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from yateto import Tensor
+from yateto import Scalar, Tensor
 from yateto.arch import useArchitectureIdentifiedBy
 from yateto.ast.cost import BoundingBoxCostEstimator
 from yateto.controlflow.graph import Guard
@@ -285,3 +285,39 @@ class TestUnreachableInterface:
         members = self.struct(arch, [[t['o1']['ij'] <= t['S']['ij'],
                                       yf.assignIf(False, t['o2']['ij'], t['S']['ij'])]])
         assert 'S' in members
+
+
+class TestUnreachableUnitTest:
+    """The generated test fills and sets what the kernel has, and only that.
+
+    It is generated from the same statements, so a statement that can never
+    run is nowhere on either side -- otherwise the test would set a member the
+    kernel struct does not declare, and not compile.
+    """
+
+    @staticmethod
+    def unitTest(arch, statements):
+        from yateto import Generator, GeneratorCollection
+        import tempfile, os
+        generator = Generator(arch)
+        generator.add('k0', statements)
+        with tempfile.TemporaryDirectory() as out:
+            with contextlib.redirect_stdout(io.StringIO()):
+                generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return open(os.path.join(out, 'KernelTest.t.h')).read()
+
+    def test_a_tensor_of_an_unreachable_statement_is_not_set(self, arch, tensors):
+        t = tensors
+        code = self.unitTest(arch, [t['o1']['ij'] <= t['S']['ij'],
+                                    yf.assignIf(False, t['o2']['ij'], t['Y']['ij'])])
+        assigned = {line.split('=')[0].strip().removeprefix('krnl.')
+                    for line in code.splitlines() if 'krnl.' in line and '=' in line}
+        assert assigned == {'S', 'o1'}
+
+    def test_a_scalar_of_an_unreachable_statement_is_not_set(self, arch, tensors):
+        t = tensors
+        alpha = Scalar('alpha')
+        code = self.unitTest(arch, [t['o1']['ij'] <= t['S']['ij'],
+                                    yf.assignIf(False, t['o2']['ij'],
+                                                alpha * t['Y']['ij'])])
+        assert 'alpha' not in code

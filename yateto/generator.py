@@ -110,6 +110,30 @@ class Kernel(object):
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)
     self.cfg = MergeActions().visit(self.cfg)
+    self._reportUnreachable()
+
+  def _reportUnreachable(self):
+    """Say which statements can never run, and what leaves with them.
+
+    A guard that can never hold is written as such: a condition that is a
+    plain false rather than something the kernel reads. The statement is
+    generated nowhere, and a tensor no other statement names goes out of the
+    kernel's interface with it -- which is either what was asked for, or a
+    condition that came out contradictory somewhere it was not meant to.
+    """
+    unreachable = [action for action in self.cfg if action.getGuard().isNever()]
+    if not unreachable:
+      return
+    named = lambda action: action.result.variables() | action.allVariables()
+    reached = set()
+    for action in self.cfg:
+      if not action.getGuard().isNever():
+        reached |= named(action)
+    dropped = sorted({str(var) for action in unreachable for var in named(action)
+                      if var.isGlobal() and var not in reached})
+    what = f', and with them {", ".join(dropped)}' if dropped else ''
+    print(f'Note: {len(unreachable)} statement(s) of kernel "{self.name}" can never '
+          f'run and are not generated{what}.')
 
   def prefetch(self):
     return self._prefetch

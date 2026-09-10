@@ -1,6 +1,8 @@
 """Conditional execution end to end: guards on the control flow graph and in
 the generated code."""
 
+import contextlib
+import io
 import re
 
 import pytest
@@ -212,3 +214,43 @@ class TestEmittedCode:
         ])
         assert not re.search(r'=\s*-?inf\b', code)
         assert not re.search(r'=\s*-?nan\b', code)
+
+
+class TestUnreachable:
+    """A statement whose guard can never hold is generated nowhere.
+
+    It is written as such -- a plain false rather than something the kernel
+    reads -- so it is either what was asked for or a condition that came out
+    contradictory. Either way it is worth saying, because the operands no
+    other statement names leave the kernel's interface with it.
+    """
+
+    @staticmethod
+    def note(arch, statements):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            build(arch, statements)
+        return [line for line in printed.getvalue().splitlines()
+                if line.startswith('Note:')]
+
+    def test_nothing_is_said_where_everything_can_run(self, arch, tensors):
+        t = tensors
+        assert self.note(arch, [t['o1']['ij'] <= t['S']['ij']]) == []
+
+    def test_what_can_never_run_is_said_once(self, arch, tensors):
+        t = tensors
+        note, = self.note(arch, [t['o1']['ij'] <= t['S']['ij'],
+                                 yf.assignIf(False, t['o2']['ij'], t['Y']['ij'])])
+        assert '1 statement' in note and '"k"' in note
+
+    def test_the_tensors_that_leave_with_it_are_named(self, arch, tensors):
+        t = tensors
+        note, = self.note(arch, [t['o1']['ij'] <= t['S']['ij'],
+                                 yf.assignIf(False, t['o2']['ij'], t['Y']['ij'])])
+        assert 'Y' in note and 'o2' in note
+
+    def test_a_tensor_another_statement_names_stays(self, arch, tensors):
+        t = tensors
+        note, = self.note(arch, [t['o1']['ij'] <= t['S']['ij'],
+                                 yf.assignIf(False, t['o2']['ij'], t['S']['ij'])])
+        assert 'S' not in note.split('with them')[-1]

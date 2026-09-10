@@ -70,6 +70,15 @@ class KernelFactory(object):
   def allocateTemporary(self):
     return True
 
+  def optimizes(self):
+    """Whether the kernel this builds is meant to be fast.
+
+    The reference implementation of a unit test is not: it is there to be
+    obviously right, and a pass that rearranged it would be one more thing
+    for the comparison to be wrong about.
+    """
+    return False
+
   def post_generate(self, routine_cache):
     pass
 
@@ -151,6 +160,11 @@ class KernelFactory(object):
 class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target, attrs=None):
     super().__init__(cpp, arch, target, attrs)
+
+  def optimizes(self):
+    # on a device a statement is a kernel launch, and putting two of them
+    # together is the external generator's business
+    return self._target == 'cpu'
 
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2

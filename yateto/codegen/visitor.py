@@ -127,6 +127,9 @@ class KernelGenerator(object):
         else:
           region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
 
+    if factory.optimizes():
+      ir.fuseLoops(region)
+
     ir.CppEmitter(cpp, routineCache).emit(region)
     return ir.countFlops(region), required_tmp_mem
 

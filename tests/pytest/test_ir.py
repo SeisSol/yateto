@@ -21,12 +21,12 @@ import yateto.functions as yf
 from yateto import Generator, Scalar, Tensor, ops, useArchitectureIdentifiedBy
 from yateto.ast.node import Reduction as ReductionNode
 from yateto import aspp, ir
-from yateto.ast.indices import Indices
 from yateto.codegen.code import Cpp
 from yateto.codegen.common import IndexedTensorDescription
 from yateto.codegen.copyscaleadd.factory import Description
 from yateto.codegen.copyscaleadd.generic import tensorOp
 from yateto.gemm_configuration import GeneratorCollection
+from yateto.ast.indices import Indices, Range
 from yateto.memory import CSCMemoryLayout, DenseMemoryLayout
 from yateto.type import Datatype
 
@@ -265,16 +265,17 @@ class TestElementwise:
         assert body.count('#pragma omp simd') == 1
         assert '_tmp' not in body
 
-    def test_a_sum_written_straight_to_the_result_is_left_alone(self):
+    def test_a_sum_written_straight_to_the_result_shares_one_nest(self):
         # The destination is a buffer the caller sees, so every step of the
-        # chain has to reach it; keeping the running value in the body would
-        # store it once.
+        # chain reaches it -- but they reach it from one pass over the index
+        # space rather than from one pass each.
         A = Tensor('A', (N, N))
         B = Tensor('B', (N, N))
         D = Tensor('D', (N, N))
         C = Tensor('C', (N, N))
         body = emit([C['ij'] <= A['ij'] + B['ij'] + D['ij']])
-        assert body.count('#pragma omp simd') == 3
+        assert body.count('#pragma omp simd') == 1
+        assert body.count('C[1*_a + 4*_b]') == 3
 
     def test_a_sparse_operand_reads_a_zero_where_it_has_no_entry(self):
         left = np.zeros((N, N), dtype=bool)
@@ -412,6 +413,69 @@ class TestKernelRegion:
         region = factory._conditional(Guard.never(), lambda: 1 / 0)
         assert len(region) == 0
         assert ir.countFlops(region) == 0
+
+
+class TestFusion:
+    def _loop(self, index, buffers, coord=None):
+        """A nest over `index` storing into each buffer in turn."""
+        body = ir.Region()
+        builder = ir.Builder(body)
+        for target, source in buffers:
+            value = builder.add(ir.Load(source, [coord or index]))
+            builder.add(ir.Store(target, [coord or index], value))
+        return ir.Loop([index], Range(0, N), body)
+
+    def _buffer(self, name):
+        return ir.Buffer(name, Datatype.F64, DenseMemoryLayout((N,)))
+
+    def test_nests_over_one_space_become_one(self):
+        index = ir.Index('i')
+        A, B, C = (self._buffer(name) for name in 'ABC')
+        region = ir.Region([self._loop(index, [(C, A)]),
+                            self._loop(ir.Index('i'), [(C, B)])])
+        ir.fuseLoops(region)
+        loops = [op for op in region.ops if isinstance(op, ir.Loop)]
+        assert len(loops) == 1
+        assert len([op for op in loops[0].region.walk()
+                    if isinstance(op, ir.Store)]) == 2
+
+    def test_nests_over_different_spaces_are_left_alone(self):
+        A, B, C = (self._buffer(name) for name in 'ABC')
+        first = self._loop(ir.Index('i'), [(C, A)])
+        second = self._loop(ir.Index('j'), [(C, B)])
+        region = ir.Region([first, second])
+        ir.fuseLoops(region)
+        assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 2
+
+    def test_a_nest_that_hands_work_over_is_left_alone(self):
+        A, B, C = (self._buffer(name) for name in 'ABC')
+        called = ir.Loop([ir.Index('i')], Range(0, N),
+                         ir.Region([ir.Call(lambda cpp, cache: 0)]))
+        region = ir.Region([called, self._loop(ir.Index('i'), [(C, B)])])
+        ir.fuseLoops(region)
+        assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 2
+
+    def test_a_zeroing_between_two_nests_moves_in_front_of_them(self):
+        index = ir.Index('i')
+        A, B, C = (self._buffer(name) for name in 'ABC')
+        D = self._buffer('D')
+        region = ir.Region([self._loop(index, [(C, A)]),
+                            ir.Memset(D, 0, N),
+                            self._loop(ir.Index('i'), [(D, B)])])
+        ir.fuseLoops(region)
+        assert isinstance(region.ops[0], ir.Memset)
+        assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 1
+
+    def test_a_zeroing_of_what_the_group_wrote_ends_the_group(self):
+        index = ir.Index('i')
+        A, B, C = (self._buffer(name) for name in 'ABC')
+        region = ir.Region([self._loop(index, [(C, A)]),
+                            ir.Memset(C, 0, N),
+                            self._loop(ir.Index('i'), [(C, B)])])
+        ir.fuseLoops(region)
+        assert isinstance(region.ops[0], ir.Loop)
+        assert isinstance(region.ops[1], ir.Memset)
+        assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 2
 
 
 class TestEmission:

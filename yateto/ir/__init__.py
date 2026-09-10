@@ -20,6 +20,7 @@ from .analysis import countFlops
 from .build import indexMap, load, loopNest, scaled, zero
 from .core import Buffer, Builder, Entries, Op, Region, ValueOp
 from .emit import CppEmitter
+from .fusion import fuseLoops
 from .ops import (Arith, Call, Const, Fold, If, Load, Loop, Memset, Pointer,
                   Read, Scope, Store, Yield)
 from .passes import unroll

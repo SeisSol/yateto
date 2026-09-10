@@ -68,11 +68,11 @@ class Affine:
   __rmul__ = __mul__
 
   def substituted(self, values):
-    """Replace indices by numbers; `values` maps an index to an int."""
+    """Replace indices; `values` maps an index to a number or another index."""
     result = Affine(self._constant)
     for index, coefficient in self._terms.items():
       if index in values:
-        result = result + coefficient * int(values[index])
+        result = result + coefficient * Affine.of(values[index])
       else:
         result = result + Affine(0, {index: coefficient})
     return result

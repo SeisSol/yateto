@@ -977,6 +977,6 @@ class TestOperandsAreHandedOver:
         cfg, region = self._description(C['ij'] <= A['ik'] * B['kj'])
         statement, = [op for op in region.walk()
                       if isinstance(op, ir.LoopOverGEMM)]
-        action = next(a for a in cfg if a.isRHSExpression())
+        action = next(a for a in cfg if not a.isCopy())
         assert statement.result is action.result
         assert statement.terms == action.term.variableList()

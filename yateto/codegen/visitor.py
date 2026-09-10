@@ -88,11 +88,11 @@ class KernelGenerator(object):
     region = ir.Region()
     for action in cfg:
       scalar = self.deduce_scalar(action)
-      if action.isRHSExpression():
+      if not action.isCopy():
         prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.prefetch.name()) if action.term.prefetch is not None else None
         region.extend(factory.create(action.term, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
       else:
-        region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
+        region.extend(factory.simple(action.result, action.copied(), action.condition, action.add, scalar, routineCache, gemm_cfg))
     return region
 
   def emit(self, cpp, region, factory, routineCache, gemm_cfg):

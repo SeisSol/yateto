@@ -19,9 +19,9 @@ class MergeScalarMultiplications(GraphPass):
     i = 1
     while i < n:
       ua = cfg[i]
-      if ua.isRHSVariable() and not ua.isCompound() and ua.scalar is not None:
+      if ua.isCopy() and not ua.isCompound() and ua.scalar is not None:
         va = cfg[i-1]
-        if va.isRHSExpression() and not va.isCompound() and ua.term == va.result:
+        if not va.isCopy() and not va.isCompound() and ua.copied() == va.result:
           va.scalar = ua.scalar
           va.result = ua.result
           # the merged action now performs ua's store, so it inherits ua's guard
@@ -61,8 +61,8 @@ def _dropIfEmptied(cfg, position):
   step is a shape none of them is written for.
   """
   action = cfg[position]
-  if not action.isCompound() and action.isRHSVariable() \
-     and action.result == action.term and action.hasTrivialScalar():
+  if not action.isCompound() and action.isCopy() \
+     and action.result == action.copied() and action.hasTrivialScalar():
     del cfg[position]
     return True
   return False
@@ -84,14 +84,14 @@ class SubstituteForward(GraphPass):
       ua = cfg[i]
 
       if not ua.isCompound() \
-          and ua.isRHSVariable() \
-          and ua.term.writable \
+          and ua.isCopy() \
+          and ua.copied().writable \
           and ua.result.isLocal() \
-          and (ua.term, ua.getGuard()) not in live[i+1] \
-          and (ua.hasTrivialScalar() or ua.term.isLocal()):
+          and (ua.copied(), ua.getGuard()) not in live[i+1] \
+          and (ua.hasTrivialScalar() or ua.copied().isLocal()):
 
         when = ua.result
-        by = ua.term
+        by = ua.copied()
         maySubs = all([cfg[j].maySubstitute(when, by) for j in range(i, n)]) \
                   and _guardsCompatible(cfg, range(i, n), ua.getGuard())
         if maySubs:
@@ -114,12 +114,12 @@ class SubstituteBackward(GraphPass):
     live = liveness(cfg)
     for i in reversed(range(n)):
       va = cfg[i]
-      if not va.isCompound() and va.isRHSVariable() and va.term.isLocal():
+      if not va.isCompound() and va.isCopy() and va.copied().isLocal():
         by = va.result
         found = -1
         for j in range(i):
           if (by, va.getGuard()) not in live[j] and not cfg[j].isCompound() \
-             and cfg[j].result == va.term:
+             and cfg[j].result == va.copied():
             found = j
             break
         if found >= 0:
@@ -149,8 +149,8 @@ class MergeActions(GraphPass):
         V = ua.allVariables()
         for j in range(i+1,n):
           va = cfg[j]
-          if va.isRHSVariable() \
-              and ua.result == va.term \
+          if va.isCopy() \
+              and ua.result == va.copied() \
               and va.result not in V \
               and (ua.hasTrivialScalar() or va.hasTrivialScalar()) \
               and ua.result.isLocal():

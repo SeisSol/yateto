@@ -121,7 +121,7 @@ def _guards(cfg):
 
 
 def _operands(action):
-  return action.term.variableList() if action.isRHSExpression() else [action.term]
+  return action.term.variableList()
 
 
 def _reads(action, name):

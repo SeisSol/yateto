@@ -26,6 +26,15 @@ class Expression(object):
             'loopIndices', 'transA', 'transB', 'sumIndex', 'datatype')
 
   @classmethod
+  def copy(cls, operand):
+    """A statement that reads one operand as it stands.
+
+    A copy is a statement like any other, and saying so is what lets everything
+    that walks the graph ask one question instead of two.
+    """
+    return cls('Copy', [operand], operand.indices, operand.eqspp)
+
+  @classmethod
   def of(cls, node, variables):
     """The statement a node states, over these operands."""
     product = _productGroups(node)
@@ -95,6 +104,8 @@ class Expression(object):
     return c1 and c2
 
   def __str__(self):
+    if self.kind == 'Copy':
+      return str(self._variables[0])
     return '{}({})'.format(self.kind, ', '.join([str(var) for var in self._variables]))
 
   def setWritable(self, name):
@@ -104,18 +115,21 @@ class Expression(object):
 class ProgramAction(object):
   def __init__(self, result, term, add, scalar=None, condition=True):
     self.result = result
-    self.term = term
+    #: What is read, always as a statement -- a bare operand is a copy of it.
+    self.term = term if isinstance(term, Expression) else Expression.copy(term)
     self.add = add
     self.scalar = scalar
     #: The guard the statement runs under. A guard, not something a guard is
     #: made of: it is asked for far more often than it is set.
     self.condition = Guard.coerce(condition)
 
-  def isRHSExpression(self):
-    return isinstance(self.term, Expression)
+  def isCopy(self):
+    """Whether the statement reads one operand as it stands."""
+    return self.term.kind == 'Copy'
 
-  def isRHSVariable(self):
-    return not self.isRHSExpression()
+  def copied(self):
+    """The operand a plain copy reads."""
+    return self.term.variableList()[0]
 
   def isCompound(self):
     return self.add

@@ -515,7 +515,7 @@ class TestExpressionWithoutItsNode:
         C = Tensor("C", (4, 4))
         _, cfg = _lower_to_cfg(C["ij"] <= yf.maximum(A["ij"], 0.0), arch)
         elementwise = next(a.term for a in cfg
-                           if a.isRHSExpression() and a.term.optype is not None)
+                           if not a.isCopy() and a.term.optype is not None)
         assert 'max' in str(elementwise.optype).lower()
         filled = elementwise.fillTerms(["<operand>"])
         assert "<operand>" in filled and 0.0 in filled
@@ -527,7 +527,7 @@ class TestExpressionWithoutItsNode:
         B = Tensor("B", (4, 4))
         C = Tensor("C", (4, 4))
         _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
-        expression = next(a.term for a in cfg if a.isRHSExpression())
+        expression = next(a.term for a in cfg if not a.isCopy())
         assert expression.kind == "LoopOverGEMM"
         assert not hasattr(expression, "node")
 
@@ -536,7 +536,7 @@ class TestExpressionWithoutItsNode:
         B = Tensor("B", (4, 4))
         C = Tensor("C", (4, 4))
         _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
-        expression = next(a.term for a in cfg if a.isRHSExpression())
+        expression = next(a.term for a in cfg if not a.isCopy())
         m, n, k = expression.groups
         assert (str(m), str(n), str(k)) == ("i", "j", "k")
         assert expression.transA is False and expression.transB is False
@@ -549,3 +549,23 @@ class TestExpressionWithoutItsNode:
         _, cfg = _lower_to_cfg(C["ij"] <= A["ij"], arch)
         assert all(isinstance(action.condition, Guard) for action in cfg)
         assert all(action.getGuard() is action.condition for action in cfg)
+
+    def test_a_plain_copy_is_a_statement_like_any_other(self, arch):
+        """One question instead of two: everything that walks the graph asks
+        the statement, and a copy answers as one."""
+        A = Tensor("A", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= A["ij"], arch)
+        copy = next(action for action in cfg if action.isCopy())
+        assert copy.term.kind == "Copy"
+        assert copy.term.variableList() == [copy.copied()]
+        assert copy.copied().name == "A"
+        assert copy.term.eqspp is copy.copied().eqspp
+
+    def test_what_a_copy_reads_is_substituted_like_any_operand(self, arch):
+        from yateto.memory import DenseMemoryLayout
+        ml = DenseMemoryLayout((4, 4))
+        source = Operand("A", None, ml, None, tensor=Tensor("A", (4, 4)))
+        other = Operand("B", None, ml, None, tensor=Tensor("B", (4, 4)))
+        action = ProgramAction(Operand("C", None, ml, None), source, add=False)
+        assert action.substituted(source, other).copied().name == "B"

@@ -90,7 +90,7 @@ class KernelGenerator(object):
       scalar = self.deduce_scalar(action)
       prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.prefetch.name()) if action.prefetch is not None else None
       region.extend(factory.create(action, action.result, action.operands, action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
-    return region
+    return ir.mergeGuards(region)
 
   def emit(self, cpp, region, factory, routineCache, gemm_cfg):
     """The region, improved and written out once.

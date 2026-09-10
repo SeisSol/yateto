@@ -1,7 +1,29 @@
 from .build import load, scaled
 from .core import Region
-from .ops import (Arith, Const, Fold, Load, Loop, Memset, Read, Scope,
+from .ops import (Arith, Const, Fold, If, Load, Loop, Memset, Read, Scope,
                   Store, Yield)
+
+
+def mergeGuards(region):
+  """Put what runs under one guard, one after the other, under one test.
+
+  Two guarded statements standing next to each other under the same guard are
+  two tests of the same thing with nothing in between. Deciding it twice costs
+  a branch and says it twice -- and to whoever walks the region afterwards
+  they are two places rather than one, which is the difference between what
+  may be rewritten together and what may not.
+  """
+  ops = []
+  for op in region.ops:
+    for nested in op.regions():
+      mergeGuards(nested)
+    if isinstance(op, If) and ops and isinstance(ops[-1], If) \
+       and ops[-1].condition == op.condition:
+      ops[-1].region.extend(op.region)
+      continue
+    ops.append(op)
+  region.ops = ops
+  return region
 
 
 def unroll(region):

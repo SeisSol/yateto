@@ -362,3 +362,22 @@ class TestGuardBlocks:
         SubstituteForward().visit(kernel.cfg)
         for run in _blocks(kernel.cfg):
             assert len({action.getGuard() for action in run}) == 1
+
+    def test_what_runs_under_one_guard_is_tested_once(self, arch, tensors):
+        t = tensors
+        code = TestEmittedCode.emit(arch, [[
+            yf.assignIf(t['flag'][''], t['o1']['ij'], t['S']['ij']),
+            yf.assignIf(t['flag'][''], t['o2']['ij'], t['Y']['ij'])]])
+        body = code[code.index('k0::execute'):]
+        body = body[:body.index('\n  }\n')]
+        assert body.count('if (') == 1
+        # and standing in one region, the two nests fuse
+        assert body.count('#pragma omp simd') == 1
+
+    def test_two_different_guards_stay_two_tests(self, arch, tensors):
+        t = tensors
+        code = TestEmittedCode.emit(arch, [[
+            yf.assignIf(t['flag'][''], t['o1']['ij'], t['S']['ij']),
+            yf.assignIf(t['other'][''], t['o2']['ij'], t['Y']['ij'])]])
+        body = code[code.index('k0::execute'):]
+        assert body[:body.index('\n  }\n')].count('if (') == 2

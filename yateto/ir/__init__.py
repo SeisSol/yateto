@@ -22,5 +22,5 @@ from .core import Buffer, Builder, Entries, Op, Region, ValueOp
 from .emit import CppEmitter
 from .ops import Arith, Const, Load, Loop, Memset, Read, Scope, Store
 from .passes import unroll
-from .tensor import (Broadcast, Copy, Elementwise, LoopOverGEMM, Reduction,
-                     TensorOp, Transpose)
+from .tensor import (Broadcast, Copy, Elementwise, FusedElementwise,
+                     LoopOverGEMM, Reduction, TensorOp, Transpose)

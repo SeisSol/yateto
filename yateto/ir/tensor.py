@@ -13,10 +13,12 @@ class TensorOp(Op):
 
   `result` and `terms` are tensor descriptions as the code generators hand
   them over: a name, an index tuple, a memory layout, an equivalent sparsity
-  pattern and a datatype.
+  pattern and a datatype. An operand may also be an immediate the operation
+  was written with, in which case it is a number.
   """
 
-  def __init__(self, result, terms, alpha=1.0, add=False, loopRanges=None):
+  def __init__(self, result, terms, alpha=1.0, add=False, loopRanges=None,
+               unrolled=False):
     self.result = result
     self.terms = list(terms)
     #: What the value is scaled by: a number, or the name of a scalar the
@@ -26,6 +28,10 @@ class TensorOp(Op):
     self.add = add
     #: index name -> Range, the space the statement runs over.
     self.loopRanges = dict(loopRanges) if loopRanges else {}
+    #: Run over the entries rather than over the ranges. A sparse layout has
+    #: an address for an entry and none for an index, so a statement that
+    #: touches one has to name the entries it visits.
+    self.unrolled = unrolled
 
   def lower(self):
     """The statement as loops and scalar operations."""
@@ -57,12 +63,41 @@ class Broadcast(Copy):
   """
 
 
-class LoopOverGEMM(TensorOp):
-  """A contraction of two operands, run as a loop over matrix products."""
-
-
 class Elementwise(TensorOp):
   """An operation applied entry by entry over one index space."""
+
+  def __init__(self, result, terms, optype, alpha=1.0, add=False,
+               loopRanges=None, unrolled=False):
+    super().__init__(result, terms, alpha, add, loopRanges, unrolled)
+    self.optype = optype
+
+  def lower(self):
+    from .lower import lowerElementwise
+    return lowerElementwise(self)
+
+
+class FusedElementwise(TensorOp):
+  """Several element-wise steps over one index space.
+
+  A member states its operation, which of its operands come from an earlier
+  member, and what it scales by. What a member computes and a later one reads
+  never leaves the nest, so it is a value of the loop body rather than a
+  buffer.
+  """
+
+  def __init__(self, result, members, alpha=1.0, add=False, loopRanges=None):
+    terms = [term for member in members for term in member.terms
+             if term is not None]
+    super().__init__(result, terms, alpha, add, loopRanges)
+    self.members = list(members)
+
+  def lower(self):
+    from .lower import lowerFusedElementwise
+    return lowerFusedElementwise(self)
+
+
+class LoopOverGEMM(TensorOp):
+  """A contraction of two operands, run as a loop over matrix products."""
 
 
 class Reduction(TensorOp):

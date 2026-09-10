@@ -292,7 +292,8 @@ class TestScaledOperations:
         A = Tensor('A', (N, N))
         C = Tensor('C', (N, N))
         code = self._emit([C['ij'] <= 2.0 * yf.add(A['ij'], A['ij'])])
-        assert '2.0 * ((' in code
+        entry = f'A[1*_i + {N}*_j]'
+        assert f'2.0 * ({entry} + {entry})' in code
 
     def test_a_boolean_result_is_not_scaled(self):
         """Every non-zero factor is the same boolean, so it would be lost."""

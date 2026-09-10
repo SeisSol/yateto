@@ -182,7 +182,6 @@ class OptimizedKernelFactory(KernelFactory):
     # an earlier step's result reads that step's local instead.
     resultDescr = IndexedTensorDescription.fromNode(result, node)
     supplied = iter(arguments)
-    locals = {}
     members = []
     for i, step in enumerate(node.steps):
       last = i + 1 == len(node.steps)
@@ -190,9 +189,7 @@ class OptimizedKernelFactory(KernelFactory):
       terms = [locals[source] if source is not None
                else IndexedTensorDescription.fromVar(next(supplied), indices)
                for source in step.sources]
-      local = None if last else f'_fused{i}'
-      locals[i] = local
-      members.append(elementwise.FusedMember(step, terms, local, resultDescr.datatype))
+      members.append(elementwise.FusedMember(step, terms, resultDescr.datatype))
     description = elementwise.FusedDescription(
       scalar, add, resultDescr, members, loopRanges(resultDescr, resultDescr.indices))
     generator = elementwise.fusedGenerator(self._arch, description, self._target)

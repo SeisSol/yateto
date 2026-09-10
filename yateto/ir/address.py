@@ -50,14 +50,24 @@ def constantEntry(coords):
   return tuple(coord.constant() for coord in coords)
 
 
-def storesValue(memoryLayout, coords):
-  """Whether the layout keeps the entry at `coords` at all.
+def storesValue(memoryLayout, coords, eqspp=None):
+  """Whether there is a value to read at `coords`.
 
-  Answered for constant coordinates only; anything else is assumed stored,
-  since a loop that runs over entries the layout skips is a question for the
-  pass that built the loop.
+  Two questions in one: whether the layout keeps the entry at all, and whether
+  the operand has a value there. Room the layout keeps for an entry that is
+  structurally zero holds whatever was last put in it, which is why the
+  pattern is asked as well as the layout.
+
+  Answered for constant coordinates only; anything else is assumed to have a
+  value, since a loop that runs over entries the operand does not have is a
+  question for the pass that built the loop.
   """
   entry = constantEntry(coords)
   if entry is None:
     return True
+  if eqspp is not None:
+    # The pattern is asked first and alone. It spans the operand's whole
+    # shape, whereas a layout only answers within the box it keeps room in --
+    # and an entry outside that box is exactly the case this is asked about.
+    return bool(eqspp.as_ndarray()[entry])
   return memoryLayout.hasValue(entry)

@@ -17,6 +17,7 @@ import tempfile
 import numpy as np
 import pytest
 
+import yateto.functions as yf
 from yateto import Generator, Scalar, Tensor, useArchitectureIdentifiedBy
 from yateto import aspp, ir
 from yateto.ast.indices import Indices
@@ -175,6 +176,72 @@ class TestFlops:
         result = description('C', 'ij', (N, N))
         term = description('A', 'ij', (N, N))
         assert ir.countFlops(lowered(-1.0, 1.0, result, term)) == N * N
+
+
+class TestElementwise:
+    def test_an_operand_that_binds_tightest_is_not_bracketed(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= yf.add(A['ij'], B['ij'])])
+        assert f'A[1*_i + {N}*_j] + B[1*_i + {N}*_j]' in body
+
+    def test_a_factor_brackets_the_operation_it_scales(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= 2.0 * yf.mul(A['ij'], B['ij'])])
+        assert f'2.0 * (A[1*_i + {N}*_j] * B[1*_i + {N}*_j])' in body
+
+    def test_accumulating_a_negated_operation_is_a_subtraction(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= C['ij'] - yf.mul(A['ij'], B['ij'])])
+        assert '-=' in body
+        assert '-1.0' not in body
+
+    def test_a_nest_keeps_what_it_computes_in_a_local(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= yf.maximum(yf.add(A['ij'], B['ij']), D['ij'])])
+        assert body.count('#pragma omp simd') == 1
+        assert 'double const _fused0 = A[' in body
+        assert 'std::max(_fused0, D[' in body
+
+    def test_a_nest_reads_no_buffer_for_its_intermediates(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= yf.mul(yf.add(A['ij'], B['ij']),
+                                       yf.sqrt(yf.mul(D['ij'], A['ij'])))])
+        assert '_tmp' not in body
+        assert body.count('double const _fused') == 3
+
+    def test_a_sparse_operand_reads_a_zero_where_it_has_no_entry(self):
+        left = np.zeros((N, N), dtype=bool)
+        left[0, 0] = left[1, 1] = True
+        right = np.zeros((N, N), dtype=bool)
+        right[0, 0] = right[2, 1] = True
+        A = Tensor('A', (N, N), spp=left, memoryLayoutClass=CSCMemoryLayout)
+        B = Tensor('B', (N, N), spp=right, memoryLayoutClass=CSCMemoryLayout)
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= yf.add(A['ij'], B['ij'])])
+        assert 'for (' not in body
+        assert 'C[0] = A[0] + B[0];' in body
+        assert '+ 0.0;' in body
+
+    def test_a_named_factor_is_read_once_however_the_nest_runs(self):
+        spp = np.eye(N, dtype=bool)
+        A = Tensor('A', (N, N), spp=spp, memoryLayoutClass=CSCMemoryLayout)
+        C = Tensor('C', (N, N))
+        s = Scalar('s')
+        body = emit([C['ij'] <= s * yf.sqrt(A['ij'])])
+        assert body.count('double const _alpha = s;') == 1
+        assert body.count('s *') == 0
 
 
 class TestEmission:

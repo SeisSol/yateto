@@ -12,7 +12,7 @@ def load(buffer, coords):
   A layout that stores nothing at a known entry has no address to read from,
   and the value there is a zero whatever the operation does with it.
   """
-  if not storesValue(buffer.memoryLayout, coords):
+  if not storesValue(buffer.memoryLayout, coords, buffer.eqspp):
     return Const(0, buffer.datatype)
   return Load(buffer, coords)
 

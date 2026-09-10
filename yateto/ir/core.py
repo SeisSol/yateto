@@ -10,17 +10,22 @@ class Buffer:
   rather than from text.
   """
 
-  __slots__ = ('name', 'datatype', 'memoryLayout')
+  __slots__ = ('name', 'datatype', 'memoryLayout', 'eqspp')
 
-  def __init__(self, name, datatype, memoryLayout):
+  def __init__(self, name, datatype, memoryLayout, eqspp=None):
     self.name = str(name)
     self.datatype = datatype
     self.memoryLayout = memoryLayout
+    #: Which entries the operand has a value at, which is not the same question
+    #: as which entries the layout keeps room for: a layout may store an entry
+    #: that is structurally zero, and what is in that room is nobody's promise.
+    self.eqspp = eqspp
 
   @classmethod
   def fromDescription(cls, description):
     """The buffer behind a tensor description, as the code generators hand it over."""
-    return cls(description.name, description.datatype, description.memoryLayout)
+    return cls(description.name, description.datatype, description.memoryLayout,
+               description.eqspp)
 
   def __repr__(self):
     return f'Buffer({self.name})'

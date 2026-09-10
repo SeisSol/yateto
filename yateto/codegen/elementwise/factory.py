@@ -43,15 +43,14 @@ class Description(object):
 class FusedMember(object):
   """One step of a fused nest.
 
-  `terms` holds, per operand, either an IndexedTensorDescription to read
-  through or the name of a local an earlier step wrote. `local` is the name
-  this step writes, or None for the last one, which writes the result.
+  `terms` holds, per operand, an IndexedTensorDescription to read through, or
+  None where the operand is what an earlier step computed -- which step that
+  is stands in `step.sources`.
   """
 
-  def __init__(self, step, terms, local, datatype):
+  def __init__(self, step, terms, datatype):
     self.step = step
     self.terms = terms
-    self.local = local
     self.datatype = datatype
 
 

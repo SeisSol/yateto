@@ -20,16 +20,17 @@ class Const(ValueOp):
 class Read(ValueOp):
   """A scalar that already has a name in the generated code.
 
-  A kernel argument or member, that is. It is read once into a local: as far
-  as the compiler can tell, a store through one of the kernel's pointers may
-  land on it, and reading it inside a loop would ask that question per
-  iteration.
+  A kernel argument or member, that is. `hoist` reads it once into a local:
+  as far as the compiler can tell, a store through one of the kernel's
+  pointers may land on it, and reading it inside a loop would ask that
+  question per iteration. Asked for rather than deduced, because naming
+  something again costs nothing on its own.
   """
 
-  def __init__(self, expression, datatype, name=None):
+  def __init__(self, expression, datatype, name=None, hoist=True):
     super().__init__(datatype, name)
     self.expression = str(expression)
-    self.materialize = True
+    self.materialize = hoist
 
   def __repr__(self):
     return f'Read({self.expression})'

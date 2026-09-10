@@ -35,7 +35,9 @@ class CppEmitter:
       for operand in op.operands():
         uses[id(operand)] = uses.get(id(operand), 0) + 1
         if uses[id(operand)] > 1 or defined.get(id(operand), depth) != depth:
-          if not isinstance(operand, Const):
+          # a literal and a name are spelled again wherever they are used;
+          # there is nothing to recompute and nothing to read twice
+          if not isinstance(operand, (Const, Read)):
             locals.add(id(operand))
       if isinstance(op, ValueOp):
         defined[id(op)] = depth

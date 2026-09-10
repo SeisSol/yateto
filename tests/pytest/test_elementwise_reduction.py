@@ -237,6 +237,6 @@ class TestSparseOperands:
         kernel = (tmp_path / 'kernel.cpp').read_text()
         # the union of the two patterns is written, and B contributes a literal
         # zero where it has no entry of its own
-        assert 'C[0] = (A[0]) + (B[0]);' in kernel
-        assert 'C[5] = (A[1]) + (0.0);' in kernel
-        assert 'C[7] = (0.0) + (B[1]);' in kernel
+        assert 'C[0] = A[0] + B[0];' in kernel
+        assert 'C[5] = A[1] + 0.0;' in kernel
+        assert 'C[7] = 0.0 + B[1];' in kernel

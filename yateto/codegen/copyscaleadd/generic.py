@@ -16,7 +16,8 @@ def tensorOp(descr):
   else:
     operation = ir.Copy
   return operation(descr.result, [descr.term], alpha=descr.alpha,
-                   add=descr.beta == 1.0, loopRanges=descr.loopRanges)
+                   add=descr.beta == 1.0, loopRanges=descr.loopRanges,
+                   unrolled=descr.term.memoryLayout.isSparse())
 
 
 class Generic(object):

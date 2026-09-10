@@ -381,3 +381,13 @@ class TestGuardBlocks:
             yf.assignIf(t['other'][''], t['o2']['ij'], t['Y']['ij'])]])
         body = code[code.index('k0::execute'):]
         assert body[:body.index('\n  }\n')].count('if (') == 2
+
+    def test_a_rewrite_leaves_the_guard_alone(self, arch, tensors):
+        """Within a run there is one guard, so there is nothing to inherit."""
+        t = tensors
+        kernel = build(arch, [yf.assignIf(t['flag'][''], t['o1']['ij'],
+                                          t['S']['ij']),
+                              yf.assignIf(t['flag'][''], t['o2']['ij'],
+                                          t['o1']['ij'])])
+        for action in kernel.cfg:
+            assert action.getGuard() == kernel.cfg[0].getGuard()

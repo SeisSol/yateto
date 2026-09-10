@@ -50,8 +50,8 @@ class MergeScalarMultiplications(GraphPass):
         if not va.isCopy() and not va.isCompound() and ua.copied() == va.result:
           va.scalar = ua.scalar
           va.result = ua.result
-          # the merged action now performs ua's store, so it inherits ua's guard
-          va.condition = va.getGuard() & ua.getGuard()
+          # no guard to inherit: the two stand in one run, so they run in one
+          # case, and that is the case the merged statement runs in
           self.rewrites += 1
           del cfg[i]
           i -= 1
@@ -100,21 +100,20 @@ def maySubstitute(statement, when, by, result=True, term=True):
      and statement.resultCompatible(rsubs)
 
 
-def substituted(statement, when, by, guard=None, result=True, term=True):
+def substituted(statement, when, by, result=True, term=True):
   """The statement with `when` read from `by`.
 
-  `guard` is passed only when the substitution redirects the statement's
-  *write target* onto a variable another statement writes under that guard;
-  the statement then inherits it. A read substitution leaves the guard alone --
-  conjoining there would restrict statements that are not themselves
-  conditional.
+  The guard is untouched. Redirecting a write target used to conjoin the guard
+  of whoever the target belongs to, and a pass reaches only within one run of
+  statements that run together, so the two are the same guard and conjoining
+  them is conjoining one with itself.
   """
   rsubs = statement.result.substituted(when, by) if result else statement.result
   operands = [operand.substituted(when, by) for operand in statement.operands] \
              if term else statement.operands
-  gsubs = statement.condition if guard is None else (statement.getGuard() & guard)
   return ProgramAction(statement.kind, rsubs, operands, statement.indices,
-                       statement.eqspp, statement.add, statement.scalar, gsubs,
+                       statement.eqspp, statement.add, statement.scalar,
+                       statement.condition,
                        **{name: getattr(statement, name)
                           for name in ProgramAction._FACTS})
 
@@ -189,7 +188,7 @@ class SubstituteBackward(GraphPass):
           if maySubs:
             # only the producing action changes its write target and hence
             # inherits va's guard; the remaining ones merely read `by`
-            cfg[found] = substituted(cfg[found], when, by, va.getGuard(), term=False)
+            cfg[found] = substituted(cfg[found], when, by, term=False)
             for j in range(found+1,i+1):
               cfg[j] = substituted(cfg[j], when, by)
             self.rewrites += 1
@@ -223,7 +222,7 @@ class MergeActions(GraphPass):
           va = cfg[found]
           if maySubstitute(ua, ua.result, va.result, term=False):
             # this action's write target becomes va's, so it inherits va's guard
-            cfg[i] = substituted(ua, ua.result, va.result, va.getGuard(), term=False)
+            cfg[i] = substituted(ua, ua.result, va.result, term=False)
             cfg[i].add = va.add
             if not va.hasTrivialScalar():
               cfg[i].scalar = va.scalar

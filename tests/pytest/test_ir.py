@@ -221,6 +221,29 @@ class TestElementwise:
         assert '_tmp' not in body
         assert body.count('double const _fused') == 3
 
+    def test_a_factor_the_statement_does_not_state_is_no_factor(self):
+        from yateto.ir.lower import _factor
+        assert _factor(None, Datatype.F64) is None
+        assert _factor(1.0, Datatype.F64) is None
+
+    def test_a_step_of_a_nest_keeps_its_factor(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= yf.maximum(2.0 * yf.add(A['ij'], B['ij']), D['ij'])])
+        assert f'2.0 * (A[1*_i + {N}*_j] + B[1*_i + {N}*_j])' in body
+
+    def test_a_named_factor_on_a_step_is_read_outside_the_nest(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        D = Tensor('D', (N, N))
+        C = Tensor('C', (N, N))
+        s = Scalar('s')
+        body = emit([C['ij'] <= yf.maximum(s * yf.add(A['ij'], B['ij']), D['ij'])])
+        assert body.index('double const _alpha = s;') < body.index('for (')
+        assert body.count('_alpha *') == 1
+
     def test_a_sparse_operand_reads_a_zero_where_it_has_no_entry(self):
         left = np.zeros((N, N), dtype=bool)
         left[0, 0] = left[1, 1] = True

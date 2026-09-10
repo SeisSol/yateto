@@ -16,13 +16,13 @@ def lowerScaleAdd(op):
   address it at all -- a transposition and a broadcast are the same lowering
   seen from two index maps.
   """
-  region, builder, factor = _prologue(op)
+  region, builder, factors = _prologue(op)
   indices = indexMap(op.result.indices)
   body = _iteration(builder, op, indices)
 
   term = op.terms[0]
   value = _operand(body, term, indices, op.result.datatype)
-  _store(body, op, indices, value, factor)
+  _store(body, op, indices, value, factors)
   return region
 
 
@@ -33,13 +33,13 @@ def lowerElementwise(op):
   lacks an index the destination has is read again for every value of it. An
   operand that is passed by value has no coordinates and is named directly.
   """
-  region, builder, factor = _prologue(op)
+  region, builder, factors = _prologue(op)
   indices = indexMap(op.result.indices)
   body = _iteration(builder, op, indices)
 
   args = [_operand(body, term, indices, op.result.datatype) for term in op.terms]
   value = body.add(Arith(op.optype, args, op.result.datatype))
-  _store(body, op, indices, value, factor)
+  _store(body, op, indices, value, factors)
   return region
 
 
@@ -50,7 +50,8 @@ def lowerFusedElementwise(op):
   the nest it is a value of the loop body rather than a buffer. The last step
   writes the destination.
   """
-  region, builder, factor = _prologue(op)
+  region, builder, factors = _prologue(
+    op, [member.step.scalar for member in op.members])
   indices = indexMap(op.result.indices)
   body = _iteration(builder, op, indices)
 
@@ -62,59 +63,74 @@ def lowerFusedElementwise(op):
     args = [produced[source] if source is not None
             else _operand(body, term, indices, member.datatype)
             for term, source in zip(member.terms, member.step.sources)]
-    produced[position] = _step(body, member, args)
+    produced[position] = _step(body, member, args, factors)
     if not last and produced[position] not in args:
       produced[position].name = f'_fused{position}'
       produced[position].materialize = True
 
-  _store(body, op, indices, produced[len(op.members) - 1], factor)
+  _store(body, op, indices, produced[len(op.members) - 1], factors)
   return region
 
 
-def _step(builder, member, args):
-  """What one step of a nest computes."""
+def _step(builder, member, args, factors):
+  """What one step of a nest computes.
+
+  A step either applies an operation to its operands or is a scaling of the
+  one operand it has. Either way it may carry a factor, and the factor applies
+  to what the step computed rather than to its first operand.
+  """
   step = member.step
-  if step.optype is not None:
-    filled = [argument if isinstance(argument, ValueOp)
-              else builder.add(Const(argument, member.datatype))
-              for argument in step.fillTerms(args)]
-    return builder.add(Arith(step.optype, filled, member.datatype))
+  if step.optype is None:
+    return _scale(builder, args[0], factors.get(str(step.scalar)), member.datatype)
 
-  factor = _factor(step.scalar, member.datatype)
-  if factor is not None:
-    builder.add(factor)
-  value = scaled(args[0], factor, member.datatype)
-  if value is not args[0]:
-    builder.add(value)
-  return value
+  filled = [argument if isinstance(argument, ValueOp)
+            else builder.add(Const(argument, member.datatype))
+            for argument in step.fillTerms(args)]
+  value = builder.add(Arith(step.optype, filled, member.datatype))
+  return _scale(builder, value, factors.get(str(step.scalar)), member.datatype)
 
 
-def _prologue(op):
-  """The region, a builder for it, and the factor to scale by.
+def _scale(builder, value, factor, datatype):
+  """`factor * value`, where there is a factor to apply."""
+  scaledValue = scaled(value, factor, datatype)
+  if scaledValue is not value:
+    builder.add(scaledValue)
+  return scaledValue
 
-  Everything the destination is not going to be written over is zeroed first,
-  and a factor that has a name is read into a local of its own scope -- one
-  kernel may well scale two statements by the same name.
+
+def _prologue(op, scalars=()):
+  """The region, a builder for it, and the factors the statement scales by.
+
+  Everything the destination is not going to be written over is zeroed first.
+  The factors are made once, outside the nest, and are found again by the
+  spelling of what they scale by: a factor that has a name is read into a
+  local of its own scope -- one kernel may well scale two statements by the
+  same name, and a nest may well scale two of its steps by it.
   """
   region = Region()
   builder = Builder(region)
-  resultBuffer = Buffer.fromDescription(op.result)
 
   if not op.add:
     # Where an operand is read entry by entry, which entries of the
     # destination are written is not a box, and the whole of it is zeroed.
     box = None if op.unrolled else BoundingBox(
       [op.loopRanges[index] for index in op.result.indices])
-    zero(builder, resultBuffer, box)
+    zero(builder, Buffer.fromDescription(op.result), box)
 
-  factor = _factor(op.alpha, op.result.datatype)
-  if isinstance(factor, Read):
+  factors = {}
+  for alpha in (op.alpha, *scalars):
+    if str(alpha) in factors:
+      continue
+    factor = _factor(alpha, op.result.datatype)
+    if factor is not None:
+      factors[str(alpha)] = factor
+
+  if any(isinstance(factor, Read) for factor in factors.values()):
     scope = builder.add(Scope())
     builder = Builder(scope.region)
+  for factor in factors.values():
     builder.add(factor)
-  elif factor is not None:
-    builder.add(factor)
-  return region, builder, factor
+  return region, builder, factors
 
 
 def _iteration(builder, op, indices):
@@ -139,9 +155,9 @@ def _operand(builder, term, indices, datatype):
   return builder.add(load(buffer, [indices[index] for index in term.indices]))
 
 
-def _store(builder, op, indices, value, factor):
+def _store(builder, op, indices, value, factors):
   """Write the value to the destination, scaled and combined as asked."""
-  accumulate, factor = _accumulation(op.add, factor)
+  accumulate, factor = _accumulation(op.add, factors.get(str(op.alpha)))
   scaledValue = scaled(value, factor, op.result.datatype)
   if scaledValue is not value:
     builder.add(scaledValue)
@@ -153,10 +169,15 @@ def _store(builder, op, indices, value, factor):
 def _factor(alpha, datatype):
   """The scale factor as a value, or None where it does not scale.
 
-  Written in the destination's datatype, which is what keeps an int32 result
-  from being multiplied by a double literal, and what rejects a factor the
-  type cannot hold.
+  A statement that states no factor and one that states a factor of one scale
+  the same way, which is not at all.
+
+  A factor that does scale is written in the destination's datatype, which is
+  what keeps an int32 result from being multiplied by a double literal, and
+  what rejects a factor the type cannot hold.
   """
+  if alpha is None:
+    return None
   if not isinstance(alpha, (int, float)):
     return Read(str(alpha), datatype, name='_alpha')
   if alpha == 1.0:

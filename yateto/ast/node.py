@@ -655,9 +655,10 @@ class FusedElementwise(Op):
       self.reduction = None
 
     @classmethod
-    def fromElementwise(cls, node):
+    def fromElementwise(cls, node, scalar=None):
       return cls(optype=node.optype, termTemplate=node.termTemplate,
-                 nodeTermIndices=node.nodeTermIndices, operands=len(node))
+                 nodeTermIndices=node.nodeTermIndices, operands=len(node),
+                 scalar=scalar)
 
     @classmethod
     def scaling(cls, scalar, add):

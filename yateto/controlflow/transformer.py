@@ -330,7 +330,10 @@ class FindFusedElementwise(object):
             step = FusedElementwise.Step.fromReduction(action.term.node)
             operands = action.term.variableList()
           elif action.isRHSExpression():
-            step = FusedElementwise.Step.fromElementwise(action.term.node)
+            # The last step's factor is the group's: the store applies it, and
+            # applying it here as well would apply it twice.
+            factor = None if k + 1 == len(members) else action.scalar
+            step = FusedElementwise.Step.fromElementwise(action.term.node, factor)
             operands = action.term.variableList()
           else:
             step = FusedElementwise.Step.scaling(action.scalar, action.add)

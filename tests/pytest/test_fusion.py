@@ -147,24 +147,6 @@ class TestStaysCorrect:
         assert 'mean' in body
 
 
-class TestExport:
-    """The pass shapes loops, so it stays out of the graph that is exported."""
-
-    @staticmethod
-    def _cfg(exported):
-        from yateto.ast.cost import BoundingBoxCostEstimator
-        A = Tensor('A', (N, N))
-        B = Tensor('B', (N, N))
-        C = Tensor('C', (N, N))
-        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
-        generator.add('k', C['ij'] <= yf.maximum(yf.sqrt(yf.add(A['ij'], B['ij'])),
-                                                 B['ij']))
-        kernel = generator.kernels()[0]
-        with contextlib.redirect_stdout(io.StringIO()):
-            kernel.prepareUntilUnitTest(generator._arch)
-            kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, False, exported)
-        return kernel.cfg
-
 class TestReductionStep:
     """A reduction walks an axis of its own inside the nest.
 
@@ -179,7 +161,9 @@ class TestReductionStep:
         B = Tensor('B', (N, N))
         C = Tensor('C', (N,))
         body = emit([C['i'] <= yf.sqrt(yf.max(yf.mul(A['ij'], B['ij']), 'j'))])
-        assert steps(body) > 0
+        # the product walks a space of its own; the fold and the square root
+        # reading it walk one together, so the consumer costs no nest
+        assert nests(body) == 2
         assert 'std::max' in body and 'std::sqrt' in body
 
     def test_the_accumulator_starts_at_the_ring_s_neutral_element(self):

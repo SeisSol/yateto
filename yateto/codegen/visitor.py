@@ -629,7 +629,7 @@ class UnitTestGenerator(KernelGenerator):
     """
     seen = {}
     for action in cfg:
-      guard = Guard.coerce(action.condition)
+      guard = action.condition
       if guard.isAlways() or guard.isNever():
         continue
       for var in guard.variables():

@@ -129,7 +129,7 @@ class IndexedTensorDescription(TensorDescription):
     """Whether it may be read from `by` instead, and still be read at all."""
     return self.substituted(when, by).memoryLayout.isCompatible(self.eqspp)
 
-  def substituted(self, when, by, memoryLayout=None):
+  def substituted(self, when, by):
     """Read from `by` where this is the operand being replaced.
 
     What the statement says about the operand stays with the statement: it

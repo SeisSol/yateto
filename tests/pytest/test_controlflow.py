@@ -484,7 +484,7 @@ class TestExpressionWithoutItsNode:
         import numpy as np
         from yateto import aspp
         spp = aspp.general(np.tril(np.ones((4, 4), dtype=bool)))
-        expression = Expression("Elementwise", None, [self._operand("A", "ij")],
+        expression = Expression("Elementwise", [self._operand("A", "ij")],
                                 Indices("ij", (4, 4)), spp)
         assert expression.eqspp is spp
         assert list(expression.indices) == ["i", "j"]
@@ -496,14 +496,14 @@ class TestExpressionWithoutItsNode:
         # index sits between them
         for left, matrices in (("ilk", True), ("ikl", False)):
             operands = [self._operand("A", left), self._operand("B", "kjl")]
-            expression = Expression("LoopOverGEMM", None, operands,
+            expression = Expression("LoopOverGEMM", operands,
                                     Indices("ilj", (4, 4, 4)), None,
                                     groups=groups)
             layouts = [operand.memoryLayout for operand in operands]
             assert expression.mayReadOperands(layouts) is matrices
 
     def test_anything_that_is_not_a_product_asks_nothing(self, arch):
-        expression = Expression("Elementwise", None, [self._operand("A", "ij")],
+        expression = Expression("Elementwise", [self._operand("A", "ij")],
                                 Indices("ij", (4, 4)), None)
         assert expression.mayReadOperands([None])
 
@@ -541,3 +541,11 @@ class TestExpressionWithoutItsNode:
         assert (str(m), str(n), str(k)) == ("i", "j", "k")
         assert expression.transA is False and expression.transB is False
         assert expression.loopIndices is not None
+
+    def test_the_guard_is_a_guard_from_the_start(self, arch):
+        """It is asked for far more often than it is set, so it is made once."""
+        A = Tensor("A", (4, 4))
+        C = Tensor("C", (4, 4))
+        _, cfg = _lower_to_cfg(C["ij"] <= A["ij"], arch)
+        assert all(isinstance(action.condition, Guard) for action in cfg)
+        assert all(action.getGuard() is action.condition for action in cfg)

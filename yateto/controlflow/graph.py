@@ -26,12 +26,11 @@ class Expression(object):
             'loopIndices', 'transA', 'transB', 'sumIndex', 'datatype')
 
   @classmethod
-  def of(cls, node, memoryLayout, variables):
+  def of(cls, node, variables):
     """The statement a node states, over these operands."""
     product = _productGroups(node)
     ask = lambda name: getattr(node, name)() if hasattr(node, name) else None
-    return cls(type(node).__name__, memoryLayout, variables, node.indices,
-               node.eqspp(),
+    return cls(type(node).__name__, variables, node.indices, node.eqspp(),
                groups=product,
                prefetch=node.prefetch,
                optype=getattr(node, 'optype', None),
@@ -43,10 +42,9 @@ class Expression(object):
                sumIndex=ask('sumIndexName'),
                datatype=node.datatype)
 
-  def __init__(self, kind, memoryLayout, variables, indices, eqspp, **facts):
+  def __init__(self, kind, variables, indices, eqspp, **facts):
     #: Which kind of statement it is, which is what decides who writes it.
     self.kind = kind
-    self.memoryLayout = memoryLayout
     self._variables = variables
     #: What the statement computes -- the indices it is stated over and the
     #: entries it has values at.
@@ -84,8 +82,8 @@ class Expression(object):
     return mayFuseGroups(self._variables[0].indices, (m, k), layouts[0]) \
        and mayFuseGroups(self._variables[1].indices, (k, n), layouts[1])
 
-  def substituted(self, when, by, memoryLayout):
-    return Expression(self.kind, memoryLayout,
+  def substituted(self, when, by):
+    return Expression(self.kind,
                       [var.substituted(when, by) for var in self._variables],
                       self.indices, self.eqspp,
                       **{name: getattr(self, name) for name in self._FACTS})
@@ -109,7 +107,9 @@ class ProgramAction(object):
     self.term = term
     self.add = add
     self.scalar = scalar
-    self.condition = condition
+    #: The guard the statement runs under. A guard, not something a guard is
+    #: made of: it is asked for far more often than it is set.
+    self.condition = Guard.coerce(condition)
 
   def isRHSExpression(self):
     return isinstance(self.term, Expression)
@@ -145,7 +145,7 @@ class ProgramAction(object):
     maySubsResult = self.result.maySubstitute(when, by)
 
     rsubs = self.result.substituted(when, by) if result else self.result
-    tsubs = self.term.substituted(when, by, rsubs.memoryLayout) if term else self.term
+    tsubs = self.term.substituted(when, by) if term else self.term
 
     compatible = tsubs.resultCompatible(rsubs)
 
@@ -160,7 +160,7 @@ class ProgramAction(object):
     there would restrict statements that are not themselves conditional.
     """
     rsubs = self.result.substituted(when, by) if result else self.result
-    tsubs = self.term.substituted(when, by, rsubs.memoryLayout) if term else self.term
+    tsubs = self.term.substituted(when, by) if term else self.term
     gsubs = self.condition if guard is None else (self.getGuard() & guard)
     return ProgramAction(rsubs, tsubs, self.add, self.scalar, gsubs)
 
@@ -169,7 +169,7 @@ class ProgramAction(object):
     self.term.setWritable(name)
 
   def getGuard(self):
-    return Guard.coerce(self.condition)
+    return self.condition
 
 
 

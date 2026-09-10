@@ -166,6 +166,26 @@ class TestReductionStep:
         assert nests(body) == 2
         assert 'std::max' in body and 'std::sqrt' in body
 
+    def test_what_a_fold_computes_reaches_its_reader_as_a_value(self):
+        """The fold and the store stand in the body of the nest, so what the
+        store puts there the next statement has in hand already."""
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N,))
+        body = emit([C['i'] <= yf.sqrt(yf.max(yf.mul(A['ij'], B['ij']), 'j'))])
+        assert 'std::sqrt(_acc)' in body
+        # `_tmp0` holds the product; nothing stands between fold and root
+        assert '_tmp1' not in body
+
+    def test_two_folds_in_one_nest_keep_their_accumulators_apart(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N,))
+        D = Tensor('D', (N,))
+        body = emit([C['i'] <= yf.max(A['ij'], 'j'), D['i'] <= yf.min(B['ij'], 'j')])
+        assert nests(body) == 1
+        assert 'double _acc =' in body and 'double _acc1 =' in body
+
     def test_the_accumulator_starts_at_the_ring_s_neutral_element(self):
         A = Tensor('A', (N, N))
         C = Tensor('C', (N,))

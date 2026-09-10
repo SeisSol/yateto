@@ -255,7 +255,13 @@ class Fold(ValueOp):
 
 
 class If(Op):
-  """A region that runs only where a condition holds."""
+  """A region that runs only where a condition holds.
+
+  The condition is the guard itself and not the C++ that tests it. What it is
+  decided on is then still a question that can be asked of the region -- the
+  values a kernel reads to pick a branch are values it is handed, and how the
+  test is spelled is emission's business like every other spelling.
+  """
 
   def __init__(self, condition, region=None):
     self.condition = condition
@@ -265,7 +271,7 @@ class If(Op):
     return (self.region,)
 
   def __repr__(self):
-    return f'If({self.condition})'
+    return f'If({self.condition!r})'
 
 
 class Scope(Op):

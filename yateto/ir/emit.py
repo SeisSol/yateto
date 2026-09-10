@@ -96,7 +96,7 @@ class CppEmitter:
       self._cpp.memset(pointer, op.count, op.buffer.datatype.ctype())
       return
     if isinstance(op, If):
-      with self._cpp.If(op.condition):
+      with self._cpp.If(f'({op.condition.ccode()})'):
         self._emitRegion(op.region, scoped=True)
       return
     if isinstance(op, Scope):

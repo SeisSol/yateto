@@ -27,6 +27,7 @@ from yateto.codegen.copyscaleadd.factory import Description
 from yateto.codegen.copyscaleadd.generic import tensorOp
 from yateto.codegen.lowering import lower
 from yateto.gemm_configuration import GeneratorCollection
+from yateto.guard import Guard
 from yateto.ast.indices import Indices, Range
 from yateto.memory import CSCMemoryLayout, DenseMemoryLayout
 from yateto.type import Datatype
@@ -711,7 +712,8 @@ class TestStatementLowering:
 
     def test_a_guarded_statement_is_lowered_where_it_stands(self):
         loop = ir.Loop([ir.Index('i')], Range(0, N))
-        guarded = ir.If('flag', ir.Region([self._statement(self._Lowers(ir.Region([loop])))]))
+        guarded = ir.If(Guard.always(),
+                        ir.Region([self._statement(self._Lowers(ir.Region([loop])))]))
         region = ir.Region([guarded])
         lower(region, None)
         assert guarded.region.ops == [loop]
@@ -801,7 +803,7 @@ class TestChains:
     def test_a_guarded_statement_is_chained_only_with_its_own_guard(self, fuse):
         """Each guard is a region of its own, so a chain never spans two."""
         backend = self._Chains()
-        guarded = ir.If('flag', ir.Region([self._gemm('T')]))
+        guarded = ir.If(Guard.always(), ir.Region([self._gemm('T')]))
         region = ir.Region([guarded, self._gemm('C', left='T')])
         fuse(region, backend)
         assert len(guarded.region.ops) == 1

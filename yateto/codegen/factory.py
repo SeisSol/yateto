@@ -147,7 +147,7 @@ class KernelFactory(object):
     if guard.isAlways():
       return region
     self._checkGuardIsReadable(guard)
-    return ir.Region([ir.If(f'({guard.ccode()})', region)])
+    return ir.Region([ir.If(guard, region)])
 
   @staticmethod
   def _buffer(term):

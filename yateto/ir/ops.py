@@ -143,6 +143,44 @@ class Loop(Op):
     return f'Loop({", ".join(index.name for index in self.index)})'
 
 
+class Pointer(ValueOp):
+  """Where a buffer starts, for whoever works on part of it.
+
+  An external kernel is handed a pointer and works from there, so the offset
+  is formed once, outside whatever loop moves it. Which axes the offset counts
+  is the caller's to say: the ones the loop moves along.
+  """
+
+  def __init__(self, buffer, coords, axes=None, name=None, const=True):
+    super().__init__(buffer.datatype, name)
+    self.buffer = buffer
+    self.coords = tuple(Affine.of(coord) for coord in coords)
+    self.axes = axes
+    self.const = const
+    self.materialize = True
+
+  def __repr__(self):
+    return f'Pointer({self.buffer.name})'
+
+
+class Call(Op):
+  """A statement someone else writes.
+
+  The IR says where the operands are and leaves the rest to the generator that
+  claimed the statement. What arithmetic that generator performs is its own to
+  report, and it reports it when it writes itself, since which generator takes
+  a statement decides how much work it turns out to be.
+  """
+
+  def __init__(self, generate):
+    self.generate = generate
+    #: What the callee reported, once it has written itself.
+    self.flops = None
+
+  def __repr__(self):
+    return 'Call'
+
+
 class Yield(Op):
   """The value a region hands back to the operation that holds it."""
 

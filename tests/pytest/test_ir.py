@@ -344,6 +344,44 @@ class TestReduction:
         assert ir.countFlops(tensorOp(descr).lower()) == N * N
 
 
+class TestContraction:
+    def test_a_loop_over_products_moves_a_pointer_per_operand(self):
+        A = Tensor('A', (N, N))
+        T = Tensor('T', (N, N, 3))
+        U = Tensor('U', (N, N, 3))
+        body = emit([U['ijl'] <= T['ikl'] * A['kj']])
+        assert f'double const* _A = T + {N * N}*_l;' in body
+        assert 'double const* _B = A;' in body
+        assert f'double * _C = U + {N * N}*_l;' in body
+
+    def test_a_pointer_that_moves_along_nothing_carries_no_offset(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= A['ik'] * B['kj']])
+        assert '_A = A +' not in body
+        assert '+ 0]' not in body.split('=')[0]
+
+    def test_the_flops_of_a_call_come_from_the_callee(self):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        with tempfile.TemporaryDirectory() as out:
+            generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+            generator.add('k', [C['ij'] <= A['ik'] * B['kj']])
+            with contextlib.redirect_stdout(io.StringIO()):
+                generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            header = (pathlib.Path(out) / 'kernel.h').read_text()
+        # the generic product assigns once and multiplies and adds per step
+        assert f'HardwareFlops = {2 * N * N * N}' in header
+
+    def test_a_call_states_no_arithmetic_before_it_is_written(self):
+        from yateto.ir.ops import Call
+        region = ir.Region([Call(lambda cpp, cache: 7)])
+        with pytest.raises(AssertionError, match='after emitting'):
+            ir.countFlops(region)
+
+
 class TestEmission:
     def test_a_copy_carries_no_factor(self):
         A = Tensor('A', (N, N))

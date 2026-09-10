@@ -1,9 +1,19 @@
-from ...ast.indices import Indices
+import copy
+
+from ... import ir
 from ..common import *
 from .. import gemm
 from ...memory import DenseMemoryLayout
 
+
 class Generic(object):
+  """A contraction run as a loop over matrix products.
+
+  The loops and the pointers are stated here; the product itself is a call,
+  because which kernel takes it is the gemm configuration's decision and not
+  this backend's.
+  """
+
   def __init__(self, arch, descr, target, attrs=None):
     self._arch = arch
     self._descr = descr
@@ -11,13 +21,6 @@ class Generic(object):
     # passed on to the gemm generator, which is where a call into an external
     # kernel is emitted and the batch flags have to be named or not
     self._attrs = attrs
-
-  def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True):
-    indices = term.indices & loopIndices
-    addressStr = term.memoryLayout.addressString(term.indices, indices, fixed) if len(indices) > 0 else ''
-    if len(addressStr) > 0:
-      addressStr = ' + ' + addressStr
-    cpp('{} {}* {} = {}{};'.format(term.datatype.ctype(), 'const' if const else '', targetName, baseName, addressStr))
 
   def _alignedStart(self, term, loopIndices, fixed):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices, fixed)
@@ -48,7 +51,73 @@ class Generic(object):
       return  {next(iter(I)): fusedRange}
     return term.memoryLayout.defuse(fusedRange, term.indices, I)
 
-  def _generateSingle(self, cpp, routineCache, gemm_cfg, fixed = {}):
+  def _pointer(self, builder, name, buffer, term, loopIndices, indices, const=True):
+    """A pointer that moves along `loopIndices` and stays put on the rest."""
+    moving = term.indices & loopIndices
+    axes = {position for position, index in enumerate(term.indices)
+            if index in moving}
+    # an axis the pointer stays put on contributes nothing, so what stands in
+    # its coordinate is never read
+    coords = [indices.get(index, 0) for index in term.indices]
+    return builder.add(ir.Pointer(buffer, coords, axes, name=name, const=const))
+
+  def _buffer(self, term, name=None):
+    return ir.Buffer(name if name is not None else term.name, term.datatype,
+                     term.memoryLayout, term.eqspp)
+
+  def _nest(self, builder, loopIndices, ranges, fixed, indices):
+    """The nest over the indices that are not pinned, or None where it is empty.
+
+    A pinned index that misses the range this nest runs over means the nest
+    never runs, and nothing at all is stated for it.
+    """
+    names = [str(index) for index in loopIndices]
+    for name in names:
+      if name in fixed and not (ranges[name].start <= fixed[name] < ranges[name].stop):
+        return None
+    free = [indices[name] for name in names if name not in fixed]
+    if names and not free:
+      # every index of this nest is pinned, so there is no nest and nothing to
+      # separate from what surrounds it
+      return builder
+    return ir.loopNest(builder, free, ranges, simd=False)
+
+  def _lower(self, gemm_cfg):
+    d = self._descr
+
+    unrollNeeded = set()
+    for term in (d.leftTerm, d.rightTerm, d.result):
+      if term.memoryLayout.isSparse():
+        unrollNeeded |= set(term.indices)
+
+    # NOTE: the unrolled indices are nested scopes in the emitted code, so their
+    #       order is part of the output. Filtering the loop ranges keeps that
+    #       order; intersecting a key view with a set hands back a set, which
+    #       enumerates in an order PYTHONHASHSEED varies between runs.
+    toBeUnrolled = [index for index in d.loopRanges if index in unrollNeeded]
+
+    region = ir.Region()
+    self._pin(ir.Builder(region), {}, toBeUnrolled, gemm_cfg)
+    return region
+
+  def _pin(self, builder, fixed, remaining, gemm_cfg):
+    """One instantiation per value of the indices that have to be pinned.
+
+    A sparse operand has an address for a known entry and none for an index, so
+    the indices that reach it are numbers before anything is stated. Each
+    instantiation gets a scope of its own, since each names its own pointers.
+    """
+    if not remaining:
+      self._single(builder, fixed, gemm_cfg)
+      return
+
+    index, rest = remaining[0], remaining[1:]
+    rng = self._descr.loopRanges[index]
+    for value in range(rng.start, rng.stop):
+      scope = builder.add(ir.Scope())
+      self._pin(ir.Builder(scope.region), {**fixed, index: value}, rest, gemm_cfg)
+
+  def _single(self, builder, fixed, gemm_cfg):
     d = self._descr
 
     A = d.leftTerm.indices - d.loopIndices
@@ -59,34 +128,28 @@ class Generic(object):
     Ik = set(A) & set(B)
 
     hasOuterLoops = len(d.outerLoopIndices) > 0
-
     if hasOuterLoops and self._target == 'gpu':
       raise RuntimeError("Loop over GEMM with the outer loop hasn't been implemented yet "
                          "for the GPU-like architectures")
-
-    outerAname = '_A' if hasOuterLoops else d.leftTerm.name
-    outerBname = '_B' if hasOuterLoops else d.rightTerm.name
-    outerCname = '_C' if hasOuterLoops else d.result.name
-    outerPrefetchName = '_Cprefetch' if hasOuterLoops and d.prefetchName is not None else d.prefetchName
-
     hasInnerLoops = len(d.innerLoopIndices) > 0
-    innerAname = '_Ain' if hasInnerLoops else outerAname
-    innerBname = '_Bin' if hasInnerLoops else outerBname
-    innerCname = '_Cin' if hasInnerLoops else outerCname
-    innerPrefetchName = '_Cprefetchin' if hasInnerLoops and outerPrefetchName is not None else outerPrefetchName
 
     AmemLayout = self._memLayout(d.leftTerm, Im, Ik, fixed)
     BmemLayout = self._memLayout(d.rightTerm, Ik, In, fixed)
     CmemLayout = self._memLayout(d.result, Im, In, fixed, isResult=True)
 
-    Aeqspp = self._reduce(d.leftTerm, A, AmemLayout, fixed)
-    Beqspp = self._reduce(d.rightTerm, B, BmemLayout, fixed)
-    Ceqspp = self._reduce(d.result, C, CmemLayout, fixed)
-
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, datatype=d.leftTerm.datatype),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, datatype=d.rightTerm.datatype),
-      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary, datatype=d.result.datatype),
+      leftTerm = TensorDescription('_Ain' if hasInnerLoops else ('_A' if hasOuterLoops else d.leftTerm.name),
+                                   AmemLayout, self._reduce(d.leftTerm, A, AmemLayout, fixed),
+                                   d.leftTerm.is_compute_constant, d.leftTerm.is_temporary,
+                                   datatype=d.leftTerm.datatype),
+      rightTerm = TensorDescription('_Bin' if hasInnerLoops else ('_B' if hasOuterLoops else d.rightTerm.name),
+                                    BmemLayout, self._reduce(d.rightTerm, B, BmemLayout, fixed),
+                                    d.rightTerm.is_compute_constant, d.rightTerm.is_temporary,
+                                    datatype=d.rightTerm.datatype),
+      result = TensorDescription('_Cin' if hasInnerLoops else ('_C' if hasOuterLoops else d.result.name),
+                                 CmemLayout, self._reduce(d.result, C, CmemLayout, fixed),
+                                 d.result.is_compute_constant, d.result.is_temporary,
+                                 datatype=d.result.datatype),
       transA = d.transA,
       transB = d.transB,
       alpha = d.alpha,
@@ -94,84 +157,77 @@ class Generic(object):
       arch = self._arch,
       alignedStartA = self._alignedStart(d.leftTerm, d.outerLoopIndices, fixed) and self._alignedStart(d.leftTerm, d.innerLoopIndices, fixed),
       alignedStartC = self._alignedStart(d.result, d.outerLoopIndices, fixed) and self._alignedStart(d.result, d.innerLoopIndices, fixed),
-      prefetchName = innerPrefetchName
+      prefetchName = None
     )
 
     if not d.add:
       lr = dict()
       m, n, k = gemmDescr.mnk()
       lr.update(d.loopRanges)
-      lr.update( self._defuse(m, d.leftTerm, Im) )
-      lr.update( self._defuse(n, d.rightTerm, In) )
+      lr.update(self._defuse(m, d.leftTerm, Im))
+      lr.update(self._defuse(n, d.rightTerm, In))
       writeBB = boundingBoxFromLoopRanges(d.result.indices, lr)
-      initializeWithZero(cpp, d.result, writeBB)
+      ir.zero(builder, self._buffer(d.result), writeBB)
 
-    class LoGBody(object):
-      def __call__(s):
-        if hasInnerLoops:
-          self._pointer(cpp, innerAname, outerAname, d.leftTerm, d.innerLoopIndices, fixed)
-          self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices, fixed)
-          self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, fixed, const=False)
-          if outerPrefetchName is not None:
-            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices, fixed)
-        generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target,
-                                   self._attrs)
-        return generator.generate(cpp, routineCache)
+    # a pinned index is a number wherever it is read, which is what turns a
+    # sparse operand's address into one
+    indices = {name: ir.Index(name) for name in d.loopRanges}
+    indices.update(fixed)
 
-    class InnerLoopBody(object):
-      def __call__(s):
-        flops = 0
-        if hasOuterLoops:
-          self._pointer(cpp, outerAname, d.leftTerm.name, d.leftTerm, d.outerLoopIndices, fixed)
-          self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices, fixed)
-          self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices, fixed, const=False)
-          if d.prefetchName is not None:
-            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices, fixed)
+    outer = self._nest(builder, d.outerLoopIndices, d.loopRanges, fixed, indices)
+    if outer is None:
+      return
 
-        if d.assignLoopRanges is not None:
-          gemmDescr.setBeta(0.0)
-          flops += forLoops(cpp, d.innerLoopIndices, d.assignLoopRanges, LoGBody(), pragmaSimd=False, fixed=fixed)
-        if d.addLoopRanges is not None:
-          gemmDescr.setBeta(1.0)
-          for addLoopRanges in d.addLoopRanges:
-            flops += forLoops(cpp, d.innerLoopIndices, addLoopRanges, LoGBody(), pragmaSimd=False, fixed=fixed)
-        return flops
+    names = dict(A=d.leftTerm.name, B=d.rightTerm.name, C=d.result.name,
+                 prefetch=d.prefetchName)
+    if hasOuterLoops:
+      self._pointer(outer, '_A', self._buffer(d.leftTerm), d.leftTerm,
+                    d.outerLoopIndices, indices)
+      self._pointer(outer, '_B', self._buffer(d.rightTerm), d.rightTerm,
+                    d.outerLoopIndices, indices)
+      self._pointer(outer, '_C', self._buffer(d.result), d.result,
+                    d.outerLoopIndices, indices, const=False)
+      names.update(A='_A', B='_B', C='_C')
+      if d.prefetchName is not None:
+        self._pointer(outer, '_Cprefetch', self._buffer(d.result, d.prefetchName),
+                      d.result, d.outerLoopIndices, indices)
+        names['prefetch'] = '_Cprefetch'
 
-    return forLoops(cpp, d.outerLoopIndices, d.loopRanges, InnerLoopBody(), pragmaSimd=False, fixed=fixed)
+    if d.assignLoopRanges is not None:
+      self._boxes(outer, [d.assignLoopRanges], 0.0, gemmDescr, names, fixed,
+                  indices, hasInnerLoops, gemm_cfg)
+    if d.addLoopRanges is not None:
+      self._boxes(outer, d.addLoopRanges, 1.0, gemmDescr, names, fixed,
+                  indices, hasInnerLoops, gemm_cfg)
 
-  def _generateUnroll(self, cpp, routineCache, gemm_cfg, fixed, unroll):
+  def _boxes(self, builder, boxes, beta, gemmDescr, names, fixed, indices,
+             hasInnerLoops, gemm_cfg):
     d = self._descr
-
-    if len(unroll) == 0:
-      return self._generateSingle(cpp, routineCache, gemm_cfg, fixed)
-
-    unrollNow = unroll[0]
-
-    rngNow = d.loopRanges[unrollNow]
-
-    result = 0
-    for i in range(rngNow.start, rngNow.stop):
-      fixedNow = dict(fixed)
-      fixedNow[unrollNow] = i
-      result += self._generateUnroll(cpp, routineCache, gemm_cfg, fixedNow, unroll[1:])
-
-    return result
+    for ranges in boxes:
+      inner = self._nest(builder, d.innerLoopIndices, ranges, fixed, indices)
+      if inner is None:
+        continue
+      call = copy.copy(gemmDescr)
+      call.setBeta(beta)
+      if hasInnerLoops:
+        self._pointer(inner, '_Ain', self._buffer(d.leftTerm, names['A']),
+                      d.leftTerm, d.innerLoopIndices, indices)
+        self._pointer(inner, '_Bin', self._buffer(d.rightTerm, names['B']),
+                      d.rightTerm, d.innerLoopIndices, indices)
+        self._pointer(inner, '_Cin', self._buffer(d.result, names['C']),
+                      d.result, d.innerLoopIndices, indices, const=False)
+        if names['prefetch'] is not None:
+          self._pointer(inner, '_Cprefetchin',
+                        self._buffer(d.result, names['prefetch']), d.result,
+                        d.innerLoopIndices, indices)
+          call.prefetchName = '_Cprefetchin'
+      elif names['prefetch'] is not None:
+        call.prefetchName = names['prefetch']
+      generator = gemm.generator(self._arch, call, gemm_cfg, self._target,
+                                 self._attrs)
+      inner.add(ir.Call(generator.generate))
 
   def generate(self, cpp, routineCache, gemm_cfg):
-    d = self._descr
-
-    unrollNeeded = set()
-    if d.leftTerm.memoryLayout.isSparse():
-      unrollNeeded |= set(d.leftTerm.indices)
-    if d.rightTerm.memoryLayout.isSparse():
-      unrollNeeded |= set(d.rightTerm.indices)
-    if d.result.memoryLayout.isSparse():
-      unrollNeeded |= set(d.result.indices)
-
-    # NOTE: the unrolled indices are nested loops in the emitted code, so their
-    #       order is part of the output. Filtering the loop ranges keeps that
-    #       order; intersecting a key view with a set hands back a set, which
-    #       enumerates in an order PYTHONHASHSEED varies between runs.
-    toBeUnrolled = [index for index in d.loopRanges if index in unrollNeeded]
-
-    return self._generateUnroll(cpp, routineCache, gemm_cfg, {}, toBeUnrolled)
+    region = self._lower(gemm_cfg)
+    ir.CppEmitter(cpp, routineCache).emit(region)
+    return ir.countFlops(region)

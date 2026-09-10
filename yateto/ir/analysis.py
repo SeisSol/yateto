@@ -1,5 +1,5 @@
 from .core import Entries
-from .ops import Arith, Fold, Loop, Store
+from .ops import Arith, Call, Fold, Loop, Store
 
 
 def countFlops(region):
@@ -18,6 +18,11 @@ def countFlops(region):
       total += 0 if op.accumulate is None else 1
     elif isinstance(op, Loop):
       total += countFlops(op.region) * _tripCount(op)
+    elif isinstance(op, Call):
+      assert op.flops is not None, \
+        ('a call reports its arithmetic when it writes itself, so count the '
+         'flops of a region after emitting it')
+      total += op.flops
     elif isinstance(op, Fold):
       # one combination per step of the index, on top of whatever the step
       # computed to contribute

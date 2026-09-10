@@ -2,8 +2,12 @@ from ..memory import MemoryLayoutView
 from .affine import Affine
 
 
-def address(memoryLayout, coords):
+def address(memoryLayout, coords, axes=None):
   """The address of an entry, as an affine expression over the loop indices.
+
+  `axes` names the axes to count, for an address that is meant to move along
+  some of them and stay put on the rest -- which is what a pointer handed to a
+  kernel working on a subtensor is.
 
   Two coordinate systems meet here. The coordinates name an entry in the
   logical space the operand is written in; the address is an offset into the
@@ -17,10 +21,17 @@ def address(memoryLayout, coords):
   """
   coords = [Affine.of(coord) for coord in coords]
 
+  if axes is not None and (len(axes) == 0 or memoryLayout.isSparse()):
+    # Nothing moves, so the address is where the buffer starts. The same holds
+    # of a sparse layout however many axes are given: where it is read is
+    # decided entry by entry once the indices are numbers, and until then it
+    # has no expression to move a pointer along.
+    return Affine(0)
+
   if isinstance(memoryLayout, MemoryLayoutView):
     shifted = list(coords)
     shifted[memoryLayout.index] = coords[memoryLayout.index] + memoryLayout.start
-    return address(memoryLayout.base, shifted)
+    return address(memoryLayout.base, shifted, axes)
 
   if memoryLayout.isSparse():
     entry = constantEntry(coords)
@@ -38,6 +49,8 @@ def address(memoryLayout, coords):
   stride = memoryLayout.stride()
   result = Affine(0)
   for position, coord in enumerate(coords):
+    if axes is not None and position not in axes:
+      continue
     result = result + stride[position] * (coord - bbox[position].start)
   return result
 

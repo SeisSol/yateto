@@ -2,8 +2,8 @@ from ..codegen.common import INDEX_PREFIX
 from ..ops import CBinaryOperatorMixin
 from .address import address
 from .core import ValueOp
-from .ops import (Arith, Const, Fold, Load, Loop, Memset, Read, Scope,
-                  Store, Yield)
+from .ops import (Arith, Call, Const, Fold, Load, Loop, Memset, Pointer,
+                  Read, Scope, Store, Yield)
 
 
 class CppEmitter:
@@ -16,8 +16,9 @@ class CppEmitter:
   evaluation of an expression that was meant to be evaluated once.
   """
 
-  def __init__(self, cpp, prefix=INDEX_PREFIX):
+  def __init__(self, cpp, routineCache=None, prefix=INDEX_PREFIX):
     self._cpp = cpp
+    self._routineCache = routineCache
     self._prefix = prefix
     self._names = {}
     self._counter = 0
@@ -55,6 +56,17 @@ class CppEmitter:
   def _emitOp(self, op):
     if isinstance(op, Fold):
       self._emitFold(op)
+      return
+    if isinstance(op, Pointer):
+      name = self._name(op)
+      offset = address(op.buffer.memoryLayout, op.coords, op.axes)
+      start = '' if offset.isConstant() and offset.constant() == 0 \
+              else f' + {offset.ccode(self._prefix)}'
+      const = 'const' if op.const else ''
+      self._cpp(f'{op.datatype.ctype()} {const}* {name} = {op.buffer.name}{start};')
+      return
+    if isinstance(op, Call):
+      op.flops = op.generate(self._cpp, self._routineCache)
       return
     if isinstance(op, Yield):
       # what the region contributes is spelled by whoever holds it

@@ -20,8 +20,8 @@ from .analysis import countFlops
 from .build import indexMap, load, loopNest, scaled, zero
 from .core import Buffer, Builder, Entries, Op, Region, ValueOp
 from .emit import CppEmitter
-from .ops import (Arith, Const, Fold, Load, Loop, Memset, Read, Scope,
-                  Store, Yield)
+from .ops import (Arith, Call, Const, Fold, Load, Loop, Memset, Pointer,
+                  Read, Scope, Store, Yield)
 from .passes import unroll
 from .tensor import (Broadcast, Copy, Elementwise, FusedElementwise,
                      LoopOverGEMM, Reduction, TensorOp, Transpose)

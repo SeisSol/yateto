@@ -42,7 +42,11 @@ def _group(region, position):
   """The run of nests that starts at `position`, and what moves with it.
 
   A zeroing between two nests of the group moves in front of the group, but
-  only where nothing the group has done so far touches what it zeroes.
+  only where nothing the group has done so far touches what it zeroes. One
+  behind the last nest of the group stays behind it.
+
+  Hands back where to carry on, which is behind everything accounted for
+  here. What was looked at and not accounted for is looked at again.
   """
   first = region.ops[position]
   group = [first]
@@ -77,7 +81,9 @@ def _group(region, position):
     index += 1
     end = index
 
-  return group, hoisted, pending if len(group) > 1 else [], end
+  if len(group) == 1:
+    return group, hoisted, [], end
+  return group, hoisted, pending, index
 
 
 def _nest(op):

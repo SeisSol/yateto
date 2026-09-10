@@ -467,6 +467,19 @@ class TestFusion:
         assert isinstance(region.ops[0], ir.Memset)
         assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 1
 
+    def test_a_zeroing_behind_the_group_is_emitted_once(self):
+        """It stays behind the merged nest and is not looked at a second
+        time, which would zero the buffer twice."""
+        index = ir.Index('i')
+        A, B, C = (self._buffer(name) for name in 'ABC')
+        D = self._buffer('D')
+        region = ir.Region([self._loop(index, [(C, A)]),
+                            self._loop(ir.Index('i'), [(C, B)]),
+                            ir.Memset(D, 0, N)])
+        ir.fuseLoops(region)
+        assert len([op for op in region.ops if isinstance(op, ir.Memset)]) == 1
+        assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 1
+
     def test_a_zeroing_of_what_the_group_wrote_ends_the_group(self):
         index = ir.Index('i')
         A, B, C = (self._buffer(name) for name in 'ABC')

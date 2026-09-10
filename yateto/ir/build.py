@@ -79,8 +79,8 @@ def zero(builder, buffer, writeBox=None):
 def loopNest(builder, indices, ranges, simd=True):
   """Nest one loop per index and hand back a builder for the innermost body.
 
-  The last index runs fastest, so it becomes the innermost loop, which is the
-  order the memory layouts are built for. A nest with nothing between its
+  The first index runs fastest, so it becomes the innermost loop: it is the
+  one the memory layouts give a stride of one. A nest with nothing between its
   loops is one iteration space and says so with a `collapse` clause; saying it
   on the innermost loop alone would leave a short loop that is unrolled away
   before the vectoriser sees it.

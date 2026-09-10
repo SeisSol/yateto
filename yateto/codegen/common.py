@@ -79,6 +79,24 @@ class IndexedTensorDescription(TensorDescription):
       addressing = baseNode.tensor.addressing
     return cls(str(var), node.indices, var.memoryLayout, node.eqspp(), is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
 
+  def readFrom(self, source):
+    """The same operand, read from `source`'s storage instead of its own.
+
+    What the statement says about the operand stays: the index tuple it is
+    read over, the entries it has values at, and the type of those entries
+    are the statement's and not the storage's. Everything about where it is
+    read comes from the storage -- the name, the layout, which of the
+    caller's tensors stands behind it, whether the kernel writes it, and
+    whether its values are known before the kernel runs.
+
+    Which is the same split the description is built by, said once instead of
+    once per way of building one.
+    """
+    return IndexedTensorDescription(
+      source.name, self.indices, source.memoryLayout, self.eqspp,
+      source.is_compute_constant, source.is_temporary, source.values,
+      self.datatype, source.addressing, source.tensor, source.writable)
+
   @classmethod
   def fromVar(cls, var, indices):
     datatype = var.datatype

@@ -897,3 +897,50 @@ class TestContractionCompatibility:
         torn = DenseMemoryLayout((N, N, N), stride=(1, N * N, N))
         assert not statement.mayReadOperands(
             [torn, statement.terms[1].memoryLayout])
+
+
+class TestReadFrom:
+    """Substituting an operand is reading it from somewhere else.
+
+    Which is a split, and getting it the wrong way round is the quiet kind of
+    mistake: a description carrying the right name and the wrong pattern
+    compiles and reads outside what the storage keeps.
+    """
+
+    def _operand(self):
+        return description('_tmp0', 'ij', (N, N),
+                           spp=np.tril(np.ones((N, N), dtype=bool)))
+
+    def _storage(self):
+        tensor = Tensor('A', (N, N))
+        return IndexedTensorDescription(
+            'A', Indices('ij', (N, N)), DenseMemoryLayout((N, N)),
+            aspp.general(np.ones((N, N), dtype=bool)), False, False, None,
+            Datatype.F64, None, tensor, True)
+
+    def test_where_it_is_read_comes_from_the_storage(self):
+        storage = self._storage()
+        read = self._operand().readFrom(storage)
+        assert read.name == 'A'
+        assert read.memoryLayout is storage.memoryLayout
+        assert read.tensor is storage.tensor
+        assert read.writable and not read.is_temporary
+
+    def test_what_the_statement_says_stays(self):
+        operand = self._operand()
+        read = operand.readFrom(self._storage())
+        assert list(read.indices) == list(operand.indices)
+        assert read.eqspp is operand.eqspp
+        assert read.datatype == operand.datatype
+
+    def test_the_operand_it_was_is_left_alone(self):
+        operand = self._operand()
+        operand.readFrom(self._storage())
+        assert operand.name == '_tmp0' and operand.is_temporary is False
+
+    def test_reading_a_temporary_from_a_temporary_keeps_it_one(self):
+        source = description('_tmp1', 'ij', (N, N))
+        source.is_temporary = True
+        read = self._operand().readFrom(source)
+        assert read.name == '_tmp1' and read.is_temporary
+        assert read.tensor is None

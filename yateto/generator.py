@@ -72,7 +72,6 @@ class Kernel(object):
     for ast in self.ast:
       ast2cf.visit(ast)
     self.cfg = ast2cf.cfg()
-    self.cfg = LivenessAnalysis().visit(self.cfg)
 
   def prepareUntilCodeGen(self, cost_estimator, exported=frozenset()):
     self.nonZeroFlops = 0
@@ -107,7 +106,6 @@ class Kernel(object):
       ast2cf.visit(ast)
     self.cfg = ast2cf.cfg()
     self.cfg = MergeScalarMultiplications().visit(self.cfg)
-    self.cfg = LivenessAnalysis().visit(self.cfg)
     self.cfg = SubstituteForward().visit(self.cfg)
     self.cfg = SubstituteBackward().visit(self.cfg)
     self.cfg = RemoveEmptyStatements().visit(self.cfg)

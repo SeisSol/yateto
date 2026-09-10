@@ -4,6 +4,7 @@ from .. import ops
 from ..ast.visitor import Visitor
 from ..type import AddressingMode, Tensor, DerivedScalar
 from .graph import *
+from .transformer import liveness
 from ..memory import DenseMemoryLayout
 from ..ast.node import Permute, Node, Broadcast
 
@@ -26,7 +27,7 @@ class AST2ControlFlow(Visitor):
     self._bound = dict()
 
   def cfg(self):
-    return self._cfg + [ProgramPoint(None)]
+    return list(self._cfg)
 
   def _ml(self, node):
     return DenseMemoryLayout(node.shape()) if self._simpleMemoryLayout else node.memoryLayout()
@@ -185,7 +186,7 @@ class AST2ControlFlow(Visitor):
       'IfThenElse is not lowered yet; use yateto.functions.where (Elementwise(Ternary)).')
 
   def _addAction(self, action):
-    self._cfg.append(ProgramPoint(action))
+    self._cfg.append(action)
 
   def _nextTemporary(self, node):
     name = f'{self.TEMPORARY_RESULT}{self._tmp}'
@@ -195,32 +196,28 @@ class AST2ControlFlow(Visitor):
   def updateWritable(self, name):
     self._writable = self._writable | {name}
     # Set variables writable that were added beforehand
-    for pp in self._cfg:
-      if pp.action:
-        pp.action.setVariablesWritable(name)
+    for action in self._cfg:
+      action.setVariablesWritable(name)
 
 class SortedGlobalsList(object):
   def visit(self, cfg):
     V = set()
-    for pp in cfg:
-      if pp.action:
-        V = V | pp.action.result.variables() | pp.action.allVariables()
+    for action in cfg:
+      V = V | action.result.variables() | action.allVariables()
     return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
 
 class SortedPrefetchList(object):
   def visit(self, cfg):
     V = set()
-    for pp in cfg:
-      if pp.action and pp.action.isRHSExpression() and pp.action.term.node.prefetch is not None:
-        V = V | {pp.action.term.node.prefetch}
+    for action in cfg:
+      if action.isRHSExpression() and action.term.node.prefetch is not None:
+        V = V | {action.term.node.prefetch}
     return sorted([v for v in V], key=lambda x: x.name())
 
 def _scalarsOf(cfg):
   S = set()
-  for pp in cfg:
-    if pp.action:
-      scalars = [pp.action.scalar]
-      S = S | {scalar for scalar in scalars if isinstance(scalar, Tensor)}
+  for action in cfg:
+    S = S | {scalar for scalar in [action.scalar] if isinstance(scalar, Tensor)}
   return S
 
 class ScalarsSet(object):
@@ -246,12 +243,11 @@ class PrettyPrinter(object):
     self._printPPState = printPPState
 
   def visit(self, cfg):
-    for pp in cfg:
-      if self._printPPState:
-        if pp.live:
-          print('L =', pp.live)
-      if pp.action:
-        actionRepr = str(pp.action.term)
-        if pp.action.scalar is not None:
-          actionRepr = str(pp.action.scalar) + ' * ' + actionRepr
-        print( '  {} {} {}'.format(pp.action.result, '+=' if pp.action.add else '=', actionRepr) )
+    live = liveness(cfg) if self._printPPState else None
+    for position, action in enumerate(cfg):
+      if live is not None:
+        print('L =', live[position])
+      actionRepr = str(action.term)
+      if action.scalar is not None:
+        actionRepr = str(action.scalar) + ' * ' + actionRepr
+      print( '  {} {} {}'.format(action.result, '+=' if action.add else '=', actionRepr) )

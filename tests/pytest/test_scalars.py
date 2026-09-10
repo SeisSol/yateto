@@ -147,7 +147,7 @@ class TestScalingLowering:
         kernel = Kernel('k', C['ij'] <= 2.0 * A['ij'])
         kernel.prepareUntilUnitTest(arch)
         kernel.prepareUntilCodeGen(BoundingBoxCostEstimator)
-        scalars = [pp.action.scalar for pp in kernel.cfg if pp.action is not None]
+        scalars = [action.scalar for action in kernel.cfg]
         assert 2.0 in scalars
 
     def test_a_scalar_cannot_be_written(self, quantities):

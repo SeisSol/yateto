@@ -246,12 +246,6 @@ class ProgramAction(object):
     return Guard.coerce(self.condition)
 
 
-# TODO: probably should be a subclass of ProgramAction
-class ProgramPoint(object):
-  def __init__(self, action):
-    self.action = action
-    self.live = None
-
 
 class LiveSet:
   """Maps a variable to the guard under which it is live.

@@ -88,15 +88,13 @@ class KernelGenerator(object):
     nothing reading is not declared at all.
     """
     region = ir.Region()
-    for pp in cfg:
-      action = pp.action
-      if action:
-        scalar = self.deduce_scalar(action)
-        if action.isRHSExpression():
-          prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
-          region.extend(factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
-        else:
-          region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
+    for action in cfg:
+      scalar = self.deduce_scalar(action)
+      if action.isRHSExpression():
+        prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
+        region.extend(factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
+      else:
+        region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
 
     factory.chain(region, gemm_cfg)
     lowerStatements(region, gemm_cfg)
@@ -607,10 +605,7 @@ class UnitTestGenerator(KernelGenerator):
     what gets filled, so it is what is enumerated.
     """
     seen = {}
-    for pp in cfg:
-      action = pp.action
-      if action is None:
-        continue
+    for action in cfg:
       guard = Guard.coerce(action.condition)
       if guard.isAlways() or guard.isNever():
         continue

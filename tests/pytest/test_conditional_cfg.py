@@ -9,6 +9,7 @@ from yateto import Tensor
 from yateto.arch import useArchitectureIdentifiedBy
 from yateto.ast.cost import BoundingBoxCostEstimator
 from yateto.controlflow.graph import Guard
+from yateto.controlflow.transformer import liveness
 from yateto.generator import Kernel
 from yateto.type import Datatype
 
@@ -44,7 +45,7 @@ def build(arch, statements):
 
 
 def guards(kernel):
-    return [pp.action.getGuard() for pp in kernel.cfg if pp.action is not None]
+    return [action.getGuard() for action in kernel.cfg]
 
 
 class TestGuardPropagation:
@@ -127,19 +128,20 @@ class TestConditionLiveness:
             t['flag'][''] <= yf.any(yf.greater(t['S']['ij'], t['Y']['ij']), 'ij'),
             yf.assignIf(t['flag'][''], t['o1']['ij'], yf.sqrt(t['S']['ij'])),
         ])
-        guarded = [pp for pp in kernel.cfg
-                   if pp.action is not None and not pp.action.getGuard().isAlways()]
+        live = liveness(kernel.cfg)
+        guarded = [position for position, action in enumerate(kernel.cfg)
+                   if not action.getGuard().isAlways()]
         assert guarded
-        for pp in guarded:
-            assert 'flag' in {str(v) for v in pp.live.variables()}
+        for position in guarded:
+            assert 'flag' in {str(v) for v in live[position].variables()}
 
     def test_a_condition_variable_counts_as_a_use(self, arch, tensors):
         t = tensors
         kernel = build(arch, [
             yf.assignIf(t['flag'][''], t['o1']['ij'], yf.sqrt(t['S']['ij'])),
         ])
-        guarded = [pp.action for pp in kernel.cfg
-                   if pp.action is not None and not pp.action.getGuard().isAlways()]
+        guarded = [action for action in kernel.cfg
+                   if not action.getGuard().isAlways()]
         for action in guarded:
             assert action.guardVariables() <= action.allVariables()
             assert 'flag' in {str(v) for v in action.allVariables()}
@@ -149,11 +151,12 @@ class TestConditionLiveness:
         kernel = build(arch, [
             yf.assignIf(t['flag'][''], t['o1']['ij'], yf.sqrt(t['S']['ij'])),
         ])
-        for pp in kernel.cfg:
-            if pp.action is None or pp.action.getGuard().isAlways():
+        live = liveness(kernel.cfg)
+        for position, action in enumerate(kernel.cfg):
+            if action.getGuard().isAlways():
                 continue
-            for var in pp.action.guardVariables():
-                assert pp.live.guardOf(var).isAlways()
+            for var in action.guardVariables():
+                assert live[position].guardOf(var).isAlways()
 
 
 class TestEmittedCode:

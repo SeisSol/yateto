@@ -108,10 +108,10 @@ class TestKernelPreparation:
         kernel = Kernel("k", C["ij"] <= A["ik"] * B["kj"])
         assert kernel.cfg is None
         kernel.prepareUntilUnitTest(arch)
-        # After prepare, cfg is populated and each ProgramPoint has a
-        # live set (LivenessAnalysis has run).
+        # After prepare, cfg is populated: the statements the kernel is made
+        # of, in the order they run.
         assert kernel.cfg is not None
-        assert all(pp.live is not None for pp in kernel.cfg)
+        assert all(action.result is not None for action in kernel.cfg)
 
     def test_prepareUntilCodeGen_populates_nonzero_flops(self, arch):
         from yateto.ast.cost import BoundingBoxCostEstimator

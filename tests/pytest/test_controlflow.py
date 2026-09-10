@@ -18,7 +18,7 @@ These tests check:
 
 * ``AST2ControlFlow`` really emits a linear CFG and introduces fresh
   temporaries for each intermediate result,
-* ``LivenessAnalysis`` annotates every program point with a correct
+* ``liveness`` answers, for every position in the graph, with a correct
   ``live`` set,
 * ``SubstituteForward`` / ``SubstituteBackward`` eliminate trivial
   copies,
@@ -46,12 +46,11 @@ from yateto.ast.transformer import SelectIndexPermutations
 from yateto.controlflow.graph import (
     Expression,
     ProgramAction,
-    ProgramPoint,
     Variable,
     VariableView,
 )
 from yateto.controlflow.transformer import (
-    LivenessAnalysis,
+    liveness,
     MergeActions,
     MergeScalarMultiplications,
     RemoveEmptyStatements,
@@ -149,12 +148,11 @@ class TestAST2ControlFlow:
         kernel = C["ij"] <= A["ik"] * B["kj"]
         _, cfg = _lower_to_cfg(kernel, arch)
 
-        # Every program point has no branching structure - it's a straight
-        # list (plus a terminating sentinel with ``action=None``).
-        assert all(isinstance(pp, ProgramPoint) for pp in cfg)
-        assert cfg[-1].action is None  # sentinel
+        # No branching structure: the graph is a straight list of the
+        # statements the kernel is made of.
+        assert all(isinstance(action, ProgramAction) for action in cfg)
         # There must be at least one action.
-        assert any(pp.action is not None for pp in cfg)
+        assert len(cfg) > 0
 
     def test_has_action_with_result_and_term(self, arch):
         A = Tensor("A", (8, 8))
@@ -163,7 +161,7 @@ class TestAST2ControlFlow:
         kernel = C["ij"] <= A["ik"] * B["kj"]
         _, cfg = _lower_to_cfg(kernel, arch)
 
-        action = next(pp.action for pp in cfg if pp.action is not None)
+        action = cfg[0]
         assert action.result is not None
         assert action.term is not None
 
@@ -176,43 +174,36 @@ class TestAST2ControlFlow:
         kernel = D["il"] <= A["ij"] * B["jk"] * C["kl"]
         _, cfg = _lower_to_cfg(kernel, arch)
 
-        tmp_results = [pp.action.result.name for pp in cfg
-                       if pp.action is not None
-                       and pp.action.result.name.startswith("_tmp")]
+        tmp_results = [action.result.name for action in cfg
+                       if action.result.name.startswith("_tmp")]
         assert len(tmp_results) == len(set(tmp_results))
 
 
 # ---------------------------------------------------------------------------
-# LivenessAnalysis
+# liveness
 # ---------------------------------------------------------------------------
 
 
-class TestLivenessAnalysis:
-    def test_annotates_every_program_point(self, arch):
+class TestLiveness:
+    def test_there_is_one_answer_per_position_and_one_past_the_end(self, arch):
         A = Tensor("A", (4, 4))
         B = Tensor("B", (4, 4))
         C = Tensor("C", (4, 4))
         kernel = C["ij"] <= A["ik"] * B["kj"]
         _, cfg = _lower_to_cfg(kernel, arch)
 
-        # Before: live sets are None.
-        assert all(pp.live is None for pp in cfg)
-        cfg = LivenessAnalysis().visit(cfg)
-        # After: every program point has a live set (possibly empty).
-        assert all(pp.live is not None for pp in cfg)
+        live = liveness(cfg)
+        assert len(live) == len(cfg) + 1
+        assert all(at is not None for at in live)
 
-    def test_sentinel_has_empty_live_set(self, arch):
+    def test_nothing_is_live_once_the_kernel_is_done(self, arch):
         A = Tensor("A", (4, 4))
         B = Tensor("B", (4, 4))
         C = Tensor("C", (4, 4))
         kernel = C["ij"] <= A["ik"] * B["kj"]
         _, cfg = _lower_to_cfg(kernel, arch)
-        cfg = LivenessAnalysis().visit(cfg)
-        # Past the last action, nothing should be live - otherwise the
-        # kernel would leak.  ``_live_var_names`` works both for plain
-        # Python sets (master) and for the ``LiveSet`` wrapper
-        # (nonlinearity).
-        assert _live_var_names(cfg[-1].live) == set()
+        # Otherwise the kernel would leak.
+        assert _live_var_names(liveness(cfg)[-1]) == set()
 
     def test_inputs_are_live_at_first_use(self, arch):
         # A + B: both tensors must be live at the beginning (they are read
@@ -222,10 +213,8 @@ class TestLivenessAnalysis:
         C = Tensor("C", (4, 4))
         kernel = C["ij"] <= A["ij"] + B["ij"]
         _, cfg = _lower_to_cfg(kernel, arch)
-        cfg = LivenessAnalysis().visit(cfg)
 
-        first = next(pp for pp in cfg if pp.action is not None)
-        live_vars = _live_var_names(first.live)
+        live_vars = _live_var_names(liveness(cfg)[0])
         # At least one of A/B is live at the first action.
         assert "A" in live_vars or "B" in live_vars
 
@@ -243,13 +232,12 @@ class TestCopyPropagation:
         C = Tensor("C", (4, 4))
         kernel = C["ij"] <= A["ij"]
         _, cfg = _lower_to_cfg(kernel, arch)
-        cfg = LivenessAnalysis().visit(cfg)
 
-        before = sum(1 for pp in cfg if pp.action is not None)
+        before = len(cfg)
         cfg = SubstituteForward().visit(cfg)
         cfg = SubstituteBackward().visit(cfg)
         cfg = RemoveEmptyStatements().visit(cfg)
-        after = sum(1 for pp in cfg if pp.action is not None)
+        after = len(cfg)
         # The pipeline must not grow the CFG.  It usually shrinks it.
         assert after <= before
 
@@ -260,13 +248,12 @@ class TestCopyPropagation:
 
 
 class TestMergeActions:
-    def test_returns_cfg_with_liveness(self, arch):
+    def test_merging_does_not_grow_the_graph(self, arch):
         A = Tensor("A", (4, 4))
         B = Tensor("B", (4, 4))
         C = Tensor("C", (4, 4))
         kernel = C["ij"] <= A["ik"] * B["kj"]
         _, cfg = _lower_to_cfg(kernel, arch)
-        cfg = LivenessAnalysis().visit(cfg)
+        before = len(cfg)
         cfg = MergeActions().visit(cfg)
-        # After merging, liveness must still be up to date.
-        assert all(pp.live is not None for pp in cfg)
+        assert len(cfg) <= before

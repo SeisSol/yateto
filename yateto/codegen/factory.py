@@ -33,8 +33,6 @@ class KernelFactory(object):
   def generic_create(self, node, *args):
     raise NotImplementedError
 
-  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
-    raise NotImplementedError
 
   def temporary(self, bufname, size, datatype, iniZero=False, memory=list()):
     """`size` is an element count of `datatype` (bytes when datatype is None)."""
@@ -228,10 +226,9 @@ class OptimizedKernelFactory(KernelFactory):
     return self._csa(result, arguments[0], condition, add, scalar, routineCache,
                      gemm_cfg)
 
-  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
-    result = IndexedTensorDescription.fromVar(result, self._indices(result))
-    term = IndexedTensorDescription.fromVar(term, self._indices(term))
-    return self._csa(result, term, condition, add, scalar, routineCache, gemm_cfg)
+  def create_Copy(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    return self._csa(result, arguments[0], condition, add, scalar, routineCache,
+                     gemm_cfg)
 
   def _csa(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
     description = copyscaleadd.Description(
@@ -377,15 +374,14 @@ class UnitTestFactory(KernelFactory):
 
     return forLoops(self._cpp, indices, ranges, AssignBody(), pragmaSimd=False)
 
-  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
-    g = self._indices(result)
+  def create_Copy(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    g = term.indices
 
     resultTerm = self._formatTerm(result, g)
-    termTerm = self._formatTerm(term, g)
+    termTerm = self._formatTerm(arguments[0], g)
 
     return self._conditional(condition, self._statement(
-      IndexedTensorDescription.fromVar(result, g),
-      [IndexedTensorDescription.fromVar(term, self._indices(term))], add, scalar,
+      result, [arguments[0]], add, scalar,
       lambda: self._simpleBody(resultTerm, termTerm, add, scalar, g)))
 
   def compare(self, ref, target, epsMult = 100.0):
@@ -928,10 +924,8 @@ class ExportFactory(KernelFactory):
       [IndexedTensorDescription.fromVar(arguments[0], arguments[0].indices)],
       condition, add, scalar)
 
-  def simple(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
-    return self.handleLinear(IndexedTensorDescription.fromVar(result, self._indices(result)),
-                             [IndexedTensorDescription.fromVar(term, self._indices(term))],
-                             condition, add, scalar)
+  def create_Copy(self, term, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    return self.handleLinear(result, [arguments[0]], condition, add, scalar)
 
   @staticmethod
   def _statement(result, terms, add, scalar):

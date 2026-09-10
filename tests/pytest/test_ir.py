@@ -255,7 +255,7 @@ class TestElementwise:
         body = emit([C['ij'] <= (A['ij'] + B['ij']) * D['ij']])
         assert body.count('#pragma omp simd') == 1
         assert '_tmp' not in body
-        assert f'A[1*_a + {N}*_b] + B[1*_a + {N}*_b]' in body
+        assert f'A[1*_i + {N}*_j] + B[1*_i + {N}*_j]' in body
 
     def test_a_longer_sum_stays_in_the_nest_too(self):
         A = Tensor('A', (N, N))
@@ -277,7 +277,7 @@ class TestElementwise:
         C = Tensor('C', (N, N))
         body = emit([C['ij'] <= A['ij'] + B['ij'] + D['ij']])
         assert body.count('#pragma omp simd') == 1
-        assert body.count('C[1*_a + 4*_b]') == 3
+        assert body.count('C[1*_i + 4*_j]') == 3
 
     def test_a_sparse_operand_reads_a_zero_where_it_has_no_entry(self):
         left = np.zeros((N, N), dtype=bool)
@@ -549,7 +549,7 @@ class TestEmission:
         C = Tensor('C', (N, N))
         body = emit([C['ij'] <= A['ij']])
         assert '1.0 *' not in body
-        assert 'C[1*_a + 4*_b] = A[1*_a + 4*_b];' in body
+        assert 'C[1*_i + 4*_j] = A[1*_i + 4*_j];' in body
 
     def test_a_factor_is_written_in_the_result_datatype(self):
         A = Tensor('A', (N, N))

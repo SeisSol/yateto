@@ -99,11 +99,14 @@ class KernelGenerator(object):
     decides how much storage the kernel needs: a buffer the passes leave
     nothing reading is not declared at all.
     """
+    statements = ir.dump(region) if self.trace else None
     factory.chain(region, gemm_cfg)
     lowerStatements(region, gemm_cfg)
     if factory.optimizes():
       ir.fuseLoops(region)
       ir.scalarize(region)
+    if self.trace:
+      self._writeTrace(cpp, statements, ir.dump(region))
     datatypes = {name: buffer.datatype
                  for name, buffer in ir.buffers(region).items()}
 
@@ -126,6 +129,29 @@ class KernelGenerator(object):
 
     ir.CppEmitter(cpp, routineCache).emit(region)
     return ir.countFlops(region), required_tmp_mem
+
+  #: Whether to write down what a kernel is made of, beside what it is
+  #: written from. Off unless asked for: it is there to be read while
+  #: following something through, and it is several times the size of the code
+  #: it describes.
+  trace = False
+
+  @staticmethod
+  def _writeTrace(cpp, statements, lowered):
+    """Write down what the kernel is made of, beside what it is written from.
+
+    A generated kernel says what it does and not what it came from, and the
+    two are several passes apart: a statement stated over tensors becomes
+    loops, loops standing next to each other are fused, what one of them
+    computes is read back rather than stored. Both are put here so a line of
+    the code below can be traced to the statement it came from.
+    """
+    for what, lines in (('statements', statements), ('lowered to', lowered)):
+      if not lines:
+        continue
+      cpp(f'// {what}:')
+      for line in lines:
+        cpp(f'//   {line}')
 
   def generate(self, cpp, cfg, factory, routineCache, gemm_cfg):
     region = self.build(cfg, factory, routineCache, gemm_cfg)

@@ -980,3 +980,57 @@ class TestOperandsAreHandedOver:
         action = next(a for a in cfg if not a.isCopy())
         assert statement.result is action.result
         assert statement.terms == action.operands
+
+
+class TestTrace:
+    """What a kernel is made of, written down beside what it is written from.
+
+    Off unless asked for: it is several times the size of the code it
+    describes, and everything that reads a generated body would have to
+    reckon with it.
+    """
+
+    @staticmethod
+    def _source(statements, trace):
+        import tempfile, pathlib as pl
+        from yateto import Generator
+        from yateto.gemm_configuration import GeneratorCollection
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        generator.add('k', statements)
+        with tempfile.TemporaryDirectory() as out:
+            with contextlib.redirect_stdout(io.StringIO()):
+                generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                                   trace=trace)
+            return (pl.Path(out) / 'kernel.cpp').read_text()
+
+    def test_nothing_is_written_down_unless_it_is_asked_for(self):
+        A, C = (Tensor(name, (N, N)) for name in 'AC')
+        assert '// statements:' not in self._source([C['ij'] <= A['ij']], False)
+
+    def test_the_statements_are_written_down(self):
+        A, B, C = (Tensor(name, (N, N)) for name in 'ABC')
+        source = self._source([C['ij'] <= A['ik'] * B['kj']], True)
+        assert '// statements:' in source
+        assert 'LoopOverGEMM(A, B)' in source
+
+    def test_what_they_were_lowered_to_is_written_down(self):
+        A, B, C = (Tensor(name, (N, N)) for name in 'ABC')
+        source = self._source([C['ij'] <= A['ij'] + B['ij']], True)
+        assert '// lowered to:' in source
+        assert 'loop ' in source and '= load A[' in source
+
+    def test_a_value_is_defined_above_every_use_of_it(self):
+        """Which is what makes a use point backwards at a line."""
+        import re
+        A, B, C = (Tensor(name, (N, N)) for name in 'ABC')
+        source = self._source([C['ij'] <= A['ij'] + B['ij']], True)
+        lowered = source[source.index('// lowered to:'):]
+        lowered = lowered[:lowered.index('\n', lowered.rindex('//   '))]
+        defined = set()
+        for line in lowered.splitlines():
+            used = re.findall(r'%\d+', line)
+            if '=' in line and line.split('=')[0].strip().endswith(tuple('0123456789')):
+                assert set(used[1:]) <= defined
+                defined.add(used[0])
+            else:
+                assert set(used) <= defined

@@ -18,6 +18,7 @@ from .address import address, constantEntry, entry, storesValue
 from .affine import Affine, Index
 from .analysis import countFlops
 from .build import indexMap, load, loopNest, scaleFactor, scaled, zero
+from .dump import dump
 from .core import Buffer, Builder, Entries, Op, Region, ValueOp
 from .emit import INDEX_PREFIX, CppEmitter
 from .fusion import fuseLoops

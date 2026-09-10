@@ -367,7 +367,8 @@ class Generator(object):
                cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set(),
                routine_cache=None,
-               routine_exporters={}
+               routine_exporters={},
+               trace=False
                ):
 
     if not gemm_cfg:
@@ -431,6 +432,7 @@ class Generator(object):
     else:
       cache = routine_cache.cache
     optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters)
+    optKernelGenerator.trace = trace
 
     kernelSource = StringIO()
     kernelSourceContent = ''

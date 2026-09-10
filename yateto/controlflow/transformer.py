@@ -51,6 +51,48 @@ def liveness(cfg):
     live[i] = at
   return live
 
+def maySubstitute(statement, when, by, result=True, term=True):
+  """Whether `when` may be read from `by` in this statement.
+
+  Rewriting a statement is the business of whoever rewrites it, and so is
+  asking whether it may be: what comes out has to be a statement that stands
+  up, and that is what is asked, of what would come out.
+  """
+  operands = [operand.substituted(when, by) for operand in statement.operands]
+  layouts = [operand.memoryLayout for operand in operands]
+  readable = all(layouts[i].isCompatible(operand.eqspp)
+                 for i, operand in enumerate(statement.operands)) \
+             and statement.mayReadOperands(layouts)
+  writable = statement.result.maySubstitute(when, by)
+
+  rsubs = statement.result.substituted(when, by) if result else statement.result
+
+  # asked of the statement as it stands: what decides whether its value fits a
+  # destination -- the indices it is stated over and the entries it has values
+  # at -- is not what a substitution changes
+  return (not term or readable) and (not result or writable) \
+     and statement.resultCompatible(rsubs)
+
+
+def substituted(statement, when, by, guard=None, result=True, term=True):
+  """The statement with `when` read from `by`.
+
+  `guard` is passed only when the substitution redirects the statement's
+  *write target* onto a variable another statement writes under that guard;
+  the statement then inherits it. A read substitution leaves the guard alone --
+  conjoining there would restrict statements that are not themselves
+  conditional.
+  """
+  rsubs = statement.result.substituted(when, by) if result else statement.result
+  operands = [operand.substituted(when, by) for operand in statement.operands] \
+             if term else statement.operands
+  gsubs = statement.condition if guard is None else (statement.getGuard() & guard)
+  return ProgramAction(statement.kind, rsubs, operands, statement.indices,
+                       statement.eqspp, statement.add, statement.scalar, gsubs,
+                       **{name: getattr(statement, name)
+                          for name in ProgramAction._FACTS})
+
+
 def _dropIfEmptied(cfg, position):
   """Drop the statement a substitution has just left saying nothing.
 
@@ -92,12 +134,12 @@ class SubstituteForward(GraphPass):
 
         when = ua.result
         by = ua.copied()
-        maySubs = all([cfg[j].maySubstitute(when, by) for j in range(i, n)]) \
+        maySubs = all([maySubstitute(cfg[j], when, by) for j in range(i, n)]) \
                   and _guardsCompatible(cfg, range(i, n), ua.getGuard())
         if maySubs:
           for j in range(i, n):
             # a read substitution; the downstream guards stay as they are
-            cfg[j] = cfg[j].substituted(when, by)
+            cfg[j] = substituted(cfg[j], when, by)
           self.rewrites += 1
           if _dropIfEmptied(cfg, i):
             # what stands here now is the next statement, not the one after it
@@ -124,15 +166,15 @@ class SubstituteBackward(GraphPass):
             break
         if found >= 0:
           when = cfg[found].result
-          maySubs = cfg[found].maySubstitute(when, by, term=False) \
-                    and all([cfg[j].maySubstitute(when, by) for j in range(found+1,i+1)]) \
+          maySubs = maySubstitute(cfg[found], when, by, term=False) \
+                    and all([maySubstitute(cfg[j], when, by) for j in range(found+1,i+1)]) \
                     and _guardsCompatible(cfg, range(found, i+1), va.getGuard())
           if maySubs:
             # only the producing action changes its write target and hence
             # inherits va's guard; the remaining ones merely read `by`
-            cfg[found] = cfg[found].substituted(when, by, va.getGuard(), term=False)
+            cfg[found] = substituted(cfg[found], when, by, va.getGuard(), term=False)
             for j in range(found+1,i+1):
-              cfg[j] = cfg[j].substituted(when, by)
+              cfg[j] = substituted(cfg[j], when, by)
             self.rewrites += 1
             _dropIfEmptied(cfg, i)
             live = liveness(cfg)
@@ -162,9 +204,9 @@ class MergeActions(GraphPass):
             V = V | va.allVariables() | {va.result}
         if found >= 0:
           va = cfg[found]
-          if ua.maySubstitute(ua.result, va.result, term=False):
+          if maySubstitute(ua, ua.result, va.result, term=False):
             # this action's write target becomes va's, so it inherits va's guard
-            cfg[i] = ua.substituted(ua.result, va.result, va.getGuard(), term=False)
+            cfg[i] = substituted(ua, ua.result, va.result, va.getGuard(), term=False)
             cfg[i].add = va.add
             if not va.hasTrivialScalar():
               cfg[i].scalar = va.scalar

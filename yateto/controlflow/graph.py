@@ -134,38 +134,21 @@ class ProgramAction(object):
       self.indices, (self.groups[0], self.groups[1]), result.memoryLayout)
     return c1 and c2
 
-  def maySubstitute(self, when, by, result = True, term = True):
-    operands = [var.substituted(when, by) for var in self.operands]
-    layouts = [operand.memoryLayout for operand in operands]
-    maySubsTerm = all(layouts[i].isCompatible(var.eqspp)
-                      for i, var in enumerate(self.operands)) \
-                  and self.mayReadOperands(layouts)
-    maySubsResult = self.result.maySubstitute(when, by)
+  def standsUp(self):
+    """Whether this is a statement that can still be generated.
 
-    rsubs = self.result.substituted(when, by) if result else self.result
-
-    # asked of the statement as it stands: what decides whether its value fits
-    # a destination -- the indices it is stated over and the entries it has
-    # values at -- is not what a substitution changes
-    compatible = self.resultCompatible(rsubs)
-
-    return (not term or maySubsTerm) and (not result or maySubsResult) and compatible
-
-  def substituted(self, when, by, guard=None, result = True, term = True):
-    """Replace `when` by `by`.
-
-    `guard` is passed only when the substitution redirects this action's *write
-    target* onto a variable another action writes under that guard; the action
-    then inherits it. A read substitution leaves the guard alone -- conjoining
-    there would restrict statements that are not themselves conditional.
+    Three things: every operand is read from storage keeping the entries it
+    has values at, the operands of a product can still be read as matrices,
+    and what the statement computes fits the destination it is written to.
+    The same three a rewrite has to leave true, asked of the statement as it
+    stands.
     """
-    rsubs = self.result.substituted(when, by) if result else self.result
-    operands = [var.substituted(when, by) for var in self.operands] \
-               if term else self.operands
-    gsubs = self.condition if guard is None else (self.getGuard() & guard)
-    return ProgramAction(self.kind, rsubs, operands, self.indices, self.eqspp,
-                         self.add, self.scalar, gsubs,
-                         **{name: getattr(self, name) for name in self._FACTS})
+    layouts = [operand.memoryLayout for operand in self.operands]
+    return all(layout.isCompatible(operand.eqspp)
+               for layout, operand in zip(layouts, self.operands)) \
+       and self.mayReadOperands(layouts) \
+       and self.result.memoryLayout.isCompatible(self.result.eqspp) \
+       and self.resultCompatible(self.result)
 
   def rhs(self):
     """What is read, as it would be written down."""

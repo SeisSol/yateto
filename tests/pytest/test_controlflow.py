@@ -51,6 +51,7 @@ from yateto.ast.indices import Indices
 from yateto.description import IndexedTensorDescription as Operand
 from yateto.controlflow.transformer import (
     liveness,
+    substituted,
     MergeActions,
     MergeScalarMultiplications,
     SubstituteBackward,
@@ -569,7 +570,7 @@ class TestStatementWithoutItsNode:
         source = Operand("A", None, ml, None, tensor=Tensor("A", (4, 4)))
         other = Operand("B", None, ml, None, tensor=Tensor("B", (4, 4)))
         action = ProgramAction.copy(Operand("C", None, ml, None), source, add=False)
-        assert action.substituted(source, other).copied().name == "B"
+        assert substituted(action, source, other).copied().name == "B"
 
     def test_whether_a_value_fits_a_destination_survives_substitution(self, arch):
         """Which is why the statement is asked as it stands: what decides it --
@@ -587,5 +588,25 @@ class TestStatementWithoutItsNode:
         destination = Operand("C", Indices("ij", (4, 4)), ml, spp,
                               tensor=Tensor("C", (4, 4)), writable=True)
         statement = ProgramAction.copy(destination, source, add=False)
-        assert statement.substituted(source, other).resultCompatible(destination) \
+        assert substituted(statement, source, other).resultCompatible(destination) \
             == statement.resultCompatible(destination)
+
+    def test_a_statement_says_whether_it_stands_up(self, arch):
+        """Without being handed a substitution that replaces nothing."""
+        from yateto.memory import DenseMemoryLayout
+        import numpy as np
+        from yateto import aspp
+        ml = DenseMemoryLayout((4, 4))
+        spp = aspp.general(np.ones((4, 4), dtype=bool))
+        source = Operand("A", Indices("ij", (4, 4)), ml, spp,
+                         tensor=Tensor("A", (4, 4)))
+        wide = Operand("C", Indices("ij", (4, 4)), ml, spp,
+                       tensor=Tensor("C", (4, 4)), writable=True)
+        assert ProgramAction.copy(wide, source, add=False).standsUp()
+
+        narrow = np.zeros((4, 4), dtype=bool)
+        narrow[:2, :2] = True
+        tight = Operand("C", Indices("ij", (4, 4)),
+                        DenseMemoryLayout.fromSpp(aspp.general(narrow)), spp,
+                        tensor=Tensor("C", (4, 4)), writable=True)
+        assert not ProgramAction.copy(tight, source, add=False).standsUp()

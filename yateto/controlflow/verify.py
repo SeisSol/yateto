@@ -14,13 +14,6 @@ reason about the easy way.
 
 import collections
 
-from ..description import IndexedTensorDescription
-
-#: A substitution that replaces nothing: no variable is named this, so asking
-#: whether it may be made reduces to asking whether the statement stands up as
-#: it is.
-_NOTHING = IndexedTensorDescription('', None, None, None)
-
 
 def verify(cfg):
   """The findings, or an empty list where the graph is as it is taken to be."""
@@ -33,15 +26,14 @@ def _generatable(cfg):
   Three things are asked before a rewrite is made: that every operand is read
   from storage keeping the entries it has values at, that the destination
   keeps the entries the statement writes, and that a contraction's operands
-  are still matrices. They are asked here of what came out of the rewrite,
-  and by the same rule -- a substitution that replaces nothing reduces
-  `maySubstitute` to exactly those three. So a rewrite that should not have
-  been made is caught by the rule that was meant to forbid it, rather than by
-  the numbers being wrong somewhere else.
+  are still matrices. They are asked here of what came out of the rewrite, by
+  the statement itself -- so a rewrite that should not have been made is
+  caught by the rule that was meant to forbid it, rather than by the numbers
+  being wrong somewhere else.
   """
   return [f'the statement at {position} does not stand up as it is'
           for position, action in enumerate(cfg)
-          if not action.maySubstitute(_NOTHING, _NOTHING)]
+          if not action.standsUp()]
 
 
 def _definitions(cfg):

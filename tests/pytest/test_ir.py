@@ -1,0 +1,247 @@
+"""
+Tests for the intermediate representation and for the copy-scale-add backend,
+which is generated from it.
+
+Two things are worth pinning down. The first is that an address is an affine
+expression and behaves like one: pinning an index to a value has to fold it
+away, or the unrolled path has no addresses at all. The second is what comes
+out the other end, since the backend's whole job is the C++ it writes.
+"""
+from __future__ import annotations
+
+import contextlib
+import io
+import pathlib
+import tempfile
+
+import numpy as np
+import pytest
+
+from yateto import Generator, Scalar, Tensor, useArchitectureIdentifiedBy
+from yateto import aspp, ir
+from yateto.ast.indices import Indices
+from yateto.codegen.code import Cpp
+from yateto.codegen.common import IndexedTensorDescription
+from yateto.codegen.copyscaleadd.factory import Description
+from yateto.codegen.copyscaleadd.generic import tensorOp
+from yateto.gemm_configuration import GeneratorCollection
+from yateto.memory import CSCMemoryLayout, DenseMemoryLayout
+from yateto.type import Datatype
+
+N = 4
+
+
+def emit(statements, name='k'):
+    """The generated kernel body for one kernel made of `statements`."""
+    generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+    generator.add(name, statements)
+    with tempfile.TemporaryDirectory() as out:
+        with contextlib.redirect_stdout(io.StringIO()):
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+        code = (pathlib.Path(out) / 'kernel.cpp').read_text()
+    body = code[code.index(f'{name}::execute'):]
+    return body[:body.index('\n  }\n')]
+
+
+def description(name, indices, shape, layout=None, datatype=Datatype.F64, spp=None):
+    pattern = aspp.general(np.ones(shape, dtype=bool) if spp is None else spp)
+    return IndexedTensorDescription(
+        name, Indices(indices, shape),
+        layout if layout is not None else DenseMemoryLayout(shape),
+        pattern, datatype=datatype)
+
+
+def lowered(alpha, beta, result, term):
+    """The region a copy-scale-add becomes, after unrolling."""
+    descr = Description(alpha=alpha, beta=beta, result=result, term=term)
+    return ir.unroll(tensorOp(descr).lower())
+
+
+def code(region):
+    out = io.StringIO()
+    with Cpp(out) as cpp:
+        ir.CppEmitter(cpp).emit(region)
+        return out.getvalue()
+
+
+class TestAffine:
+    def test_terms_over_the_same_index_are_added_up(self):
+        i = ir.Index('i')
+        expression = 2 * ir.Affine.of(i) + 3 * ir.Affine.of(i)
+        assert expression.coefficient(i) == 5
+        assert expression.ccode() == '5*_i'
+
+    def test_a_coefficient_that_cancels_leaves_no_term(self):
+        i = ir.Index('i')
+        expression = ir.Affine.of(i) - ir.Affine.of(i)
+        assert expression.isConstant()
+        assert expression.constant() == 0
+
+    def test_pinning_an_index_folds_it_into_the_constant(self):
+        i, j = ir.Index('i'), ir.Index('j')
+        expression = 1 * ir.Affine.of(i) + 8 * ir.Affine.of(j) + 3
+        assert not expression.isConstant()
+        pinned = expression.substituted({i: 2, j: 1})
+        assert pinned.isConstant()
+        assert pinned.constant() == 13
+
+    def test_a_negative_constant_is_written_as_a_subtraction(self):
+        i = ir.Index('i')
+        assert (ir.Affine.of(i) - 3).ccode() == '1*_i - 3'
+
+
+class TestAddress:
+    def test_a_dense_layout_addresses_by_stride(self):
+        layout = DenseMemoryLayout((4, 6))
+        i, j = ir.Index('i'), ir.Index('j')
+        assert ir.address(layout, [i, j]).ccode() == '1*_i + 4*_j'
+
+    def test_a_bounding_box_shifts_the_address(self):
+        spp = np.zeros((4, 6), dtype=bool)
+        spp[1:3, 2:4] = True
+        layout = DenseMemoryLayout.fromSpp(aspp.general(spp))
+        i, j = ir.Index('i'), ir.Index('j')
+        pinned = ir.address(layout, [ir.Affine(1), ir.Affine(2)])
+        assert pinned.isConstant()
+        assert pinned.constant() == layout.address((1, 2))
+        assert not ir.address(layout, [i, j]).isConstant()
+
+    def test_a_sparse_layout_has_no_address_for_an_index(self):
+        spp = np.eye(4, dtype=bool)
+        layout = CSCMemoryLayout(aspp.general(spp))
+        assert ir.address(layout, [ir.Affine(2), ir.Affine(2)]).isConstant()
+        with pytest.raises(ValueError, match='Unroll'):
+            ir.address(layout, [ir.Index('i'), ir.Index('j')])
+
+
+class TestLowering:
+    def test_a_dense_copy_becomes_one_loop_per_index(self):
+        result = description('C', 'ij', (N, N))
+        term = description('A', 'ij', (N, N))
+        region = lowered(1.0, 0.0, result, term)
+        loops = [op for op in region.walk() if isinstance(op, ir.Loop)]
+        assert len(loops) == 2
+        assert [op for op in region.walk() if isinstance(op, ir.Store)]
+
+    def test_a_sparse_operand_states_its_entries_and_is_unrolled(self):
+        spp = np.eye(N, dtype=bool)
+        result = description('C', 'ij', (N, N))
+        term = description('S', 'ij', (N, N),
+                           layout=CSCMemoryLayout(aspp.general(spp)), spp=spp)
+        descr = Description(alpha=1.0, beta=0.0, result=result, term=term)
+        region = tensorOp(descr).lower()
+
+        entryLoops = [op for op in region.walk()
+                      if isinstance(op, ir.Loop) and op.isUnrollable()]
+        assert len(entryLoops) == 1
+
+        ir.unroll(region)
+        assert not [op for op in region.walk() if isinstance(op, ir.Loop)]
+        stores = [op for op in region.walk() if isinstance(op, ir.Store)]
+        assert len(stores) == int(result.eqspp.count_nonzero())
+        assert all(coord.isConstant() for store in stores for coord in store.coords)
+
+    def test_an_entry_the_operand_does_not_store_becomes_a_zero(self):
+        spp = np.eye(N, dtype=bool)
+        result = description('C', 'ij', (N, N))
+        term = description('S', 'ij', (N, N),
+                           layout=CSCMemoryLayout(aspp.general(spp)), spp=spp)
+        region = lowered(1.0, 0.0, result, term)
+
+        loads = [op for op in region.walk() if isinstance(op, ir.Load)]
+        assert len(loads) == int(spp.sum())
+        # the entries off the diagonal are written, but nothing is read for them
+        assert code(region).count('S[') == int(spp.sum())
+        assert code(region).count('= 0.0;') == N * N - int(spp.sum())
+
+
+class TestFlops:
+    def test_a_plain_copy_does_no_arithmetic(self):
+        result = description('C', 'ij', (N, N))
+        term = description('A', 'ij', (N, N))
+        assert ir.countFlops(lowered(1.0, 0.0, result, term)) == 0
+
+    def test_a_factor_is_one_operation_per_entry(self):
+        result = description('C', 'ij', (N, N))
+        term = description('A', 'ij', (N, N))
+        assert ir.countFlops(lowered(2.0, 0.0, result, term)) == N * N
+
+    def test_an_accumulation_is_one_operation_per_entry(self):
+        result = description('C', 'ij', (N, N))
+        term = description('A', 'ij', (N, N))
+        assert ir.countFlops(lowered(1.0, 1.0, result, term)) == N * N
+
+    def test_a_subtraction_is_one_operation_and_not_two(self):
+        result = description('C', 'ij', (N, N))
+        term = description('A', 'ij', (N, N))
+        assert ir.countFlops(lowered(-1.0, 1.0, result, term)) == N * N
+
+
+class TestEmission:
+    def test_a_copy_carries_no_factor(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= A['ij']])
+        assert '1.0 *' not in body
+        assert 'C[1*_a + 4*_b] = A[1*_a + 4*_b];' in body
+
+    def test_a_factor_is_written_in_the_result_datatype(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        assert '2.5 * A[' in emit([C['ij'] <= 2.5 * A['ij']])
+
+    def test_a_named_factor_is_read_once_into_a_local(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        s = Scalar('s')
+        body = emit([C['ij'] <= s * A['ij']])
+        assert 'double const _alpha = s;' in body
+        assert body.count('_alpha * A[') == 1
+
+    def test_accumulating_a_negated_operand_is_a_subtraction(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= C['ij'] - A['ij']])
+        assert '-= A[' in body
+        assert '-1.0' not in body
+
+    def test_a_transposed_operand_addresses_the_other_order(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        assert 'C[1*_i + 4*_j] = A[1*_j + 4*_i];' in emit([C['ij'] <= A['ji']])
+
+    def test_a_broadcast_operand_does_not_address_the_missing_index(self):
+        v = Tensor('v', (N,))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= v['i']])
+        assert 'v[1*_i]' in body
+        assert 'v[1*_i +' not in body
+
+    def test_a_destination_without_axes_is_zeroed_whole(self):
+        a = Tensor('a', ())
+        b = Tensor('b', ())
+        body = emit([a[''] <= b['']])
+        assert 'memset(a, 0, 1 * sizeof(double));' in body
+        assert 'a[0] = b[0];' in body
+
+    def test_a_nest_is_one_iteration_space(self):
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= A['ij']])
+        assert body.count('#pragma omp simd') == 1
+        assert '#pragma omp simd collapse(2)' in body
+
+    def test_a_single_loop_asks_for_no_collapse(self):
+        u = Tensor('u', (N,))
+        v = Tensor('v', (N,))
+        body = emit([u['i'] <= v['i']])
+        assert '#pragma omp simd\n' in body
+        assert 'collapse' not in body
+
+    def test_a_sparse_operand_is_addressed_by_number(self):
+        spp = np.eye(N, dtype=bool)
+        S = Tensor('S', (N, N), spp=spp, memoryLayoutClass=CSCMemoryLayout)
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= S['ij']])
+        assert 'for (' not in body
+        assert 'C[0] = S[0];' in body

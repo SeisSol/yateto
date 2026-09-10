@@ -859,3 +859,41 @@ class TestReferenceStatements:
                    for operand in signature.globals(region)}
         assert not any(isinstance(layout, MemoryLayoutView)
                        for layout in layouts.values())
+
+
+class TestContractionCompatibility:
+    """Whether a product can be formed is a question about the statement.
+
+    Two dimensions per operand: an operand with more axes is read as if the
+    axes of each group were one, which they are only where they lie together
+    in storage. Nothing about that needs the tree the statement came from.
+    """
+
+    def _log(self, leftIndices='ilk', resultIndices='ilj'):
+        shape = (N, N, N)
+        return ir.LoopOverGEMM(
+            description('C', resultIndices, shape),
+            [description('A', leftIndices, shape),
+             description('B', 'kjl', shape)],
+            m=Indices('il', (N, N)), n=Indices('j', (N,)), k=Indices('k', (N,)))
+
+    def test_axes_that_lie_together_are_one_axis(self):
+        statement = self._log()
+        assert statement.mayReadOperands()
+        assert statement.mayWriteResult()
+
+    def test_an_axis_between_them_ends_it(self):
+        """`i` and `l` are one dimension of the product, and in `ikl` the
+        summed index sits between them."""
+        assert not self._log(leftIndices='ikl').mayReadOperands()
+
+    def test_a_destination_they_do_not_lie_together_in_ends_it(self):
+        assert not self._log(resultIndices='ijl').mayWriteResult()
+
+    def test_layouts_may_be_asked_about_instead(self):
+        """A pass weighing whether to read an operand from somewhere else asks
+        with that somewhere else's layout, not with the operand's own."""
+        statement = self._log()
+        torn = DenseMemoryLayout((N, N, N), stride=(1, N * N, N))
+        assert not statement.mayReadOperands(
+            [torn, statement.terms[1].memoryLayout])

@@ -12,7 +12,10 @@ class Description(object):
                loopIndices,
                transA,
                transB,
-               prefetchName):
+               prefetchName,
+               m=None,
+               n=None,
+               k=None):
     self.alpha = alpha
     self.add = add
     self.result = result
@@ -22,6 +25,11 @@ class Description(object):
     self.transA = transA
     self.transB = transB
     self.prefetchName = prefetchName
+    #: The index groups the product is formed over -- the free indices of
+    #: each operand, and the ones summed away.
+    self.m = m
+    self.n = n
+    self.k = k
 
     rA = loopRanges(self.leftTerm, self.loopIndices)
     rB = loopRanges(self.rightTerm, self.loopIndices)

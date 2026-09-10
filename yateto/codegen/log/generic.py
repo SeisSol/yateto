@@ -12,7 +12,7 @@ def tensorOp(descr, generator=None, prefetch=None):
                          transA=descr.transA, transB=descr.transB,
                          alpha=descr.alpha, add=descr.add,
                          loopRanges=descr.loopRanges, generator=generator,
-                         prefetch=prefetch)
+                         prefetch=prefetch, m=descr.m, n=descr.n, k=descr.k)
 
 
 class Generic(object):

@@ -562,19 +562,23 @@ class LoopOverGEMM(BinOp):
   def transB(self):
     return self._transB
 
+  def m(self):
+    return self._m
+
+  def n(self):
+    return self._n
+
+  def k(self):
+    return self._k
+
   def argumentsCompatible(self, layouts):
-    super().argumentsCompatible(layouts)
-    m = self.leftTerm().indices.positions(self._m)
-    k1 = self.leftTerm().indices.positions(self._k)
-    k2 = self.rightTerm().indices.positions(self._k)
-    n = self.rightTerm().indices.positions(self._n)
-    return layouts[0].mayFuse(m) and layouts[0].mayFuse(k1) and layouts[1].mayFuse(k2) and layouts[1].mayFuse(n)
+    from ..ir.tensor import mayFuseGroups
+    return mayFuseGroups(self.leftTerm().indices, (self._m, self._k), layouts[0]) \
+       and mayFuseGroups(self.rightTerm().indices, (self._k, self._n), layouts[1])
 
   def resultCompatible(self, layout):
-    super().resultCompatible(layout)
-    m = self.indices.positions(self._m)
-    n = self.indices.positions(self._n)
-    return layout.mayFuse(m) and layout.mayFuse(n)
+    from ..ir.tensor import mayFuseGroups
+    return mayFuseGroups(self.indices, (self._m, self._n), layout)
 
   @staticmethod
   def indexString(name, fused, indices, transpose=False):

@@ -27,4 +27,4 @@ from .ops import (Arith, Call, Const, Fold, If, Load, Loop, Memset, Pointer,
                   Read, Scope, Store, Yield)
 from .passes import unroll
 from .tensor import (Broadcast, Copy, Elementwise, FusedGEMMs, LoopOverGEMM,
-                     Reduction, TensorOp, Transpose)
+                     mayFuseGroups, Reduction, TensorOp, Transpose)

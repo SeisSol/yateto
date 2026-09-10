@@ -183,7 +183,10 @@ class OptimizedKernelFactory(KernelFactory):
       loopIndices = node.loopIndices(),
       transA = node.transA(),
       transB = node.transB(),
-      prefetchName = prefetchName
+      prefetchName = prefetchName,
+      m = node.m(),
+      n = node.n(),
+      k = node.k()
     )
     generator = log.generator(self._arch, description, self._target, self._attrs)
     return self._conditional(condition,

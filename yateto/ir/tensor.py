@@ -1,6 +1,19 @@
 from .core import Op
 
 
+def mayFuseGroups(indices, groups, layout):
+  """Whether the axes of each group lie together in the layout.
+
+  A matrix product has two dimensions per operand, and an operand with more
+  axes than that is read as if the axes of each group were one axis. They are
+  one only where they lie consecutively in storage, so this is what decides
+  whether the operand can be read as a matrix at all -- asked of what the
+  statement states, the index tuple and the groups it contracts over, and of
+  the layout the operand would be read with.
+  """
+  return all(layout.mayFuse(indices.positions(group)) for group in groups)
+
+
 class TensorOp(Op):
   """One statement, still stated over whole tensors.
 
@@ -96,8 +109,15 @@ class LoopOverGEMM(TensorOp):
   """A contraction of two operands, run as a loop over matrix products."""
 
   def __init__(self, result, terms, transA=False, transB=False, alpha=1.0,
-               add=False, loopRanges=None, generator=None, prefetch=None):
+               add=False, loopRanges=None, generator=None, prefetch=None,
+               m=None, n=None, k=None):
     super().__init__(result, terms, alpha, add, loopRanges, generator=generator)
+    #: The index groups the product is formed over: `m` and `n` are the free
+    #: indices of the left and of the right operand, `k` the ones summed
+    #: away. Two per operand, which is what makes a product a matrix product.
+    self.m = m
+    self.n = n
+    self.k = k
     #: The tensor to fetch while the products run, where one was assigned. It
     #: is nothing the statement computes with, and everything the kernel is
     #: handed is in the statement that names it.
@@ -107,6 +127,22 @@ class LoopOverGEMM(TensorOp):
     #: terms a matrix product is stated in.
     self.transA = transA
     self.transB = transB
+
+  def mayReadOperands(self, layouts=None):
+    """Whether the operands can be read as matrices, laid out like this.
+
+    The layouts default to the ones the operands state; another set is asked
+    about where a pass is considering reading an operand from somewhere else.
+    """
+    if layouts is None:
+      layouts = [term.memoryLayout for term in self.terms]
+    return mayFuseGroups(self.terms[0].indices, (self.m, self.k), layouts[0]) \
+       and mayFuseGroups(self.terms[1].indices, (self.k, self.n), layouts[1])
+
+  def mayWriteResult(self, layout=None):
+    """Whether the product can be written into a destination laid out like this."""
+    layout = self.result.memoryLayout if layout is None else layout
+    return mayFuseGroups(self.result.indices, (self.m, self.n), layout)
 
   def isPureGEMM(self):
     """Whether the statement is a matrix product and nothing around it.

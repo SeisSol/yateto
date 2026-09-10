@@ -286,3 +286,40 @@ class TestGeneratorGenerateSmoke:
         # The generator emits a ``struct matmul`` in a ``namespace kernel``.
         assert "matmul" in kernel_h
         assert "namespace kernel" in kernel_h or "kernel::" in kernel_h
+
+
+class TestGeneratorCollection:
+    """What the collection hands out reaches the generated file.
+
+    The headers a tool asks for are written into the kernel source, so the
+    order the tools come back in is part of the output. Two runs of the same
+    generator that differ in it produce two different files and defeat every
+    cache downstream.
+    """
+
+    class _Tool:
+        def __init__(self, name):
+            self.name = name
+            self.includes = [f'{name}.h']
+
+        def supported(self, *args, **kwargs):
+            return True
+
+        def preference(self, *args, **kwargs):
+            return len(self.name)
+
+    def test_the_tools_that_took_a_product_keep_the_order_they_took_one_in(self):
+        from yateto.gemm_configuration import GeneratorCollection
+        tools = [self._Tool(name) for name in ('a', 'bb', 'ccc')]
+        arguments = (8, 8, 8, False, False, False, False, 1.0, 0.0, True, True,
+                     None, None, None, 'cpu')
+        for order in ([2, 0, 1], [1, 2, 0]):
+            collection = GeneratorCollection([tools[position] for position in order])
+            # each call picks the tool with the highest preference among those
+            # the collection was given, so taking one away picks the next
+            picked = []
+            while collection.gemmTools:
+                picked.append(collection.getGemmTool(*arguments))
+                collection.gemmTools = [tool for tool in collection.gemmTools
+                                        if tool is not picked[-1]]
+            assert list(collection.selected) == picked

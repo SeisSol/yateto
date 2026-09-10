@@ -373,7 +373,11 @@ class tinytc(CodeGenerator):
 class GeneratorCollection(object):
   def __init__(self, gemmTools: List[GemmTool]):
     self.gemmTools = gemmTools
-    self.selected = set()
+    #: The tools that have taken a product, in the order they first took one.
+    #: An order and not a set because it reaches the generated file: the
+    #: headers a tool asks for are written in it, and a set enumerates by
+    #: hash, which is to say differently from one run to the next.
+    self.selected = dict()
 
   def getGemmTool(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                   beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
@@ -389,7 +393,7 @@ class GeneratorCollection(object):
       select = max(tools.items(), key=operator.itemgetter(0))[1]
 
     if select:
-      self.selected.add(select)
+      self.selected[select] = None
 
     return select
 

@@ -1,13 +1,11 @@
 """
-Tests for ``FindFusedElementwise``, the pass that puts adjacent element-wise
-steps into one loop nest.
+Tests for the fusion of element-wise steps into one loop nest.
 
-The pass is deliberately strict, so most of what is worth testing is what it
-declines to do. A step that does not walk exactly the index space the group
-walks, or does not walk it under the same guard, or leaves something behind
-that is read outside the group, ends the group -- and each of those is a way
-to generate code that reads outside what an operand stores, or that runs a
-statement where it should not.
+Most of what is worth testing is what fusion declines to do. A step that does
+not walk exactly the index space the others walk, or does not walk it under
+the same guard, or hands its work to someone else, is left in a nest of its
+own -- and each of those is a way to generate code that reads outside what an
+operand stores, or that runs a statement where it should not.
 """
 from __future__ import annotations
 
@@ -39,9 +37,9 @@ def emit(statements, name='k'):
     return body[:body.index('\n  }\n')]
 
 
-def steps(body):
-    """How many intermediates the nest keeps in registers."""
-    return body.count('_fused')
+def buffered(body):
+    """How much the kernel puts in memory for a later statement to read."""
+    return body.count('_tmp')
 
 
 def nests(body):
@@ -55,7 +53,7 @@ class TestFuses:
         C = Tensor('C', (N, N))
         body = emit([C['ij'] <= yf.maximum(yf.sqrt(yf.add(A['ij'], B['ij'])), B['ij'])])
         assert nests(body) == 1
-        assert steps(body) > 0
+        assert buffered(body) == 0
 
     def test_a_scaling_is_a_step_like_any_other(self):
         """It is an element-wise multiplication seen from the control-flow
@@ -89,16 +87,18 @@ class TestDeclines:
         a = [Tensor(chr(ord('a') + k), (N,)) for k in range(4)]
         T = Tensor('T', (N,) * 4)
         body = emit([T['abcd'] <= a[0]['a'] * a[1]['b'] * a[2]['c'] * a[3]['d']])
-        assert steps(body) == 0
+        assert buffered(body) > 0
 
-    def test_a_broadcast_operand_ends_the_group(self):
-        """It is addressed over fewer axes than the nest walks."""
+    def test_a_broadcast_operand_is_read_over_the_axes_it_has(self):
+        """It is addressed over fewer axes than the nest walks, which is what
+        a broadcast is and no reason to walk the space twice."""
         A = Tensor('A', (N, N))
         B = Tensor('B', (N, N))
         v = Tensor('v', (N,))
         C = Tensor('C', (N, N))
         body = emit([C['ij'] <= yf.add(yf.mul(A['ij'], v['i']), B['ij'])])
-        assert steps(body) == 0
+        assert nests(body) == 1
+        assert buffered(body) == 0
 
     def test_a_sparse_operand_ends_the_group(self):
         """A sparse operand is written out entry by entry, not looped over."""
@@ -110,7 +110,7 @@ class TestDeclines:
         Q.setMemoryLayout(CSCMemoryLayout)
         R = Tensor('R', (N, N))
         body = emit([R['ij'] <= yf.add(yf.maximum(P['ij'], Q['ij']), P['ij'])])
-        assert steps(body) == 0
+        assert buffered(body) > 0
 
     def test_a_different_guard_ends_the_group(self):
         """Two statements that do not run together may not share a nest."""
@@ -119,7 +119,7 @@ class TestDeclines:
         flag = Tensor('flag', (), datatype=Datatype.BOOL)
         body = emit([yf.assignIf(flag[''], C['ij'], yf.sqrt(A['ij'])),
                      C['ij'] <= yf.add(A['ij'], A['ij'])])
-        assert steps(body) == 0
+        assert nests(body) == 2
 
     def test_operand_ranges_have_to_agree_before_the_pass_is_reached(self):
         """Every operand is read over the nest's range, so it has to have that

@@ -88,34 +88,11 @@ class KernelGenerator(object):
     """The kernel, as one region, written out once.
 
     Every statement of the control-flow graph lowers into the same region, so
-    what stands next to what is a question the region can answer. The storage
-    the statements share is set up first: which buffer a local points at is
-    settled before anything runs, and two locals that share one only ever do
-    so where the first is already dead.
+    what stands next to what is a question the region can answer. The region
+    is built and improved before anything is written, which is also what
+    decides how much storage the kernel needs: a buffer the passes leave
+    nothing reading is not declared at all.
     """
-    # temporary memory required (per element in case of gpu)
-    # NOTE: it is required to know in case if the memory is allocated on the heap
-    #       an provided by the user
-    required_tmp_mem = 0
-    cfg = DetermineLocalInitialization().visit(cfg)
-    self._generateScalarPrologue(cpp, cfg)
-    if factory.allocateTemporary():
-      localPtrs = set()
-      for pp in cfg:
-        localPtrs.update(pp.bufferMap.keys())
-      for localPtr in sorted(localPtrs, key=str):
-        cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
-      for pp in cfg:
-        for buf, size in pp.initBuffer.items():
-          required_tmp_mem += size
-          bufname = self._bufferName(buf)
-          # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
-          factory.temporary(bufname, size, None)
-      for pp in cfg:
-        for local, buf in pp.bufferMap.items():
-          # buffers are untyped storage; each pointer is cast to its own type
-          cpp(f'{local} = reinterpret_cast<{local.datatype.ctype()}*>({self._bufferName(buf)});')
-
     region = ir.Region()
     for pp in cfg:
       action = pp.action
@@ -129,6 +106,31 @@ class KernelGenerator(object):
 
     if factory.optimizes():
       ir.fuseLoops(region)
+      ir.scalarize(region)
+
+    self._generateScalarPrologue(cpp, cfg)
+    # temporary memory required (per element in case of gpu)
+    # NOTE: it is required to know in case if the memory is allocated on the heap
+    #       an provided by the user
+    required_tmp_mem = 0
+    if factory.allocateTemporary():
+      cfg = DetermineLocalInitialization().visit(cfg)
+      mentioned = ir.buffers(region)
+      bindings = [(local, buf) for pp in cfg for local, buf in pp.bufferMap.items()
+                  if str(local) in mentioned]
+      used = {buf for _, buf in bindings}
+      for localPtr in sorted({local for local, _ in bindings}, key=str):
+        cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
+      for pp in cfg:
+        for buf, size in pp.initBuffer.items():
+          if buf not in used:
+            continue
+          required_tmp_mem += size
+          # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
+          factory.temporary(self._bufferName(buf), size, None)
+      for local, buf in bindings:
+        # buffers are untyped storage; each pointer is cast to its own type
+        cpp(f'{local} = reinterpret_cast<{local.datatype.ctype()}*>({self._bufferName(buf)});')
 
     ir.CppEmitter(cpp, routineCache).emit(region)
     return ir.countFlops(region), required_tmp_mem

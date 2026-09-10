@@ -202,15 +202,15 @@ class TestElementwise:
         assert '-=' in body
         assert '-1.0' not in body
 
-    def test_a_nest_keeps_what_it_computes_in_a_local(self):
+    def test_a_nest_computes_what_it_needs_where_it_needs_it(self):
         A = Tensor('A', (N, N))
         B = Tensor('B', (N, N))
         D = Tensor('D', (N, N))
         C = Tensor('C', (N, N))
         body = emit([C['ij'] <= yf.maximum(yf.add(A['ij'], B['ij']), D['ij'])])
         assert body.count('#pragma omp simd') == 1
-        assert 'double const _fused0 = A[' in body
-        assert 'std::max(_fused0, D[' in body
+        assert '_tmp' not in body
+        assert 'std::max((A[' in body
 
     def test_a_nest_reads_no_buffer_for_its_intermediates(self):
         A = Tensor('A', (N, N))
@@ -219,8 +219,8 @@ class TestElementwise:
         C = Tensor('C', (N, N))
         body = emit([C['ij'] <= yf.mul(yf.add(A['ij'], B['ij']),
                                        yf.sqrt(yf.mul(D['ij'], A['ij'])))])
+        assert body.count('#pragma omp simd') == 1
         assert '_tmp' not in body
-        assert body.count('double const _fused') == 3
 
     def test_a_factor_the_statement_does_not_state_is_no_factor(self):
         from yateto.ir.lower import _factor
@@ -253,7 +253,7 @@ class TestElementwise:
         body = emit([C['ij'] <= (A['ij'] + B['ij']) * D['ij']])
         assert body.count('#pragma omp simd') == 1
         assert '_tmp' not in body
-        assert f'A[1*_i + {N}*_j] + B[1*_i + {N}*_j]' in body
+        assert f'A[1*_a + {N}*_b] + B[1*_a + {N}*_b]' in body
 
     def test_a_longer_sum_stays_in_the_nest_too(self):
         A = Tensor('A', (N, N))
@@ -442,7 +442,8 @@ class TestFusion:
     def test_nests_over_different_spaces_are_left_alone(self):
         A, B, C = (self._buffer(name) for name in 'ABC')
         first = self._loop(ir.Index('i'), [(C, A)])
-        second = self._loop(ir.Index('j'), [(C, B)])
+        second = self._loop(ir.Index('i'), [(C, B)])
+        second.domain = Range(0, N - 1)
         region = ir.Region([first, second])
         ir.fuseLoops(region)
         assert len([op for op in region.ops if isinstance(op, ir.Loop)]) == 2

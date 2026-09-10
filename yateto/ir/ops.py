@@ -172,10 +172,29 @@ class Call(Op):
   a statement decides how much work it turns out to be.
   """
 
-  def __init__(self, generate):
+  def __init__(self, generate, reads=None, writes=None, operands=()):
     self.generate = generate
+    #: The values the callee is handed. It names them in whatever it writes,
+    #: so nothing may take them away.
+    self._operands = list(operands)
+    #: The buffers the callee touches, or None where it does not say. Not
+    #: saying is not the same as touching nothing: a call that has not been
+    #: asked what it reads may read anything, and nothing may be moved across
+    #: it or dropped because of it.
+    self.reads = None if reads is None else [buffer.name for buffer in reads]
+    self.writes = None if writes is None else [buffer.name for buffer in writes]
     #: What the callee reported, once it has written itself.
     self.flops = None
+
+  def states(self):
+    """Whether this call says what it touches."""
+    return self.reads is not None and self.writes is not None
+
+  def touches(self):
+    return set(self.reads or ()) | set(self.writes or ())
+
+  def operands(self):
+    return tuple(self._operands)
 
   def __repr__(self):
     return 'Call'

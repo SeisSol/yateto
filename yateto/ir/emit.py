@@ -21,10 +21,12 @@ class CppEmitter:
     self._routineCache = routineCache
     self._prefix = prefix
     self._names = {}
+    self._taken = [set()]
     self._counter = 0
 
   def emit(self, region):
     self._names = {}
+    self._taken = [set()]
     self._counter = 0
     self._locals = self._findLocals(region)
     self._emitRegion(region)
@@ -49,9 +51,14 @@ class CppEmitter:
         self._findLocals(nested, depth + 1, defined, uses, locals)
     return locals
 
-  def _emitRegion(self, region):
+  def _emitRegion(self, region, scoped=False):
+    """`scoped` where the region is written inside braces of its own."""
+    if scoped:
+      self._taken.append(set(self._taken[-1]))
     for op in region.ops:
       self._emitOp(op)
+    if scoped:
+      self._taken.pop()
 
   def _emitOp(self, op):
     if isinstance(op, Fold):
@@ -85,11 +92,11 @@ class CppEmitter:
       return
     if isinstance(op, If):
       with self._cpp.If(op.condition):
-        self._emitRegion(op.region)
+        self._emitRegion(op.region, scoped=True)
       return
     if isinstance(op, Scope):
       with self._cpp.AnonymousScope():
-        self._emitRegion(op.region)
+        self._emitRegion(op.region, scoped=True)
       return
     if isinstance(op, Loop):
       self._emitLoop(op)
@@ -107,7 +114,7 @@ class CppEmitter:
     index = f'{self._prefix}{loop.index[0].name}'
     domain = loop.domain
     with self._cpp.For(f'int {index} = {domain.start}; {index} < {domain.stop}; ++{index}'):
-      self._emitRegion(loop.region)
+      self._emitRegion(loop.region, scoped=True)
 
   def _emitFold(self, fold):
     """An accumulator, a loop over the index, and a combination per step."""
@@ -118,7 +125,7 @@ class CppEmitter:
     domain = fold.domain
     with self._cpp.For(
         f'int {index} = {domain.start}; {index} < {domain.stop}; ++{index}'):
-      self._emitRegion(fold.region)
+      self._emitRegion(fold.region, scoped=True)
       self._cpp(self._combine(name, fold.operation, self._value(fold.yielded())))
 
   def _combine(self, target, operation, value):
@@ -137,9 +144,22 @@ class CppEmitter:
     return f'{buffer.name}[{address(buffer.memoryLayout, coords).ccode(self._prefix)}]'
 
   def _name(self, value):
+    """What this value is called, which is nothing else's name.
+
+    A value may ask for a name, and two of them in one scope may well ask for
+    the same one; the second gets it with a number after it. Two scopes are
+    free to use the same name, which is what lets a name be handed to a
+    generator that writes the scope's contents itself.
+    """
     if id(value) not in self._names:
-      self._names[id(value)] = value.name or f'{self._prefix}v{self._counter}'
+      wanted = value.name or f'{self._prefix}v{self._counter}'
       self._counter += 1
+      name, taken = wanted, 0
+      while name in self._taken[-1]:
+        taken += 1
+        name = f'{wanted}{taken}'
+      self._taken[-1].add(name)
+      self._names[id(value)] = name
     return self._names[id(value)]
 
   def _value(self, value):

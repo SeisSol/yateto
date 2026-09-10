@@ -63,7 +63,7 @@ class Generic(object):
 
   def _buffer(self, term, name=None):
     return ir.Buffer(name if name is not None else term.name, term.datatype,
-                     term.memoryLayout, term.eqspp)
+                     term.memoryLayout, term.eqspp, term.is_temporary)
 
   def _nest(self, builder, loopIndices, ranges, fixed, indices):
     """The nest over the indices that are not pinned, or None where it is empty.
@@ -180,28 +180,31 @@ class Generic(object):
 
     names = dict(A=d.leftTerm.name, B=d.rightTerm.name, C=d.result.name,
                  prefetch=d.prefetchName)
+    outerPointers = []
     if hasOuterLoops:
-      self._pointer(outer, '_A', self._buffer(d.leftTerm), d.leftTerm,
-                    d.outerLoopIndices, indices)
-      self._pointer(outer, '_B', self._buffer(d.rightTerm), d.rightTerm,
-                    d.outerLoopIndices, indices)
-      self._pointer(outer, '_C', self._buffer(d.result), d.result,
-                    d.outerLoopIndices, indices, const=False)
+      outerPointers = [
+        self._pointer(outer, '_A', self._buffer(d.leftTerm), d.leftTerm,
+                      d.outerLoopIndices, indices),
+        self._pointer(outer, '_B', self._buffer(d.rightTerm), d.rightTerm,
+                      d.outerLoopIndices, indices),
+        self._pointer(outer, '_C', self._buffer(d.result), d.result,
+                      d.outerLoopIndices, indices, const=False)]
       names.update(A='_A', B='_B', C='_C')
       if d.prefetchName is not None:
-        self._pointer(outer, '_Cprefetch', self._buffer(d.result, d.prefetchName),
-                      d.result, d.outerLoopIndices, indices)
+        outerPointers.append(
+          self._pointer(outer, '_Cprefetch', self._buffer(d.result, d.prefetchName),
+                        d.result, d.outerLoopIndices, indices))
         names['prefetch'] = '_Cprefetch'
 
     if d.assignLoopRanges is not None:
       self._boxes(outer, [d.assignLoopRanges], 0.0, gemmDescr, names, fixed,
-                  indices, hasInnerLoops, gemm_cfg)
+                  indices, hasInnerLoops, gemm_cfg, outerPointers)
     if d.addLoopRanges is not None:
       self._boxes(outer, d.addLoopRanges, 1.0, gemmDescr, names, fixed,
-                  indices, hasInnerLoops, gemm_cfg)
+                  indices, hasInnerLoops, gemm_cfg, outerPointers)
 
   def _boxes(self, builder, boxes, beta, gemmDescr, names, fixed, indices,
-             hasInnerLoops, gemm_cfg):
+             hasInnerLoops, gemm_cfg, outerPointers):
     d = self._descr
     for ranges in boxes:
       inner = self._nest(builder, d.innerLoopIndices, ranges, fixed, indices)
@@ -209,20 +212,27 @@ class Generic(object):
         continue
       call = copy.copy(gemmDescr)
       call.setBeta(beta)
+      handed = list(outerPointers)
       if hasInnerLoops:
-        self._pointer(inner, '_Ain', self._buffer(d.leftTerm, names['A']),
-                      d.leftTerm, d.innerLoopIndices, indices)
-        self._pointer(inner, '_Bin', self._buffer(d.rightTerm, names['B']),
-                      d.rightTerm, d.innerLoopIndices, indices)
-        self._pointer(inner, '_Cin', self._buffer(d.result, names['C']),
-                      d.result, d.innerLoopIndices, indices, const=False)
+        handed.append(self._pointer(inner, '_Ain', self._buffer(d.leftTerm, names['A']),
+                                    d.leftTerm, d.innerLoopIndices, indices))
+        handed.append(self._pointer(inner, '_Bin', self._buffer(d.rightTerm, names['B']),
+                                    d.rightTerm, d.innerLoopIndices, indices))
+        handed.append(self._pointer(inner, '_Cin', self._buffer(d.result, names['C']),
+                                    d.result, d.innerLoopIndices, indices, const=False))
         if names['prefetch'] is not None:
-          self._pointer(inner, '_Cprefetchin',
-                        self._buffer(d.result, names['prefetch']), d.result,
-                        d.innerLoopIndices, indices)
+          handed.append(self._pointer(inner, '_Cprefetchin',
+                                      self._buffer(d.result, names['prefetch']), d.result,
+                                      d.innerLoopIndices, indices))
           call.prefetchName = '_Cprefetchin'
       elif names['prefetch'] is not None:
         call.prefetchName = names['prefetch']
       generator = gemm.generator(self._arch, call, gemm_cfg, self._target,
                                  self._attrs)
-      inner.add(ir.Call(generator.generate))
+      # the product reads the two operands and writes the result, whichever
+      # kernel ends up performing it
+      inner.add(ir.Call(generator.generate,
+                        reads=[self._buffer(d.leftTerm), self._buffer(d.rightTerm),
+                               self._buffer(d.result)],
+                        writes=[self._buffer(d.result)],
+                        operands=handed))

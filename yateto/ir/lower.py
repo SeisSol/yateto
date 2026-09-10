@@ -145,9 +145,8 @@ def _prologue(op, scalars=()):
 
   Everything the destination is not going to be written over is zeroed first.
   The factors are made once, outside the nest, and are found again by the
-  spelling of what they scale by: a factor that has a name is read into a
-  local of its own scope -- one kernel may well scale two statements by the
-  same name, and a nest may well scale two of its steps by it.
+  spelling of what they scale by: one kernel may well scale two statements by
+  the same name, and a nest may well scale two of its steps by it.
   """
   region = Region()
   builder = Builder(region)
@@ -167,9 +166,6 @@ def _prologue(op, scalars=()):
     if factor is not None:
       factors[str(alpha)] = factor
 
-  if any(isinstance(factor, Read) for factor in factors.values()):
-    scope = builder.add(Scope())
-    builder = Builder(scope.region)
   for factor in factors.values():
     builder.add(factor)
   return region, builder, factors

@@ -290,10 +290,11 @@ class TestScaledOperations:
         """`*` binds tighter than `+`, `&`, `|`, `^` and every comparison."""
         import yateto.functions as yf
         A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
         C = Tensor('C', (N, N))
-        code = self._emit([C['ij'] <= 2.0 * yf.add(A['ij'], A['ij'])])
-        entry = f'A[1*_i + {N}*_j]'
-        assert f'2.0 * ({entry} + {entry})' in code
+        code = self._emit([C['ij'] <= 2.0 * yf.add(A['ij'], B['ij'])])
+        entry = lambda name: f'{name}[1*_i + {N}*_j]'
+        assert f"2.0 * ({entry('A')} + {entry('B')})" in code
 
     def test_a_boolean_result_is_not_scaled(self):
         """Every non-zero factor is the same boolean, so it would be lost."""

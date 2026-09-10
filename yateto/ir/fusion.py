@@ -1,7 +1,7 @@
 """Putting adjacent nests over one iteration space into one nest."""
 
 from .core import Region
-from .ops import Call, Load, Loop, Memset, Pointer, Store
+from .ops import Call, Const, Load, Loop, Memset, Pointer, Read, Store
 from .passes import _clone
 
 
@@ -55,6 +55,12 @@ def _group(region, position):
 
   while index < len(region.ops):
     candidate = region.ops[index]
+    if isinstance(candidate, (Const, Read)):
+      # nothing it reads is anything a nest writes, so where it stands is
+      # only a matter of standing before whoever uses it
+      pending.append(candidate)
+      index += 1
+      continue
     if isinstance(candidate, Memset):
       if any(candidate.buffer.name in _touched(member) for member in group):
         break
@@ -100,19 +106,40 @@ def _nest(op):
 
 def _sameSpace(first, second):
   a, b = _nest(first), _nest(second)
-  return (a[0] == b[0] and a[1] == b[1]
-          and first.simd == second.simd and first.collapse == second.collapse)
+  # the names may differ; the ranges, their order and the clauses may not
+  return (a[1] == b[1] and first.simd == second.simd
+          and first.collapse == second.collapse)
 
 
 def _accesses(op):
-  """Per buffer, how this nest spells the entry it touches."""
+  """Per buffer, which entry this nest touches, said in the nest's own terms."""
+  canonical = _canonical(op)
   reads, writes = {}, {}
   for inner in op.region.walk():
     if isinstance(inner, Load):
-      reads.setdefault(inner.buffer.name, set()).add(_signature(inner.coords))
+      reads.setdefault(inner.buffer.name, set()).add(_signature(inner.coords, canonical))
     elif isinstance(inner, Store):
-      writes.setdefault(inner.buffer.name, set()).add(_signature(inner.coords))
+      writes.setdefault(inner.buffer.name, set()).add(_signature(inner.coords, canonical))
   return reads, writes
+
+
+def _canonical(op):
+  """Each loop of the nest by its depth rather than by its name.
+
+  Two nests over the same space need not spell their indices alike: what a
+  copy calls `a` an element-wise operation calls by the index the kernel was
+  written with. Which loop of the nest an index belongs to is what they have
+  in common, and it is what decides whether they touch the same entry.
+  """
+  canonical = {}
+  loop, depth = op, 0
+  while True:
+    canonical[loop.index[0]] = str(depth)
+    body = loop.region.ops
+    if len(body) == 1 and isinstance(body[0], Loop):
+      loop, depth = body[0], depth + 1
+    else:
+      return canonical
 
 
 def _touched(op):
@@ -120,13 +147,13 @@ def _touched(op):
   return set(reads) | set(writes)
 
 
-def _signature(coords):
-  """How an entry is spelled, in terms of the loop variables.
-
-  Two nests bind their own index objects, so the names are what they have in
-  common -- and the names are what reaches the generated code.
-  """
-  return tuple(coord.ccode() for coord in coords)
+def _signature(coords, canonical):
+  """Which entry is touched, said as an offset from the loops of the nest."""
+  return tuple((coord.constant(),
+                tuple(sorted((canonical.get(index, index.name),
+                              coord.coefficient(index))
+                             for index in coord.indices())))
+               for coord in coords)
 
 
 def _independent(group, candidate):

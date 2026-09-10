@@ -10,12 +10,16 @@ class Buffer:
   rather than from text.
   """
 
-  __slots__ = ('name', 'datatype', 'memoryLayout', 'eqspp')
+  __slots__ = ('name', 'datatype', 'memoryLayout', 'eqspp', 'temporary')
 
-  def __init__(self, name, datatype, memoryLayout, eqspp=None):
+  def __init__(self, name, datatype, memoryLayout, eqspp=None, temporary=False):
     self.name = str(name)
     self.datatype = datatype
     self.memoryLayout = memoryLayout
+    #: Whether the kernel is the only one who ever sees this. What such a
+    #: buffer holds after the kernel has run is nobody's business, so a write
+    #: to it that nothing reads back need not happen at all.
+    self.temporary = bool(temporary)
     #: Which entries the operand has a value at, which is not the same question
     #: as which entries the layout keeps room for: a layout may store an entry
     #: that is structurally zero, and what is in that room is nobody's promise.
@@ -25,7 +29,7 @@ class Buffer:
   def fromDescription(cls, description):
     """The buffer behind a tensor description, as the code generators hand it over."""
     return cls(description.name, description.datatype, description.memoryLayout,
-               description.eqspp)
+               description.eqspp, getattr(description, 'is_temporary', False))
 
   def __repr__(self):
     return f'Buffer({self.name})'

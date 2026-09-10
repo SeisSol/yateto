@@ -1,3 +1,4 @@
+import collections
 import copy
 import itertools
 import re
@@ -58,6 +59,8 @@ class Kernel(object):
 
     self.cfg = None
     self.nonZeroFlops = -1
+    #: Per graph pass, how often it rewrote something.
+    self.rewrites = collections.Counter()
 
   @classmethod
   def isValidName(cls, name):
@@ -107,11 +110,12 @@ class Kernel(object):
       ast2cf.visit(ast)
     self.cfg = ast2cf.cfg()
     self._reportGraph('as it is built')
-    self.cfg = MergeScalarMultiplications().visit(self.cfg)
-    self.cfg = SubstituteForward().visit(self.cfg)
-    self.cfg = SubstituteBackward().visit(self.cfg)
-    self.cfg = RemoveEmptyStatements().visit(self.cfg)
-    self.cfg = MergeActions().visit(self.cfg)
+    self.rewrites = collections.Counter()
+    for graphPass in (MergeScalarMultiplications(), SubstituteForward(),
+                      SubstituteBackward(), RemoveEmptyStatements(),
+                      MergeActions()):
+      self.cfg = graphPass.visit(self.cfg)
+      self.rewrites[type(graphPass).__name__] += graphPass.rewrites
     self._reportGraph('after the passes')
     self._reportUnreachable()
 
@@ -331,6 +335,26 @@ class Generator(object):
       family.add(indexedName, ast, prefetch, namespace, target=target,
                  attrs=attrs)
 
+  def _reportRewrites(self):
+    """How often each graph pass rewrote something, over every kernel.
+
+    One line, because the answer is what decides whether a pass is worth
+    keeping: one that never rewrote anything here is one the others have
+    taken over on this input, and moving it anywhere would be moving nothing.
+    """
+    rewrites = collections.Counter()
+    for kernel in self._allKernels():
+      rewrites.update(kernel.rewrites)
+    if not rewrites:
+      return
+    print('Graph passes: ' + ', '.join(f'{name} {rewrites[name]}'
+                                       for name in sorted(rewrites)))
+
+  def _allKernels(self):
+    return list(self._kernels) + [kernel
+                                  for family in self._kernelFamilies.values()
+                                  for kernel in family.kernels()]
+
   @classmethod
   def _headerGuardName(self, namespace, fileBaseName):
     partlist = namespace.upper().split('::') + [fileBaseName.upper(), self.HEADER_GUARD_SUFFIX]
@@ -384,6 +408,7 @@ class Generator(object):
     for family in self._kernelFamilies.values():
       print(f'{family.name} ({sum(len(kernel.ast) for kernel in family.kernels())} AST(s))')
       family.prepareUntilCodeGen(cost_estimator, frozenset(routine_exporters))
+    self._reportRewrites()
 
     # Create mapping from namespace to kernel/family
     kernel_dict = {}

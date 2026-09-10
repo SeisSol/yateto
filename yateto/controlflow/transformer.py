@@ -1,7 +1,19 @@
 from .graph import *
 
 
-class MergeScalarMultiplications(object):
+class GraphPass(object):
+  """A rewrite of the graph, and how much of it there was.
+
+  Worth counting, because a pass that never rewrites anything is one the
+  others have taken over -- and moving such a pass anywhere is moving
+  nothing.
+  """
+
+  def __init__(self):
+    self.rewrites = 0
+
+
+class MergeScalarMultiplications(GraphPass):
   def visit(self, cfg):
     n = len(cfg)
     i = 1
@@ -14,6 +26,7 @@ class MergeScalarMultiplications(object):
           va.result = ua.result
           # the merged action now performs ua's store, so it inherits ua's guard
           va.condition = va.getGuard() & ua.getGuard()
+          self.rewrites += 1
           del cfg[i]
           i -= 1
           n -= 1
@@ -45,7 +58,7 @@ def _guardsCompatible(cfg, rng, definition):
   """
   return all(cfg[j].getGuard().implies(definition) for j in rng)
 
-class SubstituteForward(object):
+class SubstituteForward(GraphPass):
   def visit(self, cfg):
     n = len(cfg)
     live = liveness(cfg)
@@ -67,11 +80,12 @@ class SubstituteForward(object):
           for j in range(i, n):
             # a read substitution; the downstream guards stay as they are
             cfg[j] = cfg[j].substituted(when, by)
+          self.rewrites += 1
           live = liveness(cfg)
 
     return cfg
 
-class SubstituteBackward(object):
+class SubstituteBackward(GraphPass):
   def visit(self, cfg):
     n = len(cfg)
     live = liveness(cfg)
@@ -96,23 +110,25 @@ class SubstituteBackward(object):
             cfg[found] = cfg[found].substituted(when, by, va.getGuard(), term=False)
             for j in range(found+1,i+1):
               cfg[j] = cfg[j].substituted(when, by)
+            self.rewrites += 1
             live = liveness(cfg)
     return cfg
 
-class RemoveEmptyStatements(object):
+class RemoveEmptyStatements(GraphPass):
   def visit(self, cfg):
     n = len(cfg)
     i = 0
     while i < n:
       ua = cfg[i]
       if not ua.isCompound() and ua.isRHSVariable() and ua.result == ua.term and ua.hasTrivialScalar():
+        self.rewrites += 1
         del cfg[i]
         n -= 1
       else:
         i += 1
     return cfg
 
-class MergeActions(object):
+class MergeActions(GraphPass):
   def visit(self, cfg):
     n = len(cfg)
     i = 0
@@ -142,6 +158,7 @@ class MergeActions(object):
             cfg[i].add = va.add
             if not va.hasTrivialScalar():
               cfg[i].scalar = va.scalar
+            self.rewrites += 1
             del cfg[found]
             n -= 1
       i += 1

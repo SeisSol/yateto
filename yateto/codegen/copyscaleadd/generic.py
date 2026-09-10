@@ -1,7 +1,7 @@
 from ... import ir
 
 
-def tensorOp(descr):
+def tensorOp(descr, generator=None):
   """The statement a copy-scale-add description states.
 
   One operand and a destination cover a plain copy, a transposition and a
@@ -17,7 +17,8 @@ def tensorOp(descr):
     operation = ir.Copy
   return operation(descr.result, [descr.term], alpha=descr.alpha,
                    add=descr.beta == 1.0, loopRanges=descr.loopRanges,
-                   unrolled=descr.term.memoryLayout.isSparse())
+                   unrolled=descr.term.memoryLayout.isSparse(),
+                   generator=generator)
 
 
 class Generic(object):

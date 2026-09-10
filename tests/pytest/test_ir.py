@@ -25,6 +25,7 @@ from yateto.codegen.code import Cpp
 from yateto.codegen.common import IndexedTensorDescription
 from yateto.codegen.copyscaleadd.factory import Description
 from yateto.codegen.copyscaleadd.generic import tensorOp
+from yateto.codegen.lowering import lower
 from yateto.gemm_configuration import GeneratorCollection
 from yateto.ast.indices import Indices, Range
 from yateto.memory import CSCMemoryLayout, DenseMemoryLayout
@@ -640,3 +641,77 @@ class TestViews:
         region = ir.Region([ir.Loop([index], Range(0, N), body)])
         ir.scalarize(region)
         assert len([op for op in region.walk() if isinstance(op, ir.Load)]) == 1
+
+
+class TestStatementLowering:
+    """A statement stands in the region as the statement it is.
+
+    What writes it is settled by a pass afterwards, which is what lets
+    anything in between read a contraction as a contraction rather than as a
+    nest around somebody's matrix product.
+    """
+
+    class _Lowers:
+        def __init__(self, region):
+            self._region = region
+            self.handed = None
+
+        def lower(self, *arguments):
+            self.handed = arguments
+            return self._region
+
+    class _Writes:
+        def __init__(self):
+            self.handed = None
+
+        def generate(self, cpp, routineCache, *arguments):
+            self.handed = (cpp, routineCache) + arguments
+            return 17
+
+    def _statement(self, generator):
+        return ir.Copy(description('C', 'ij', (N, N)),
+                       [description('A', 'ij', (N, N))], generator=generator)
+
+    def test_a_backend_that_lowers_stands_in_the_statement_s_place(self):
+        loop = ir.Loop([ir.Index('i')], Range(0, N))
+        backend = self._Lowers(ir.Region([loop]))
+        region = ir.Region([self._statement(backend)])
+        lower(region, None)
+        assert region.ops == [loop]
+
+    def test_a_backend_that_writes_itself_becomes_a_call_stating_what_it_reaches(self):
+        backend = self._Writes()
+        region = ir.Region([self._statement(backend)])
+        lower(region, None)
+        call, = region.ops
+        assert isinstance(call, ir.Call)
+        assert {buffer.name for buffer in call.reads} == {'A', 'C'}
+        assert [buffer.name for buffer in call.writes] == ['C']
+
+    def test_the_call_is_written_by_whoever_emits_the_region(self):
+        backend = self._Writes()
+        region = ir.Region([self._statement(backend)])
+        lower(region, None)
+        cpp, cache = object(), object()
+        assert region.ops[0].generate(cpp, cache) == 17
+        assert backend.handed == (cpp, cache)
+
+    def test_a_contraction_is_the_one_statement_asked_with_the_configuration(self):
+        gemm_cfg = object()
+        contraction = self._Lowers(ir.Region())
+        elementwise = self._Lowers(ir.Region())
+        lower(ir.Region([
+            ir.LoopOverGEMM(description('C', 'ij', (N, N)),
+                            [description('A', 'ik', (N, N)),
+                             description('B', 'kj', (N, N))],
+                            generator=contraction),
+            self._statement(elementwise)]), gemm_cfg)
+        assert contraction.handed == (gemm_cfg,)
+        assert elementwise.handed == ()
+
+    def test_a_guarded_statement_is_lowered_where_it_stands(self):
+        loop = ir.Loop([ir.Index('i')], Range(0, N))
+        guarded = ir.If('flag', ir.Region([self._statement(self._Lowers(ir.Region([loop])))]))
+        region = ir.Region([guarded])
+        lower(region, None)
+        assert guarded.region.ops == [loop]

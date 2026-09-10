@@ -11,6 +11,7 @@ from ..controlflow.graph import Variable
 from .code import Cpp
 from .. import ir
 from .factory import *
+from .lowering import lower as lowerStatements
 from .common import BatchedOperationsAux, KernelAttributes
 from ..type import Scalar, Tensor, Datatype
 
@@ -88,8 +89,8 @@ class KernelGenerator(object):
 
     Every statement of the control-flow graph lowers into the same region, so
     what stands next to what is a question the region can answer. The region
-    is built and improved before anything is written, which is also what
-    decides how much storage the kernel needs: a buffer the passes leave
+    is built, lowered and improved before anything is written, which is also
+    what decides how much storage the kernel needs: a buffer the passes leave
     nothing reading is not declared at all.
     """
     region = ir.Region()
@@ -103,6 +104,7 @@ class KernelGenerator(object):
         else:
           region.extend(factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg))
 
+    lowerStatements(region, gemm_cfg)
     if factory.optimizes():
       ir.fuseLoops(region)
       ir.scalarize(region)

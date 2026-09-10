@@ -1,12 +1,12 @@
 from ... import ir
 
 
-def tensorOp(descr):
+def tensorOp(descr, generator=None):
   """The statement an element-wise description states."""
   return ir.Elementwise(descr.result, descr.fillTerms(descr.terms), descr.optype,
                         alpha=descr.alpha, add=descr.add,
                         loopRanges=descr.loopRanges,
-                        unrolled=any(descr.isSparse))
+                        unrolled=any(descr.isSparse), generator=generator)
 
 
 class Generic(object):

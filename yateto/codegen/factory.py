@@ -118,20 +118,24 @@ class KernelFactory(object):
   def _conditional(self, condition, statement, touches=(), writes=()):
     """One statement of the kernel, as a region, guarded where it is guarded.
 
-    `statement` is the region the statement lowers to, or a callable for a
-    generator that still writes itself -- which becomes a call, since what
-    such a generator does is its own to write and its own to report. What it
-    touches is stated here either way, because a call that has not been asked
-    may touch anything, and then nothing can be said about the storage the
-    kernel needs.
+    `statement` is the statement itself, stated over tensors, and stays that
+    way until the region is lowered. It may instead be a callable, for a
+    generator that writes itself without stating a statement -- which becomes
+    a call, and then what it touches is stated here, because a call that has
+    not been asked may touch anything and nothing can be said about the
+    storage the kernel needs.
     """
     guard = Guard.coerce(condition)
     if guard.isNever():
       return ir.Region()
-    region = statement if isinstance(statement, ir.Region) \
-             else ir.Region([ir.Call(lambda cpp, cache: statement(),
-                                     reads=[self._buffer(term) for term in touches],
-                                     writes=[self._buffer(term) for term in writes])])
+    if isinstance(statement, ir.Region):
+      region = statement
+    elif isinstance(statement, ir.TensorOp):
+      region = ir.Region([statement])
+    else:
+      region = ir.Region([ir.Call(lambda cpp, cache: statement(),
+                                  reads=[self._buffer(term) for term in touches],
+                                  writes=[self._buffer(term) for term in writes])])
     if guard.isAlways():
       return region
     self._checkGuardIsReadable(guard)
@@ -151,12 +155,6 @@ class KernelFactory(object):
                      layout() if callable(layout) else layout,
                      eqspp() if callable(eqspp) else eqspp,
                      getattr(term, 'is_temporary', False))
-
-  @staticmethod
-  def _statement(generator, write, *lowering):
-    """The region a generator makes, or the call that still writes it."""
-    lower = getattr(generator, 'lower', None)
-    return lower(*lowering) if lower is not None else write
 
   def _checkGuardIsReadable(self, guard):
     """A guard emitted here is read on the host, so it has to live there.
@@ -200,10 +198,7 @@ class OptimizedKernelFactory(KernelFactory):
       prefetchName = prefetchName
     )
     generator = log.generator(self._arch, description, self._target, self._attrs)
-    return self._conditional(condition, self._statement(
-      generator, lambda: generator.generate(self._cpp, routineCache, gemm_cfg), gemm_cfg),
-      touches=[description.result, description.leftTerm, description.rightTerm],
-      writes=[description.result])
+    return self._conditional(condition, log.tensorOp(description, generator))
 
   def create_FusedGEMMs(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = fused_gemms.Description(node, result, arguments, condition, add, scalar)
@@ -227,10 +222,7 @@ class OptimizedKernelFactory(KernelFactory):
       nodeTermIndices = node.nodeTermIndices
     )
     generator = elementwise.generator(self._arch, description, self._target)
-    return self._conditional(condition, self._statement(
-      generator, lambda: generator.generate(self._cpp, routineCache)),
-      touches=[description.result] + list(description.terms),
-      writes=[description.result])
+    return self._conditional(condition, elementwise.tensorOp(description, generator))
 
   def create_Reduction(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = reduction.Description(
@@ -241,10 +233,7 @@ class OptimizedKernelFactory(KernelFactory):
       optype = node.optype,
     )
     generator = reduction.generator(self._arch, description, self._target)
-    return self._conditional(condition, self._statement(
-      generator, lambda: generator.generate(self._cpp, routineCache)),
-      touches=[description.result, description.term],
-      writes=[description.result])
+    return self._conditional(condition, reduction.tensorOp(description, generator))
 
   def create_Permute(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     result = IndexedTensorDescription.fromNode(result, node)
@@ -270,10 +259,7 @@ class OptimizedKernelFactory(KernelFactory):
     )
     generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target,
                                        self._attrs)
-    return self._conditional(condition, self._statement(
-      generator, lambda: generator.generate(self._cpp, routineCache)),
-      touches=[description.result, description.term],
-      writes=[description.result])
+    return self._conditional(condition, copyscaleadd.tensorOp(description, generator))
 
 class UnitTestFactory(KernelFactory):
   def __init__(self, cpp, arch, nameFun, testFramework):

@@ -18,7 +18,7 @@ class TensorOp(Op):
   """
 
   def __init__(self, result, terms, alpha=1.0, add=False, loopRanges=None,
-               unrolled=False):
+               unrolled=False, generator=None):
     self.result = result
     self.terms = list(terms)
     #: What the value is scaled by: a number, or the name of a scalar the
@@ -32,6 +32,12 @@ class TensorOp(Op):
     #: an address for an entry and none for an index, so a statement that
     #: touches one has to name the entries it visits.
     self.unrolled = unrolled
+    #: The backend that has claimed this statement. Which one that is falls
+    #: out of what the statement is and what it is generated for; what it
+    #: writes -- loops put here in the statement's place, or the statement
+    #: itself, straight into the kernel -- is settled when the statement is
+    #: lowered, which happens to the region and not while it is built.
+    self.generator = generator
 
   def lower(self):
     """The statement as loops and scalar operations."""
@@ -67,8 +73,8 @@ class Elementwise(TensorOp):
   """An operation applied entry by entry over one index space."""
 
   def __init__(self, result, terms, optype, alpha=1.0, add=False,
-               loopRanges=None, unrolled=False):
-    super().__init__(result, terms, alpha, add, loopRanges, unrolled)
+               loopRanges=None, unrolled=False, generator=None):
+    super().__init__(result, terms, alpha, add, loopRanges, unrolled, generator)
     self.optype = optype
 
   def lower(self):
@@ -84,8 +90,8 @@ class Reduction(TensorOp):
   """An operation folding one index of its operand away."""
 
   def __init__(self, result, terms, optype, sumIndex, sumRange, alpha=1.0,
-               add=False, loopRanges=None):
-    super().__init__(result, terms, alpha, add, loopRanges)
+               add=False, loopRanges=None, generator=None):
+    super().__init__(result, terms, alpha, add, loopRanges, generator=generator)
     self.optype = optype
     #: The index that is folded away, which the destination does not have.
     self.sumIndex = str(sumIndex)

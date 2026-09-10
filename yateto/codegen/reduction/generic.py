@@ -1,11 +1,11 @@
 from ... import ir
 
 
-def tensorOp(descr):
+def tensorOp(descr, generator=None):
   """The statement a reduction description states."""
   return ir.Reduction(descr.result, [descr.term], descr.optype, descr.sumIndex,
                       descr.sumLoopRange, alpha=descr.alpha, add=descr.add,
-                      loopRanges=descr.loopRanges)
+                      loopRanges=descr.loopRanges, generator=generator)
 
 
 class Generic(object):

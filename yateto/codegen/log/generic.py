@@ -6,6 +6,13 @@ from .. import gemm
 from ...memory import DenseMemoryLayout
 
 
+def tensorOp(descr, generator=None):
+  """The statement a contraction description states."""
+  return ir.LoopOverGEMM(descr.result, [descr.leftTerm, descr.rightTerm],
+                         alpha=descr.alpha, add=descr.add,
+                         loopRanges=descr.loopRanges, generator=generator)
+
+
 class Generic(object):
   """A contraction run as a loop over matrix products.
 

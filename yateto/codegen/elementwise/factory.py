@@ -25,14 +25,20 @@ class Description(object):
     #       are therefore driven by the result and only narrowed where an
     #       operand actually has the index.
     self.loopRanges = dict(rR)
-    for term in self.terms:
-      termRange = loopRanges(term, self.result.indices)
-      assert testLoopRangesAContainedInB(termRange, rR), \
-        f'Operand {term.name} exceeds the result\'s loop ranges.'
-      for index, rng in termRange.items():
-        assert self.loopRanges[index] == rng or index not in term.indices, \
-          f'Inconsistent loop range for index {index}.'
-        self.loopRanges[index] = rng
+    if not any(self.isSparse):
+      for term in self.terms:
+        termRange = loopRanges(term, self.result.indices)
+        assert testLoopRangesAContainedInB(termRange, rR), \
+          f'Operand {term.name} exceeds the result\'s loop ranges.'
+        for index, rng in termRange.items():
+          assert self.loopRanges[index] == rng or index not in term.indices, \
+            f'Inconsistent loop range for index {index}.'
+          self.loopRanges[index] = rng
+
+  def fillTerms(self, args):
+    """The operands in their original order, with the templates put back."""
+    return [args[index] if template is None else template
+            for index, template in zip(self.nodeTermIndices, self.termTemplate)]
 
 def generator(arch, descr, target):
   if target == 'cpu':

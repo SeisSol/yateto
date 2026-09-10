@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import contextlib
 from .. import aspp
 from ..type import AddressingMode, Datatype
 from ..ast.indices import BoundingBox
@@ -71,19 +73,66 @@ class IndexedTensorDescription(TensorDescription):
         addressing = var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
+def operand(term):
+  """How the generated code reads an operand.
+
+  A by-value operand is the value itself: it has a name in the kernel's
+  signature and no storage to address. Everything else is read through its
+  memory layout.
+  """
+  if term.addressing == AddressingMode.SCALAR:
+    return term.name
+  return f'{term.name}[{term.memoryLayout.addressString(term.indices)}]'
+
+
 def scaleFactor(datatype, alpha):
   """Spell a scale factor in the result's datatype.
 
   A number becomes a literal of that type; a named scalar is a kernel argument
   and is emitted by name, since it already carries its own type.
+
+  Writing the factor in the result's type is what keeps an int32 result from
+  being multiplied by a double literal, but it only works while the type can
+  hold the factor. It cannot always: every non-zero number is `true`, so a
+  boolean result silently scales by one, and an integer one truncates. Neither
+  is a scaling, so neither is written.
   """
-  if isinstance(alpha, (int, float)):
-    return datatype.literal(alpha)
-  return str(alpha)
+  if not isinstance(alpha, (int, float)):
+    return str(alpha)
+  if datatype.isBool() and alpha != 1:
+    raise ValueError(
+      f'Cannot scale a {datatype} result by {alpha}: every non-zero factor is '
+      f'the same boolean, so the factor would be lost. Cast the result to a '
+      f'numeric type before scaling it.')
+  if datatype.isInteger() and alpha != int(alpha):
+    raise ValueError(
+      f'Cannot scale a {datatype} result by {alpha}: the factor is not whole '
+      f'and writing it in the result\'s type would truncate it. Cast the '
+      f'result to a floating type before scaling it.')
+  return datatype.literal(alpha)
 
 # The prefix forLoops() puts in front of its loop variables. Any generator that
 # emits its own loops into the same scope has to use it as well.
 INDEX_PREFIX = '_'
+
+@contextlib.contextmanager
+def hoisted(cpp, datatype, value, name):
+  """The value as an expression, read into a local first if it is a name.
+
+  A named scalar is a member of the kernel object, and as far as the compiler
+  can tell a store through one of its pointer members may land on it; reading
+  it once takes that question out of the loop. The local lives in a scope of
+  its own, since one kernel may well scale two statements by the same name.
+
+  A literal has no address, needs no local and gets no scope.
+  """
+  if isinstance(value, (int, float)):
+    yield scaleFactor(datatype, value)
+    return
+  with cpp.AnonymousScope():
+    cpp(f'{datatype.ctype()} const {name} = {value};')
+    yield name
+
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, fixed={}, indexNo=None):
   flops = 0
@@ -96,6 +145,13 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX
     for index in indexNames:
       if index in fixed and not (ranges[index].start <= fixed[index] < ranges[index].stop):
         return 0
+    # A nest with nothing between its loops is one iteration space, and saying
+    # so beats marking the innermost loop alone: a short innermost loop is
+    # unrolled away before the vectoriser sees it, and what is left is scalar.
+    # A pinned index breaks the nesting, so it rules the clause out.
+    if pragmaSimd and len(indexNames) > 1 and not any(i in fixed for i in indexNames):
+      cpp(f'#pragma omp simd collapse({len(indexNames)})')
+      pragmaSimd = False
   if indexNo < 0:
     if firstLoop:
       with cpp.AnonymousScope():
@@ -253,7 +309,7 @@ class BatchedOperationsAux:
     if term.is_compute_constant or term.is_temporary:
       return '0'
     else:
-      return f'{self.EXTRA_OFFSET_NAME}_{term.name}'
+      return f'{cls.EXTRA_OFFSET_NAME}_{term.name}'
 
 class TinytcKernelArgument:
 

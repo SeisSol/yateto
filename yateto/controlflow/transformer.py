@@ -84,7 +84,7 @@ class SubstituteBackward(object):
             found = j
             break
         if found >= 0:
-          when = u.action.result
+          when = cfg[found].action.result
           maySubs = cfg[found].action.maySubstitute(when, by, term=False) \
                     and all([cfg[j].action.maySubstitute(when, by) for j in range(found+1,i+1)]) \
                     and _guardsCompatible(cfg, range(found, i+1), va.getGuard())
@@ -147,7 +147,6 @@ class MergeActions(object):
 
 class DetermineLocalInitialization(object):
   def visit(self, cfg):
-    lcls = dict()
     numBuffers = 0
     usedBuffers = dict()
     freeBuffers = deque()
@@ -203,6 +202,6 @@ class FindFusedGemms(object):
       for pp in cfg:
         context.process(pp)
       cfg = context.get_cfg()
-    except Expression as err:
+    except Exception as err:
       print(f'Warning: {err}')
     return cfg

@@ -13,6 +13,7 @@ class Node(ABC):
     self.indices = None
     self._children = []
     self._eqspp = None
+    self._boundingBox = None
     self.datatype = None
     self.prefetch = None
 
@@ -45,7 +46,15 @@ class Node(ABC):
     self._eqspp = spp
 
   def boundingBox(self):
-    return BoundingBox.fromSpp(self._eqspp)
+    # keyed on the identity of the pattern, so any replacement of _eqspp
+    # (setEqspp, setIndexPermutation, deepcopy) drops the cached box; the cache
+    # keeps the pattern alive, so no other object can take over its address
+    cached = self._boundingBox
+    if cached is not None and cached[0] is self._eqspp:
+      return cached[1]
+    box = BoundingBox.fromSpp(self._eqspp)
+    self._boundingBox = (self._eqspp, box)
+    return box
 
   @abstractmethod
   def memoryLayout(self):
@@ -78,12 +87,21 @@ class Node(ABC):
     return reshaped.broadcast(bcst)
 
   @staticmethod
+  def _operand(value):
+    """A tensor written without indices is the rank-0 operand of that tensor.
+
+    Which is what a scalar is: it has a shape, a layout and a name, and only
+    its calling convention sets it apart. Anything else -- a number -- is a
+    literal, and Elementwise carries those as templates, since a literal needs
+    neither storage nor a name.
+    """
+    return value[''] if isinstance(value, Tensor) else value
+
+  @staticmethod
   def _scalarOperand(value):
     """Turn a scale factor into an operand.
 
-    A number stays a number: Elementwise carries non-node operands as templates,
-    and a literal needs neither storage nor a name. A named scalar becomes a
-    rank-0 operand.
+    A number stays a number, and a named scalar becomes a rank-0 operand.
     """
     if isinstance(value, Node):
       return value
@@ -280,7 +298,9 @@ class NAryOp(Node):
   """Mixin for operations whose indices are the merge of their operands'."""
 
   def deduceIndices(self):
-    indices = deepcopy(self[0].indices)
+    # Indices are built once and never written to afterwards, so the merge can
+    # start from the first child's object instead of a copy of it
+    indices = self[0].indices
     for i in range(1, len(self)):
       indices = indices.mergeStrict(self[i].indices)
     if not all(child.indices <= indices for child in self):
@@ -643,6 +663,12 @@ class Elementwise(NAryOp, Op):
   def __init__(self, optype: ops.Operation, *terms):
     optype.checkArity(len(terms))
 
+    # A tensor handed over without indices is an operand, not a template: it
+    # has a name the kernel has to declare and a value the caller sets, and
+    # writing it into the expression as if it were a literal leaves the
+    # generated code naming something that was never declared.
+    terms = tuple(Node._operand(term) for term in terms)
+
     nodeTerms = [term for term in terms if isinstance(term, Node)]
     if len(nodeTerms) == 0:
       raise ValueError('Elementwise needs at least one tensor-valued operand.')
@@ -759,6 +785,11 @@ class Reduction(UnaryOp):
   def computeSparsityPattern(self, *spps):
     assert len(spps) <= 1
     spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    if not self.optype.preservesZero():
+      # folding an all-zero slice need not give zero, so nothing can be ruled out
+      return aspp.dense(self.indices.shape())
+    # the fold is over slices that are all zero unless one of them is not, which
+    # is what the union along the reduced axis says
     return spp.indexSum(self.term().indices, self.indices)
 
   def __str__(self):
@@ -767,7 +798,7 @@ class Reduction(UnaryOp):
 
 class Accumulate(NAryOp, Op):
   def __init__(self, optype, *operands):
-    super().__init__(*operands)
+    super().__init__(*[Node._operand(operand) for operand in operands])
 
     self.optype = optype
     self._deduceIndicesIfPossible()

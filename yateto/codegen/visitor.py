@@ -9,7 +9,6 @@ from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsL
 from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
-from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux, KernelAttributes
@@ -207,7 +206,13 @@ class OptimizedKernelGenerator(KernelGenerator):
     inTensors = {}
     outTensors = {}
 
-    for scalar in scalarsP:
+    # A by-value operand is a scalar wherever it turns up, not only in the
+    # scaling slot of an action. Collected here rather than only from there,
+    # because a kernel that uses one both ways would otherwise declare the name
+    # twice -- once by value and once as a pointer -- and not compile.
+    byValue = [var.tensor for var in variables if var.tensor.isPassedByValue()]
+    variables = [var for var in variables if not var.tensor.isPassedByValue()]
+    for scalar in sorted(set(scalarsP) | set(byValue), key=str):
       self.KernelOutline._addTensor(scalar, scalars)
       datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
     for var in variables:
@@ -689,7 +694,6 @@ class UnitTestGenerator(KernelGenerator):
          prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
          cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
              initNS = InitializerGenerator.INIT_NAMESPACE,
-             supportNS = SUPPORT_LIBRARY_NAMESPACE,
              groupTemplate=self._groupTemplate(var.tensor),
              prefix=prefix,
              baseName=var.tensor.baseName(),

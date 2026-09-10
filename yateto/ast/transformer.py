@@ -205,8 +205,11 @@ class AssignPrefetch(Transformer):
         if delta < minDelta:
           minDelta = delta
           match = node
-      self._bestMatch[node] = tensor
-      del prefetchCapabilities[node]
+      if match is None:
+        # every capability is taken; the caller keeps the tensor for the next AST
+        break
+      self._bestMatch[match] = tensor
+      del prefetchCapabilities[match]
 
   def generic_visit(self, node):
     if node in self._bestMatch:

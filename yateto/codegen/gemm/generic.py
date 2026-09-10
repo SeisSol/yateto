@@ -17,6 +17,11 @@ class Generic(object):
       return 3
     return 2
 
+  @staticmethod
+  def _scale(alpha):
+    """The scale factor as a prefix, or nothing when it is one."""
+    return '' if alpha == 1.0 else f'{alpha} * '
+
   def _denseAccess(self, name, offset, stride, i, j):
     return '{name}[{offset} + {stride[0]}*{i} + {stride[1]}*{j}]'.format(
 			name = name,
@@ -90,9 +95,9 @@ class Generic(object):
 
           nzcount += 1
 
-          cpp( '{result} += {alpha} * {a} * {b};'.format(
+          cpp( '{result} += {alpha}{a} * {b};'.format(
                 result = Caccess(eA[0], eB[1]),
-                alpha = d.alpha,
+                alpha = self._scale(d.alpha),
                 a = Aaccess(idxA),
                 b = Baccess(idxB)
               )
@@ -140,9 +145,9 @@ class Generic(object):
       for idx, entry in spp:
         e = entry[::-1] if trans else entry
         if e[0] < sizes[0] and e[1] < sizes[1]:
-          cpp( '{result} += {alpha} * {dense} * {sparse};'.format(
+          cpp( '{result} += {alpha}{dense} * {sparse};'.format(
               result = result(e),
-              alpha = d.alpha,
+              alpha = self._scale(d.alpha),
               dense = dense(e),
               sparse = sparse(idx)
             )
@@ -168,16 +173,18 @@ class Generic(object):
             )
           )
       with cpp.For('int k = 0; k < {0}; ++k'.format(k.size())):
+        # neither the element of B nor the scale factor depends on m, so both
+        # are read and multiplied once per column of A rather than once per
+        # entry of it -- and the inner loop is then an axpy over m
+        # `auto`, so that the operand keeps the type the whole expression used
+        # to promote it to -- an integer tensor with a floating scale factor
+        # would otherwise be truncated one multiplication too early
+        cpp(f'auto const _b = {self._scale(d.alpha)}{Baccess("k", "n")};')
         with cpp.For('int m = 0; m < {0}; ++m'.format(m.size())):
-          cpp( '{C} += {alpha} * {A} * {B};'.format(
-              C = Caccess('m', 'n'),
-              alpha = d.alpha,
-              A = Aaccess('m', 'k'),
-              B = Baccess('k', 'n')
-            )
-          )
+          cpp('{C} += {A} * _b;'.format(C = Caccess('m', 'n'), A = Aaccess('m', 'k')))
 
-    return  m.size() * n.size() * (self._flopInit(d.beta) + self._flop(d.alpha) * k.size())
+    return (m.size() * n.size() * (self._flopInit(d.beta) + 2 * k.size())
+            + n.size() * k.size() * (0 if d.alpha == 1.0 else 1))
 
   def generate(self, cpp, routineCache):
     d = self._descr

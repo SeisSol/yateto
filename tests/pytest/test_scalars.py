@@ -204,3 +204,159 @@ class TestScalingSemantics:
         # terms is derived from the children, so it must show the new one
         assert replacement in expr.terms
         assert expr.scaledTerm() is replacement
+
+
+class TestScalarOperand:
+    """A scalar handed to an operation directly, rather than through `*`."""
+
+    @staticmethod
+    def _emit(statements):
+        import pathlib
+        import tempfile
+        from yateto import Generator, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        arch = useArchitectureIdentifiedBy('dhsw')
+        generator = Generator(arch)
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return ((pathlib.Path(out) / 'kernel.cpp').read_text(),
+                    (pathlib.Path(out) / 'kernel.h').read_text())
+
+    def test_a_scalar_operand_reaches_the_signature(self):
+        """It used to be carried as a template, i.e. written into the
+        expression as if it were a literal, and the kernel then named
+        something it never declared."""
+        import yateto.functions as yf
+        A = Tensor('A', (8, 8))
+        C = Tensor('C', (8, 8))
+        alpha = Scalar('alpha')
+        code, header = self._emit([C['ij'] <= yf.mul(alpha, A['ij'])])
+        assert 'double alpha' in header
+        assert 'alpha' in code
+
+    def test_it_agrees_with_the_operator(self):
+        import yateto.functions as yf
+        A = Tensor('A', (8, 8))
+        C = Tensor('C', (8, 8))
+        alpha = Scalar('alpha')
+        viaOperator, _ = self._emit([C['ij'] <= alpha * A['ij']])
+        viaFunction, _ = self._emit([C['ij'] <= yf.mul(alpha, A['ij'])])
+        assert viaOperator == viaFunction
+
+    def test_a_scalar_summand_reaches_the_signature(self):
+        """Not only a factor: any operation may take one.
+
+        NOTE: a scalar that is not a factor arrives as a pointer rather than by
+        value, because only the scaling path routes it through ScalarsSet. The
+        kernel is consistent -- it declares the name and reads `beta[0]` -- but
+        that is not what Scalar promises.
+        """
+        import yateto.functions as yf
+        A = Tensor('A', (8, 8))
+        C = Tensor('C', (8, 8))
+        beta = Scalar('beta')
+        code, header = self._emit([C['ij'] <= yf.add(beta, A['ij'])])
+        assert 'beta' in header
+        assert 'beta' in code
+
+    def test_a_literal_stays_a_literal(self):
+        """A number needs neither storage nor a name."""
+        import yateto.functions as yf
+        A = Tensor('A', (8, 8))
+        C = Tensor('C', (8, 8))
+        code, header = self._emit([C['ij'] <= yf.maximum(2.5, A['ij'])])
+        assert '2.5' in code
+
+
+class TestScaledOperations:
+    """A factor applies to the operation's result, not to its first operand."""
+
+    @staticmethod
+    def _emit(statements):
+        import pathlib
+        import tempfile
+        from yateto import Generator, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return (pathlib.Path(out) / 'kernel.cpp').read_text()
+
+    def test_a_scaled_operation_is_parenthesised(self):
+        """`*` binds tighter than `+`, `&`, `|`, `^` and every comparison."""
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        code = self._emit([C['ij'] <= 2.0 * yf.add(A['ij'], A['ij'])])
+        assert '2.0 * ((' in code
+
+    def test_a_boolean_result_is_not_scaled(self):
+        """Every non-zero factor is the same boolean, so it would be lost."""
+        import pytest as _pytest
+        import yateto.functions as yf
+        A = Tensor('A', (N, N), datatype=Datatype.BOOL)
+        S = Tensor('S', (N, N), datatype=Datatype.BOOL)
+        with _pytest.raises(ValueError, match='boolean'):
+            self._emit([S['ij'] <= 2.0 * yf.logical_and(A['ij'], A['ij'])])
+
+    def test_an_integer_result_is_not_scaled_by_a_fraction(self):
+        import pytest as _pytest
+        AI = Tensor('AI', (N, N), datatype=Datatype.I32)
+        CI = Tensor('CI', (N, N), datatype=Datatype.I32)
+        with _pytest.raises(ValueError, match='truncate'):
+            self._emit([CI['ij'] <= 2.5 * AI['ij']])
+
+    def test_a_whole_factor_on_an_integer_result_is_fine(self):
+        AI = Tensor('AI', (N, N), datatype=Datatype.I32)
+        CI = Tensor('CI', (N, N), datatype=Datatype.I32)
+        code = self._emit([CI['ij'] <= 2.0 * AI['ij']])
+        body = code[code.index('k0::execute'):]
+        body = body[:body.index('\n  }\n')]
+        assert 'int32_t>(2LL)' in body
+        assert '2.0' not in body
+
+
+class TestByValueOperand:
+    """A by-value operand stays by value wherever it appears."""
+
+    @staticmethod
+    def _emit(statements):
+        import pathlib
+        import tempfile
+        from yateto import Generator, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return ((pathlib.Path(out) / 'kernel.cpp').read_text(),
+                    (pathlib.Path(out) / 'kernel.h').read_text())
+
+    def test_an_operand_is_read_by_name(self):
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        beta = Scalar('beta')
+        code, header = self._emit([C['ij'] <= yf.add(beta, A['ij'])])
+        assert 'double beta' in header
+        assert 'beta[0]' not in code
+
+    def test_one_scalar_used_two_ways_is_declared_once(self):
+        """As a factor it went through ScalarsSet and as an operand through the
+        variables, so the kernel declared the name twice with two types."""
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        beta = Scalar('beta')
+        # one kernel, two statements: the same name reached both collections
+        code, header = self._emit([[C['ij'] <= beta * A['ij'],
+                                    C['ij'] <= yf.add(beta, B['ij'])]])
+        assert header.count('double beta') == 1
+        assert 'double const* beta' not in header
+        assert 'beta[0]' not in code

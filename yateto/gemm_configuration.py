@@ -221,8 +221,6 @@ class Eigen(BLASlike):
 }}
     """.format(precA=datatypeA.ctype(TypeFlavor.EIGEN),
                precB=datatypeB.ctype(TypeFlavor.EIGEN),
-               precC=datatypeC.ctype(TypeFlavor.EIGEN),
-               M=M, N=N,
                matA=self.matrixType(datatypeA.ctype(TypeFlavor.EIGEN), self.sizeTrans(M,K,transA), ldA, alignedA),
                matB=self.matrixType(datatypeB.ctype(TypeFlavor.EIGEN), self.sizeTrans(K,N,transB), ldB, False),
                matC=self.matrixType(datatypeC.ctype(TypeFlavor.EIGEN), (M, N), ldC, alignedC),

@@ -205,3 +205,38 @@ class TestFlopCounts:
         kernel.prepareUntilUnitTest(arch)
         kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
         assert kernel.nonZeroFlops == N * N
+
+
+class TestSparseOperands:
+    """An element-wise operation on a sparse operand is written out entry by
+    entry, with a literal zero where the operand has no entry."""
+
+    def test_a_sparse_operand_is_unrolled_with_zeros(self, tmp_path):
+        import numpy as np
+        from yateto import Tensor, Generator, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        from yateto.memory import CSCMemoryLayout
+        import yateto.functions as yf
+
+        left = np.zeros((4, 4), dtype=bool)
+        left[0, 0] = left[1, 1] = True
+        right = np.zeros((4, 4), dtype=bool)
+        right[0, 0] = right[3, 1] = True
+
+        A = Tensor('A', (4, 4), spp=left)
+        A.setMemoryLayout(CSCMemoryLayout)
+        B = Tensor('B', (4, 4), spp=right)
+        B.setMemoryLayout(CSCMemoryLayout)
+        C = Tensor('C', (4, 4))
+
+        arch = useArchitectureIdentifiedBy('dhsw')
+        generator = Generator(arch)
+        generator.add('sum', C['ij'] <= yf.add(A['ij'], B['ij']))
+        generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+
+        kernel = (tmp_path / 'kernel.cpp').read_text()
+        # the union of the two patterns is written, and B contributes a literal
+        # zero where it has no entry of its own
+        assert 'C[0] = (A[0]) + (B[0]);' in kernel
+        assert 'C[5] = (A[1]) + (0.0);' in kernel
+        assert 'C[7] = (0.0) + (B[1]);' in kernel

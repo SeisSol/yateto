@@ -13,7 +13,9 @@ class Generic(object):
       prefix = term.name
     else:
       # NOTE: format the scale factor in the result's datatype, so an int32
-      #       result is not silently multiplied by a double literal
+      #       result is not silently multiplied by a double literal. A factor
+      #       generate() has already read into a local arrives as its name and
+      #       passes through untouched.
       prefix = f'{scaleFactor(datatype or term.datatype, alpha)} * {term.name}'
 
     if entry is None:
@@ -37,14 +39,15 @@ class Generic(object):
 
 
     class CopyScaleAddBody(object):
-      def __init__(self, resultEntry, termEntry):
+      def __init__(self, alpha, resultEntry, termEntry):
+        self.alpha = alpha
         self.resultEntry = resultEntry
         self.termEntry = termEntry
 
       def __call__(s):
         op = '='
         flop = 0
-        alpha = d.alpha
+        alpha = s.alpha
         if alpha not in [-1.0, 1.0]:
           flop += 1
         if d.beta == 1.0 and alpha == -1.0:
@@ -60,18 +63,22 @@ class Generic(object):
 
         return flop
 
-    if d.term.memoryLayout.isSparse():
+    # NOTE: read the factor in the result's datatype, so an int32 result is not
+    #       silently multiplied by a double literal. A factor of one or minus
+    #       one is folded into the assignment and never reaches a local.
+    hoistable = d.alpha if d.alpha not in (0.0, 1.0, -1.0) else float(d.alpha)
+    with hoisted(cpp, d.result.datatype, hoistable, '_alpha') as alpha:
 
-      indexmap = d.result.indices.positions(d.term.indices, sort=False)
+      if d.term.memoryLayout.isSparse():
 
-      flops = 0
-      nonzeros = d.result.eqspp.nonzero()
-      for entryR in sorted(zip(*nonzeros), key=lambda x: x[::-1]):
-        entry = tuple(entryR[ pos ] for pos in indexmap)
-        flops += CopyScaleAddBody(entryR, entry)()
+        indexmap = d.result.indices.positions(d.term.indices, sort=False)
 
-      return flops
+        flops = 0
+        nonzeros = d.result.eqspp.nonzero()
+        for entryR in sorted(zip(*nonzeros), key=lambda x: x[::-1]):
+          entry = tuple(entryR[ pos ] for pos in indexmap)
+          flops += CopyScaleAddBody(alpha, entryR, entry)()
 
-    else:
+        return flops
 
-      return forLoops(cpp, d.result.indices, d.loopRanges, CopyScaleAddBody(None, None))
+      return forLoops(cpp, d.result.indices, d.loopRanges, CopyScaleAddBody(alpha, None, None))

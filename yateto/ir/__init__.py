@@ -14,7 +14,7 @@ indices of a loop that states its entries, and a sparse operand -- which has
 an address for a known entry and none for an index -- becomes addressable.
 """
 
-from .address import address, constantEntry, storesValue
+from .address import address, constantEntry, entry, storesValue
 from .affine import Affine, Index
 from .analysis import countFlops
 from .build import indexMap, load, loopNest, scaleFactor, scaled, zero

@@ -1,5 +1,6 @@
 """Keeping in the loop body what a nest would otherwise put in memory."""
 
+from .address import entry
 from .core import Region, ValueOp
 from .ops import (Arith, Call, Fold, If, Load, Loop, Memset, Pointer, Scope,
                   Store)
@@ -40,31 +41,32 @@ def _forward(region):
     _substitute(op, replaced)
 
     if isinstance(op, Load):
-      entry = (op.buffer.name, _signature(op.coords))
-      if entry in known:
-        replaced[id(op)] = known[entry]
-        continue
-      known[entry] = op
+      place = _place(op)
+      if place is not None:
+        if place in known:
+          replaced[id(op)] = known[place]
+          continue
+        known[place] = op
       ops.append(op)
       continue
 
     if isinstance(op, Store):
-      entry = (op.buffer.name, _signature(op.coords))
-      if op.accumulate is not None and entry in known:
+      place = _place(op)
+      if op.accumulate is not None and place in known:
         # what it accumulates into is a value of this iteration, so the
         # combination is one too and the store just puts the result there
-        combined = Arith(op.accumulate, [known[entry], op.value],
+        combined = Arith(op.accumulate, [known[place], op.value],
                          op.buffer.datatype)
         ops.append(combined)
         op.value = combined
         op.accumulate = None
-      # what the buffer holds elsewhere is no longer known
+      # what the buffer holds elsewhere is no longer known -- and where the
+      # store lands is not known at all, that is everywhere in it
       for other in [other for other in known
-                    if other[0] == op.buffer.name and other != entry]:
+                    if other[0] == op.buffer.name and other != place]:
         del known[other]
-      known[entry] = op.value if op.accumulate is None else None
-      if known[entry] is None:
-        del known[entry]
+      if place is not None and op.accumulate is None:
+        known[place] = op.value
       ops.append(op)
       continue
 
@@ -85,8 +87,15 @@ def _substitute(op, replaced):
     op.value = replaced.get(id(op.value), op.value)
 
 
-def _signature(coords):
-  return tuple(coord.ccode() for coord in coords)
+def _place(op):
+  """Which entry of which buffer an access touches, or None where it is unclear.
+
+  Named by the offset the access is formed from rather than by the coordinate
+  it spells, so that two views into one buffer -- one coordinate, two entries
+  -- are told apart.
+  """
+  offset = entry(op.buffer, op.coords)
+  return None if offset is None else (op.buffer.name, offset.ccode())
 
 
 def _dropDeadStores(region):

@@ -55,6 +55,24 @@ def address(memoryLayout, coords, axes=None):
   return result
 
 
+def entry(buffer, coords):
+  """Which entry of a buffer an access touches, as an offset into its storage.
+
+  Two accesses touch one entry when they offset into one buffer by the same
+  expression. The coordinates do not say so on their own: a view starts
+  somewhere inside what it views, so two operands that are views into one
+  buffer name the same coordinate and mean two different entries.
+
+  None where there is no expression to compare -- a sparse layout reached by
+  something that is still an index. Where in the buffer such an access lands
+  is not known, and no two of them may be taken for the same entry.
+  """
+  try:
+    return address(buffer.memoryLayout, coords)
+  except ValueError:
+    return None
+
+
 def constantEntry(coords):
   """The coordinates as a tuple of numbers, or None if any is still an index."""
   coords = [Affine.of(coord) for coord in coords]

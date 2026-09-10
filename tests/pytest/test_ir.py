@@ -596,3 +596,34 @@ class TestEmission:
         body = emit([C['ij'] <= S['ij']])
         assert 'for (' not in body
         assert 'C[0] = S[0];' in body
+
+
+class TestViews:
+    """A view starts somewhere inside the buffer it views.
+
+    Two of them into one buffer therefore name the same coordinate and mean
+    two different entries, which is what an access has to be told apart by.
+    Getting it wrong is silent: the code compiles, the numbers are wrong.
+    """
+
+    def test_two_slices_of_one_tensor_are_read_where_each_starts(self):
+        A = Tensor('A', (N, 2 * N))
+        C = Tensor('C', (N, N))
+        body = emit([C['ij'] <= (A['ij']).subslice('j', N, 2 * N)
+                     * (A['ij']).subslice('j', 0, N)])
+        assert 'A[1*_i + 4*_j + 16]' in body
+        assert 'A[1*_i + 4*_j]' in body
+
+    def test_a_load_of_what_a_slice_wrote_is_not_that_value(self):
+        base = ir.Buffer('A', Datatype.F64, DenseMemoryLayout((N, N)))
+        view = ir.Buffer('A', Datatype.F64,
+                         DenseMemoryLayout((N, N)).subslice(1, 1, N))
+        index = ir.Index('i')
+        body = ir.Region()
+        builder = ir.Builder(body)
+        builder.add(ir.Store(view, [index, ir.Affine(0)], ir.Const(1.0, Datatype.F64)))
+        read = builder.add(ir.Load(base, [index, ir.Affine(0)]))
+        builder.add(ir.Store(base, [index, ir.Affine(1)], read))
+        region = ir.Region([ir.Loop([index], Range(0, N), body)])
+        ir.scalarize(region)
+        assert len([op for op in region.walk() if isinstance(op, ir.Load)]) == 1

@@ -1,5 +1,6 @@
 """Putting adjacent nests over one iteration space into one nest."""
 
+from .address import entry
 from .core import Region
 from .ops import Call, Const, Load, Loop, Memset, Pointer, Read, Store
 from .passes import _clone
@@ -83,12 +84,16 @@ def _nest(op):
   """The chain of loops and the body it ends on, or None where there is none.
 
   A nest that states its entries, or that holds a call or a pointer into a
-  buffer, is not one this can reason about.
+  buffer, is not one this can reason about. Neither is one that reaches into
+  a buffer at a place that is a lookup rather than an expression: where it
+  lands cannot be compared with where the nest beside it lands.
   """
   if not isinstance(op, Loop) or op.isUnrollable():
     return None
   for inner in op.region.walk():
     if isinstance(inner, (Call, Pointer, Memset)):
+      return None
+    if isinstance(inner, (Load, Store)) and entry(inner.buffer, inner.coords) is None:
       return None
   indices, ranges = [], []
   loop = op
@@ -117,9 +122,9 @@ def _accesses(op):
   reads, writes = {}, {}
   for inner in op.region.walk():
     if isinstance(inner, Load):
-      reads.setdefault(inner.buffer.name, set()).add(_signature(inner.coords, canonical))
+      reads.setdefault(inner.buffer.name, set()).add(_signature(inner, canonical))
     elif isinstance(inner, Store):
-      writes.setdefault(inner.buffer.name, set()).add(_signature(inner.coords, canonical))
+      writes.setdefault(inner.buffer.name, set()).add(_signature(inner, canonical))
   return reads, writes
 
 
@@ -147,13 +152,18 @@ def _touched(op):
   return set(reads) | set(writes)
 
 
-def _signature(coords, canonical):
-  """Which entry is touched, said as an offset from the loops of the nest."""
-  return tuple((coord.constant(),
-                tuple(sorted((canonical.get(index, index.name),
-                              coord.coefficient(index))
-                             for index in coord.indices())))
-               for coord in coords)
+def _signature(access, canonical):
+  """Which entry is touched, said as an offset from the loops of the nest.
+
+  The offset into the buffer and not the coordinate that names it: two
+  operands may be views into one buffer that start at different places, and
+  then one coordinate is two entries.
+  """
+  offset = entry(access.buffer, access.coords)
+  return (offset.constant(),
+          tuple(sorted((canonical.get(index, index.name),
+                        offset.coefficient(index))
+                       for index in offset.indices())))
 
 
 def _independent(group, candidate):

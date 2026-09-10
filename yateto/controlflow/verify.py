@@ -74,7 +74,7 @@ def _definitions(cfg):
         f'"{name}" is read at {between}, between the steps that define it')
 
   for position, action in enumerate(cfg):
-    for var in action.term.variables():
+    for var in action.reads():
       if var.isLocal() and var.name not in written:
         findings.append(f'"{var}" is read at {position} and never written')
   return findings
@@ -111,7 +111,7 @@ def _guards(cfg):
   findings = []
   for position, action in enumerate(cfg):
     guard = action.getGuard()
-    for var in action.term.variables():
+    for var in action.reads():
       if var.isLocal() and var.name in written \
          and not guard.implies(written[var.name]):
         findings.append(
@@ -121,10 +121,10 @@ def _guards(cfg):
 
 
 def _operands(action):
-  return action.term.variableList()
+  return action.operands
 
 
 def _reads(action, name):
   if action.add and action.result.name == name:
     return True
-  return any(var.name == name for var in action.term.variables())
+  return any(var.name == name for var in action.reads())

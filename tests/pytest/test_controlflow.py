@@ -9,7 +9,7 @@ a ``ProgramAction`` of the shape
 
     result [+]= [scalar *] term
 
-where ``term`` is either a single operand or an ``Expression``
+each holding a destination and the operands read into it
 (a LoopOverGEMM, a Permute, a Broadcast, ...).  Subsequent CFG-level
 passes do classic compiler things: liveness analysis, copy
 propagation, dead-store elimination, action merging.
@@ -44,7 +44,6 @@ from yateto.ast.transformer import (
 from yateto.ast.visitor import FindIndexPermutations
 from yateto.ast.transformer import SelectIndexPermutations
 from yateto.controlflow.graph import (
-    Expression,
     Guard,
     ProgramAction,
 )
@@ -155,7 +154,7 @@ class TestAST2ControlFlow:
         # There must be at least one action.
         assert len(cfg) > 0
 
-    def test_has_action_with_result_and_term(self, arch):
+    def test_has_action_with_result_and_operands(self, arch):
         A = Tensor("A", (8, 8))
         B = Tensor("B", (8, 8))
         C = Tensor("C", (8, 8))
@@ -164,7 +163,7 @@ class TestAST2ControlFlow:
 
         action = cfg[0]
         assert action.result is not None
-        assert action.term is not None
+        assert action.operands
 
     def test_temporary_names_are_unique(self, arch):
         # Each _tmp<N> name should appear exactly once as a result.
@@ -293,31 +292,31 @@ class TestVerify:
     def test_a_graph_that_is_as_it_is_taken_to_be_says_nothing(self, arch):
         A, C = self._global('A'), self._global('C', writable=True)
         tmp = self._tmp()
-        assert verify([ProgramAction(tmp, A, add=False),
-                       ProgramAction(C, tmp, add=False)]) == []
+        assert verify([ProgramAction.copy(tmp, A, add=False),
+                       ProgramAction.copy(C, tmp, add=False)]) == []
 
     def test_one_definition_and_accumulations_into_it_is_one_definition(self, arch):
         A, B, C = self._global('A'), self._global('B'), self._global('C', True)
         tmp = self._tmp()
-        assert verify([ProgramAction(tmp, A, add=False),
-                       ProgramAction(tmp, B, add=True),
-                       ProgramAction(C, tmp, add=False)]) == []
+        assert verify([ProgramAction.copy(tmp, A, add=False),
+                       ProgramAction.copy(tmp, B, add=True),
+                       ProgramAction.copy(C, tmp, add=False)]) == []
 
     def test_two_definitions_of_one_temporary_are_reported(self, arch):
         A, B, C = self._global('A'), self._global('B'), self._global('C', True)
         tmp = self._tmp()
-        found, = verify([ProgramAction(tmp, A, add=False),
-                         ProgramAction(tmp, B, add=False),
-                         ProgramAction(C, tmp, add=False)])
+        found, = verify([ProgramAction.copy(tmp, A, add=False),
+                         ProgramAction.copy(tmp, B, add=False),
+                         ProgramAction.copy(C, tmp, add=False)])
         assert '_tmp0' in found and 'one definition' in found
 
     def test_a_read_between_the_steps_of_a_definition_is_reported(self, arch):
         A, B, C = self._global('A'), self._global('B'), self._global('C', True)
         tmp, other = self._tmp(), self._tmp('_tmp1')
-        found, = verify([ProgramAction(tmp, A, add=False),
-                         ProgramAction(other, tmp, add=False),
-                         ProgramAction(tmp, B, add=True),
-                         ProgramAction(C, tmp, add=False)])
+        found, = verify([ProgramAction.copy(tmp, A, add=False),
+                         ProgramAction.copy(other, tmp, add=False),
+                         ProgramAction.copy(tmp, B, add=True),
+                         ProgramAction.copy(C, tmp, add=False)])
         assert '_tmp0' in found and 'between the steps' in found
 
     def test_a_view_of_a_temporary_is_reported(self, arch):
@@ -329,22 +328,22 @@ class TestVerify:
         # it does not stand up either -- the slice keeps room for fewer
         # entries than the pattern says it has values at -- so ask for the one
         # finding this is about
-        found = verify([ProgramAction(tmp, A, add=False),
-                        ProgramAction(C, sliced, add=False)])
+        found = verify([ProgramAction.copy(tmp, A, add=False),
+                        ProgramAction.copy(C, sliced, add=False)])
         assert any('_tmp0' in f and 'view of a temporary' in f for f in found)
 
     def test_a_read_outside_the_guard_it_was_written_under_is_reported(self, arch):
         A, C = self._global('A'), self._global('C', writable=True)
         flag = self._global('flag')
         tmp = self._tmp()
-        found, = verify([ProgramAction(tmp, A, add=False,
-                                       condition=Guard.literal(flag)),
-                         ProgramAction(C, tmp, add=False)])
+        found, = verify([ProgramAction.copy(tmp, A, add=False,
+                                        condition=Guard.literal(flag)),
+                         ProgramAction.copy(C, tmp, add=False)])
         assert '_tmp0' in found and 'does not imply' in found
 
     def test_a_temporary_that_is_never_written_is_reported(self, arch):
         C = self._global('C', writable=True)
-        found, = verify([ProgramAction(C, self._tmp(), add=False)])
+        found, = verify([ProgramAction.copy(C, self._tmp(), add=False)])
         assert '_tmp0' in found and 'never written' in found
 
     def test_a_statement_that_does_not_stand_up_is_reported(self, arch):
@@ -360,7 +359,7 @@ class TestVerify:
         narrow[:2, :2] = True
         C = Operand('C', None, DenseMemoryLayout.fromSpp(aspp.general(narrow)),
                     self._spp(), tensor=Tensor('C', (4, 4)), writable=True)
-        found = verify([ProgramAction(C, A, add=False)])
+        found = verify([ProgramAction.copy(C, A, add=False)])
         assert any('does not stand up' in f for f in found)
 
 
@@ -383,7 +382,7 @@ class TestStorageFacts:
         A = Tensor("A", (4, 4), values, alignStride=False)
         C = Tensor("C", (4, 4))
         cfg = self._cfg(arch, C["ij"] <= A["ij"])
-        operands = [var for action in cfg for var in action.term.variables()
+        operands = [var for action in cfg for var in action.reads()
                     if var.name == "A"]
         assert operands and all(var.is_compute_constant for var in operands)
         assert all(var.values is not None for var in operands)
@@ -408,7 +407,7 @@ class TestStorageFacts:
         C = Tensor("C", (4, 4))
         cfg = self._cfg(arch, C["ij"] <= A["ij"])
         from yateto.ast.indices import Indices
-        var = next(v for a in cfg for v in a.term.variables() if v.name == "A")
+        var = next(v for a in cfg for v in a.reads() if v.name == "A")
         fromVar = IndexedTensorDescription.fromVar(var, Indices("ij", (4, 4)))
         read = fromVar.readFrom(var)
         for field in ('name', 'memoryLayout', 'is_compute_constant',
@@ -422,7 +421,7 @@ class TestStorageFacts:
         A = Tensor("A", (4, 4))
         C = Tensor("C", (4, 4))
         cfg = self._cfg(arch, C["ij"] <= A["ij"])
-        var = next(v for a in cfg for v in a.term.variables() if v.name == "A")
+        var = next(v for a in cfg for v in a.reads() if v.name == "A")
         assert isinstance(var, IndexedTensorDescription)
         assert list(var.indices) == ["i", "j"]
         assert var.tensor is A and not var.is_temporary
@@ -463,7 +462,7 @@ class TestStorageFacts:
                                Operand("C", None, ml, None)) is one
 
 
-class TestExpressionWithoutItsNode:
+class TestStatementWithoutItsNode:
     """What a statement computes, it says itself.
 
     The node it was built from is the generator's to read -- which backend
@@ -484,8 +483,9 @@ class TestExpressionWithoutItsNode:
         import numpy as np
         from yateto import aspp
         spp = aspp.general(np.tril(np.ones((4, 4), dtype=bool)))
-        expression = Expression("Elementwise", [self._operand("A", "ij")],
-                                Indices("ij", (4, 4)), spp)
+        expression = ProgramAction("Elementwise", None,
+                                   [self._operand("A", "ij")],
+                                   Indices("ij", (4, 4)), spp, False)
         assert expression.eqspp is spp
         assert list(expression.indices) == ["i", "j"]
         assert expression.prefetch is None
@@ -496,15 +496,16 @@ class TestExpressionWithoutItsNode:
         # index sits between them
         for left, matrices in (("ilk", True), ("ikl", False)):
             operands = [self._operand("A", left), self._operand("B", "kjl")]
-            expression = Expression("LoopOverGEMM", operands,
-                                    Indices("ilj", (4, 4, 4)), None,
-                                    groups=groups)
+            expression = ProgramAction("LoopOverGEMM", None, operands,
+                                       Indices("ilj", (4, 4, 4)), None, False,
+                                       groups=groups)
             layouts = [operand.memoryLayout for operand in operands]
             assert expression.mayReadOperands(layouts) is matrices
 
     def test_anything_that_is_not_a_product_asks_nothing(self, arch):
-        expression = Expression("Elementwise", [self._operand("A", "ij")],
-                                Indices("ij", (4, 4)), None)
+        expression = ProgramAction("Elementwise", None,
+                                   [self._operand("A", "ij")],
+                                   Indices("ij", (4, 4)), None, False)
         assert expression.mayReadOperands([None])
 
     def test_the_operation_and_the_immediates_are_the_statement_s(self, arch):
@@ -514,8 +515,8 @@ class TestExpressionWithoutItsNode:
         A = Tensor("A", (4, 4))
         C = Tensor("C", (4, 4))
         _, cfg = _lower_to_cfg(C["ij"] <= yf.maximum(A["ij"], 0.0), arch)
-        elementwise = next(a.term for a in cfg
-                           if not a.isCopy() and a.term.optype is not None)
+        elementwise = next(a for a in cfg
+                           if not a.isCopy() and a.optype is not None)
         assert 'max' in str(elementwise.optype).lower()
         filled = elementwise.fillTerms(["<operand>"])
         assert "<operand>" in filled and 0.0 in filled
@@ -527,7 +528,7 @@ class TestExpressionWithoutItsNode:
         B = Tensor("B", (4, 4))
         C = Tensor("C", (4, 4))
         _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
-        expression = next(a.term for a in cfg if not a.isCopy())
+        expression = next(a for a in cfg if not a.isCopy())
         assert expression.kind == "LoopOverGEMM"
         assert not hasattr(expression, "node")
 
@@ -536,7 +537,7 @@ class TestExpressionWithoutItsNode:
         B = Tensor("B", (4, 4))
         C = Tensor("C", (4, 4))
         _, cfg = _lower_to_cfg(C["ij"] <= A["ik"] * B["kj"], arch)
-        expression = next(a.term for a in cfg if not a.isCopy())
+        expression = next(a for a in cfg if not a.isCopy())
         m, n, k = expression.groups
         assert (str(m), str(n), str(k)) == ("i", "j", "k")
         assert expression.transA is False and expression.transB is False
@@ -557,17 +558,17 @@ class TestExpressionWithoutItsNode:
         C = Tensor("C", (4, 4))
         _, cfg = _lower_to_cfg(C["ij"] <= A["ij"], arch)
         copy = next(action for action in cfg if action.isCopy())
-        assert copy.term.kind == "Copy"
-        assert copy.term.variableList() == [copy.copied()]
+        assert copy.kind == "Copy"
+        assert copy.operands == [copy.copied()]
         assert copy.copied().name == "A"
-        assert copy.term.eqspp is copy.copied().eqspp
+        assert copy.eqspp is copy.copied().eqspp
 
     def test_what_a_copy_reads_is_substituted_like_any_operand(self, arch):
         from yateto.memory import DenseMemoryLayout
         ml = DenseMemoryLayout((4, 4))
         source = Operand("A", None, ml, None, tensor=Tensor("A", (4, 4)))
         other = Operand("B", None, ml, None, tensor=Tensor("B", (4, 4)))
-        action = ProgramAction(Operand("C", None, ml, None), source, add=False)
+        action = ProgramAction.copy(Operand("C", None, ml, None), source, add=False)
         assert action.substituted(source, other).copied().name == "B"
 
     def test_whether_a_value_fits_a_destination_survives_substitution(self, arch):
@@ -585,6 +586,6 @@ class TestExpressionWithoutItsNode:
                         tensor=Tensor("B", (4, 4)))
         destination = Operand("C", Indices("ij", (4, 4)), ml, spp,
                               tensor=Tensor("C", (4, 4)), writable=True)
-        statement = Expression.copy(source)
+        statement = ProgramAction.copy(destination, source, add=False)
         assert statement.substituted(source, other).resultCompatible(destination) \
             == statement.resultCompatible(destination)

@@ -39,7 +39,7 @@ class AST2ControlFlow(Visitor):
       permute.computeMemoryLayout()
     permute.datatype = permute[0].datatype
     result = self._nextTemporary(permute)
-    action = ProgramAction(result, Expression.of(permute, [variable]), False, condition=self._guard[-1])
+    action = ProgramAction.of(permute, result, [variable], False, condition=self._guard[-1])
     self._addAction(action)
     return result
 
@@ -71,7 +71,7 @@ class AST2ControlFlow(Visitor):
     variables = [self.visit(child) for child in node]
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, Expression.of(node, variables), False, condition=self._guard[-1])
+    action = ProgramAction.of(node, result, variables, False, condition=self._guard[-1])
     self._addAction(action)
 
     return result
@@ -97,7 +97,7 @@ class AST2ControlFlow(Visitor):
     add = False
     for i,var in enumerate(variables):
       rhs = self._addPermuteIfRequired(node.indices, node[i], var)
-      action = ProgramAction(tmp, rhs, add, condition=self._guard[-1])
+      action = ProgramAction.copy(tmp, rhs, add, condition=self._guard[-1])
       self._addAction(action)
       add = True
 
@@ -115,7 +115,7 @@ class AST2ControlFlow(Visitor):
     variable = self.visit(term)
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, variable, False, scalar, condition=self._guard[-1])
+    action = ProgramAction.copy(result, variable, False, scalar, condition=self._guard[-1])
     self._addAction(action)
 
     return result
@@ -144,7 +144,7 @@ class AST2ControlFlow(Visitor):
       rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), rVar)
 
       lVar = self.visit(node[0])
-      self._addAction(ProgramAction(lVar, rhs, False, condition=guard))
+      self._addAction(ProgramAction.copy(lVar, rhs, False, condition=guard))
     finally:
       self._guard.pop()
 
@@ -235,7 +235,7 @@ class PrettyPrinter(object):
     for position, action in enumerate(cfg):
       if live is not None:
         print('L =', live[position])
-      actionRepr = str(action.term)
+      actionRepr = action.rhs()
       if action.scalar is not None:
         actionRepr = str(action.scalar) + ' * ' + actionRepr
       print( '  {} {} {}'.format(action.result, '+=' if action.add else '=', actionRepr) )

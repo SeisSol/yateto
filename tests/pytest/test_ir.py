@@ -979,4 +979,4 @@ class TestOperandsAreHandedOver:
                       if isinstance(op, ir.LoopOverGEMM)]
         action = next(a for a in cfg if not a.isCopy())
         assert statement.result is action.result
-        assert statement.terms == action.term.variableList()
+        assert statement.terms == action.operands

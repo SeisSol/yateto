@@ -12,12 +12,13 @@ def _productGroups(node):
   return node.m(), node.n(), node.k()
 
 
-class Expression(object):
-  """One statement, stated over tensors.
+class ProgramAction(object):
+  """One statement of the kernel, stated over tensors.
 
-  Everything about it is here: what it computes and over which indices, which
-  kind of statement it is and what that kind states beyond its operands. The
-  tree it was first written down in answers none of it.
+  A destination, the operands read into it, whether the value is added to what
+  is already there, a factor, and the guard it runs under. And, for whoever is
+  to write it, which kind of statement it is and what that kind says beyond its
+  operands. The tree it was first written down in answers none of it.
   """
 
   #: What a statement says beyond its operands, per kind. Read off the node
@@ -26,21 +27,18 @@ class Expression(object):
             'loopIndices', 'transA', 'transB', 'sumIndex', 'datatype')
 
   @classmethod
-  def copy(cls, operand):
-    """A statement that reads one operand as it stands.
-
-    A copy is a statement like any other, and saying so is what lets everything
-    that walks the graph ask one question instead of two.
-    """
-    return cls('Copy', [operand], operand.indices, operand.eqspp)
+  def copy(cls, result, operand, add, scalar=None, condition=True):
+    """A statement that reads one operand as it stands."""
+    return cls('Copy', result, [operand], operand.indices, operand.eqspp,
+               add, scalar, condition)
 
   @classmethod
-  def of(cls, node, variables):
+  def of(cls, node, result, operands, add, scalar=None, condition=True):
     """The statement a node states, over these operands."""
-    product = _productGroups(node)
     ask = lambda name: getattr(node, name)() if hasattr(node, name) else None
-    return cls(type(node).__name__, variables, node.indices, node.eqspp(),
-               groups=product,
+    return cls(type(node).__name__, result, operands, node.indices, node.eqspp(),
+               add, scalar, condition,
+               groups=_productGroups(node),
                prefetch=node.prefetch,
                optype=getattr(node, 'optype', None),
                termTemplate=getattr(node, 'termTemplate', None),
@@ -51,85 +49,31 @@ class Expression(object):
                sumIndex=ask('sumIndexName'),
                datatype=node.datatype)
 
-  def __init__(self, kind, variables, indices, eqspp, **facts):
+  def __init__(self, kind, result, operands, indices, eqspp, add, scalar=None,
+               condition=True, **facts):
     #: Which kind of statement it is, which is what decides who writes it.
     self.kind = kind
-    self._variables = variables
+    self.result = result
+    self.operands = operands
     #: What the statement computes -- the indices it is stated over and the
     #: entries it has values at.
     self.indices = indices
     self.eqspp = eqspp
+    self.add = add
+    self.scalar = scalar
+    #: The guard it runs under. A guard, not something a guard is made of: it
+    #: is asked for far more often than it is set.
+    self.condition = Guard.coerce(condition)
     for name in self._FACTS:
       setattr(self, name, facts.get(name))
 
-  def fillTerms(self, terms):
-    """The operands in their original order, with the immediates put back."""
-    return [terms[index] if template is None else template
-            for template, index in zip(self.termTemplate, self.nodeTermIndices)]
-
-  def variables(self):
-    return set([var.viewed() for var in self._variables])
-
-  def variableList(self):
-    return self._variables
-
-  def maySubstitute(self, when, by):
-    operands = [var.substituted(when, by) for var in self._variables]
-    layouts = [operand.memoryLayout for operand in operands]
-    c1 = all(layouts[i].isCompatible(var.eqspp) for i,var in enumerate(self._variables))
-    return c1 and self.mayReadOperands(layouts)
-
-  def mayReadOperands(self, layouts):
-    """Whether the operands can be read as matrices, laid out like this.
-
-    Only a product asks anything: everything else reads an operand entry by
-    entry, and no layout stops that.
-    """
-    if self.groups is None:
-      return True
-    m, n, k = self.groups
-    return mayFuseGroups(self._variables[0].indices, (m, k), layouts[0]) \
-       and mayFuseGroups(self._variables[1].indices, (k, n), layouts[1])
-
-  def substituted(self, when, by):
-    return Expression(self.kind,
-                      [var.substituted(when, by) for var in self._variables],
-                      self.indices, self.eqspp,
-                      **{name: getattr(self, name) for name in self._FACTS})
-
-  def resultCompatible(self, result):
-    c1 = result.memoryLayout.isCompatible(self.eqspp)
-    c2 = self.groups is None or mayFuseGroups(
-      self.indices, (self.groups[0], self.groups[1]), result.memoryLayout)
-    return c1 and c2
-
-  def __str__(self):
-    if self.kind == 'Copy':
-      return str(self._variables[0])
-    return '{}({})'.format(self.kind, ', '.join([str(var) for var in self._variables]))
-
-  def setWritable(self, name):
-    for v in self._variables:
-      v.setWritable(name)
-
-class ProgramAction(object):
-  def __init__(self, result, term, add, scalar=None, condition=True):
-    self.result = result
-    #: What is read, always as a statement -- a bare operand is a copy of it.
-    self.term = term if isinstance(term, Expression) else Expression.copy(term)
-    self.add = add
-    self.scalar = scalar
-    #: The guard the statement runs under. A guard, not something a guard is
-    #: made of: it is asked for far more often than it is set.
-    self.condition = Guard.coerce(condition)
-
   def isCopy(self):
     """Whether the statement reads one operand as it stands."""
-    return self.term.kind == 'Copy'
+    return self.kind == 'Copy'
 
   def copied(self):
     """The operand a plain copy reads."""
-    return self.term.variableList()[0]
+    return self.operands[0]
 
   def isCompound(self):
     return self.add
@@ -141,8 +85,20 @@ class ProgramAction(object):
     # that operation's neutral element here.
     return self.scalar is None or self.scalar == ops.Mul().neutral()
 
+  def getGuard(self):
+    return self.condition
+
+  def fillTerms(self, terms):
+    """The operands in their original order, with the immediates put back."""
+    return [terms[index] if template is None else template
+            for template, index in zip(self.termTemplate, self.nodeTermIndices)]
+
+  def reads(self):
+    """The storage the operands reach."""
+    return set([var.viewed() for var in self.operands])
+
   def variables(self):
-    V = self.term.variables()
+    V = self.reads()
     if self.add:
       V = V | self.result.variables()
     return V
@@ -154,8 +110,36 @@ class ProgramAction(object):
   def allVariables(self):
     return self.variables() | self.guardVariables()
 
+  def setVariablesWritable(self, name):
+    self.result.setWritable(name)
+    for operand in self.operands:
+      operand.setWritable(name)
+
+  def mayReadOperands(self, layouts):
+    """Whether the operands can be read as matrices, laid out like this.
+
+    Only a product asks anything: everything else reads an operand entry by
+    entry, and no layout stops that.
+    """
+    if self.groups is None:
+      return True
+    m, n, k = self.groups
+    return mayFuseGroups(self.operands[0].indices, (m, k), layouts[0]) \
+       and mayFuseGroups(self.operands[1].indices, (k, n), layouts[1])
+
+  def resultCompatible(self, result):
+    """Whether what this computes fits a destination laid out like that."""
+    c1 = result.memoryLayout.isCompatible(self.eqspp)
+    c2 = self.groups is None or mayFuseGroups(
+      self.indices, (self.groups[0], self.groups[1]), result.memoryLayout)
+    return c1 and c2
+
   def maySubstitute(self, when, by, result = True, term = True):
-    maySubsTerm = self.term.maySubstitute(when, by)
+    operands = [var.substituted(when, by) for var in self.operands]
+    layouts = [operand.memoryLayout for operand in operands]
+    maySubsTerm = all(layouts[i].isCompatible(var.eqspp)
+                      for i, var in enumerate(self.operands)) \
+                  and self.mayReadOperands(layouts)
     maySubsResult = self.result.maySubstitute(when, by)
 
     rsubs = self.result.substituted(when, by) if result else self.result
@@ -163,7 +147,7 @@ class ProgramAction(object):
     # asked of the statement as it stands: what decides whether its value fits
     # a destination -- the indices it is stated over and the entries it has
     # values at -- is not what a substitution changes
-    compatible = self.term.resultCompatible(rsubs)
+    compatible = self.resultCompatible(rsubs)
 
     return (not term or maySubsTerm) and (not result or maySubsResult) and compatible
 
@@ -176,17 +160,18 @@ class ProgramAction(object):
     there would restrict statements that are not themselves conditional.
     """
     rsubs = self.result.substituted(when, by) if result else self.result
-    tsubs = self.term.substituted(when, by) if term else self.term
+    operands = [var.substituted(when, by) for var in self.operands] \
+               if term else self.operands
     gsubs = self.condition if guard is None else (self.getGuard() & guard)
-    return ProgramAction(rsubs, tsubs, self.add, self.scalar, gsubs)
+    return ProgramAction(self.kind, rsubs, operands, self.indices, self.eqspp,
+                         self.add, self.scalar, gsubs,
+                         **{name: getattr(self, name) for name in self._FACTS})
 
-  def setVariablesWritable(self, name):
-    self.result.setWritable(name)
-    self.term.setWritable(name)
-
-  def getGuard(self):
-    return self.condition
-
+  def rhs(self):
+    """What is read, as it would be written down."""
+    if self.isCopy():
+      return str(self.operands[0])
+    return '{}({})'.format(self.kind, ', '.join(str(o) for o in self.operands))
 
 
 class LiveSet:

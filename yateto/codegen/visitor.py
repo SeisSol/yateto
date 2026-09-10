@@ -88,8 +88,8 @@ class KernelGenerator(object):
     region = ir.Region()
     for action in cfg:
       scalar = self.deduce_scalar(action)
-      prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.prefetch.name()) if action.term.prefetch is not None else None
-      region.extend(factory.create(action.term, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
+      prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.prefetch.name()) if action.prefetch is not None else None
+      region.extend(factory.create(action, action.result, action.operands, action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg))
     return region
 
   def emit(self, cpp, region, factory, routineCache, gemm_cfg):

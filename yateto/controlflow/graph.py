@@ -159,9 +159,11 @@ class ProgramAction(object):
     maySubsResult = self.result.maySubstitute(when, by)
 
     rsubs = self.result.substituted(when, by) if result else self.result
-    tsubs = self.term.substituted(when, by) if term else self.term
 
-    compatible = tsubs.resultCompatible(rsubs)
+    # asked of the statement as it stands: what decides whether its value fits
+    # a destination -- the indices it is stated over and the entries it has
+    # values at -- is not what a substitution changes
+    compatible = self.term.resultCompatible(rsubs)
 
     return (not term or maySubsTerm) and (not result or maySubsResult) and compatible
 

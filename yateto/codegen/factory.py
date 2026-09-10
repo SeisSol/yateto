@@ -618,7 +618,7 @@ class ExportFactory(KernelFactory):
       # a guard that can never hold: the C++ factory emits no action for one
       # either, and an operation the receiving side cannot tell from an
       # unguarded one -- both `None` and `[]` are falsy -- would run always
-      return 0
+      return ir.Region()
     self.operations.append(description)
     # Nothing is built here, so the statement is an empty region: there is no
     # code to write and no arithmetic to count.

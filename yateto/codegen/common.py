@@ -65,19 +65,15 @@ class IndexedTensorDescription(TensorDescription):
 
   @classmethod
   def fromNode(cls, var, node):
-    baseNode = node.viewed()
-    datatype = baseNode.datatype
+    """The operand: what the statement says about it, read from where it is.
 
-    is_const = False
-    values = None
-    addressing = None
-
-    if hasattr(baseNode, 'tensor'):
-      is_const = baseNode.tensor.is_compute_constant()
-      if is_const:
-        values = baseNode.tensor.values()
-      addressing = baseNode.tensor.addressing
-    return cls(str(var), node.indices, var.memoryLayout, node.eqspp(), is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
+    The same split `readFrom` states -- the index tuple, the pattern and the
+    type of the entries are the statement's, everything about the storage is
+    the variable's.
+    """
+    return cls(str(var), node.indices, var.memoryLayout, node.eqspp(),
+               var.is_compute_constant, var.is_temporary, var.values,
+               node.viewed().datatype, var.addressing, var.tensor, var.writable)
 
   def readFrom(self, source):
     """The same operand, read from `source`'s storage instead of its own.
@@ -99,18 +95,10 @@ class IndexedTensorDescription(TensorDescription):
 
   @classmethod
   def fromVar(cls, var, indices):
-    datatype = var.datatype
-
-    is_const = False
-    values = None
-    addressing = None
-    if hasattr(var, 'tensor'):
-      if var.tensor is not None:
-        is_const = var.tensor.is_compute_constant()
-        if is_const:
-          values = var.tensor.values()
-        addressing = var.tensor.addressing
-    return cls(str(var), indices, var.memoryLayout, var.eqspp, is_const, var.is_temporary, values, datatype, addressing, var.tensor, var.writable)
+    """The operand, over the indices it is read with and nothing else said."""
+    return cls(str(var), indices, var.memoryLayout, var.eqspp,
+               var.is_compute_constant, var.is_temporary, var.values,
+               var.datatype, var.addressing, var.tensor, var.writable)
 
 def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, fixed={}, indexNo=None):
   flops = 0

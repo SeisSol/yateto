@@ -360,3 +360,55 @@ class TestVerify:
                      self._spp(), tensor=Tensor('C', (4, 4)))
         found = verify([ProgramAction(C, A, add=False)])
         assert any('does not stand up' in f for f in found)
+
+
+class TestStorageFacts:
+    """A variable carries everything about the storage it names.
+
+    Which is the half `readFrom` takes from the storage, so the two ways of
+    describing an operand -- from a node and from a variable -- say the same
+    about it and cannot drift apart.
+    """
+
+    @staticmethod
+    def _cfg(arch, kernel):
+        _, cfg = _lower_to_cfg(kernel, arch)
+        return cfg
+
+    def test_a_constant_tensor_says_so_and_carries_its_values(self, arch):
+        import numpy as np
+        values = np.arange(16, dtype=float).reshape(4, 4)
+        A = Tensor("A", (4, 4), values, alignStride=False)
+        C = Tensor("C", (4, 4))
+        cfg = self._cfg(arch, C["ij"] <= A["ij"])
+        operands = [var for action in cfg for var in action.term.variables()
+                    if var.name == "A"]
+        assert operands and all(var.is_compute_constant for var in operands)
+        assert all(var.values is not None for var in operands)
+
+    def test_a_temporary_is_not_constant(self, arch):
+        A = Tensor("A", (4, 4))
+        B = Tensor("B", (4, 4))
+        C = Tensor("C", (4, 4))
+        cfg = self._cfg(arch, C["ij"] <= A["ik"] * B["kj"])
+        temporaries = [action.result for action in cfg if action.result.isLocal()]
+        assert temporaries
+        assert not any(var.is_compute_constant or var.values is not None
+                       for var in temporaries)
+
+    def test_the_two_ways_of_describing_an_operand_agree(self, arch):
+        """One is built from the node, the other from the variable; the half
+        that is about storage has to come out the same."""
+        from yateto.codegen.common import IndexedTensorDescription
+        import numpy as np
+        values = np.arange(16, dtype=float).reshape(4, 4)
+        A = Tensor("A", (4, 4), values, alignStride=False)
+        C = Tensor("C", (4, 4))
+        cfg = self._cfg(arch, C["ij"] <= A["ij"])
+        from yateto.ast.indices import Indices
+        var = next(v for a in cfg for v in a.term.variables() if v.name == "A")
+        fromVar = IndexedTensorDescription.fromVar(var, Indices("ij", (4, 4)))
+        read = fromVar.readFrom(var)
+        for field in ('name', 'memoryLayout', 'is_compute_constant',
+                      'is_temporary', 'values', 'addressing', 'tensor', 'writable'):
+            assert getattr(read, field) is getattr(fromVar, field)

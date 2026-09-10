@@ -155,7 +155,13 @@ class AST2ControlFlow(Visitor):
 
   def visit_IndexedTensor(self, node):
     self._bindName(node.name(), node.tensor, node.datatype)
-    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype, is_temporary=node.tensor.temporary)
+    constant = node.tensor.is_compute_constant()
+    return Variable(node.name(), node.name() in self._writable, self._ml(node),
+                    node.eqspp(), node.tensor, node.tensor.temporary,
+                    node.datatype,
+                    is_compute_constant=constant,
+                    values=node.tensor.values() if constant else None,
+                    addressing=node.tensor.addressing)
 
   def _bindName(self, name, tensor, datatype):
     """One name, one tensor: a name yields one declaration in the signature.

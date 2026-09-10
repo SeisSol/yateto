@@ -14,9 +14,15 @@ class Variable(object):
   """
 
   def __init__(self, name, writable, memoryLayout, eqspp=None, tensor=None,
-               is_temporary=False, datatype=None, views=None):
+               is_temporary=False, datatype=None, views=None,
+               is_compute_constant=False, values=None, addressing=None):
     self.name = name
     self.tensor = tensor
+    #: Whether its values are known before the kernel runs, and what they are.
+    self.is_compute_constant = is_compute_constant
+    self.values = values
+    #: How the generated code reaches it, where the tensor says so.
+    self.addressing = addressing
     #: Where its entries sit, and which of them it has a value at. Asked for
     #: rather than called, which is how a buffer and a tensor description
     #: answer the same two questions.
@@ -32,7 +38,8 @@ class Variable(object):
     """A slice of what `variable` names: the same storage, another layout."""
     base = variable.viewed()
     return cls(base.name, base.writable, memoryLayout, eqspp, base.tensor,
-               base.is_temporary, base.datatype, views=base)
+               base.is_temporary, base.datatype, base, base.is_compute_constant,
+               base.values, base.addressing)
 
   def viewed(self):
     """The variable whose storage this names, which for most is itself."""

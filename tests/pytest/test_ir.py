@@ -18,7 +18,8 @@ import numpy as np
 import pytest
 
 import yateto.functions as yf
-from yateto import Generator, Scalar, Tensor, useArchitectureIdentifiedBy
+from yateto import Generator, Scalar, Tensor, ops, useArchitectureIdentifiedBy
+from yateto.ast.node import Reduction as ReductionNode
 from yateto import aspp, ir
 from yateto.ast.indices import Indices
 from yateto.codegen.code import Cpp
@@ -296,6 +297,51 @@ class TestElementwise:
         body = emit([C['ij'] <= s * yf.sqrt(A['ij'])])
         assert body.count('double const _alpha = s;') == 1
         assert body.count('s *') == 0
+
+
+def rowFold(optype):
+    """Folding the second index of a matrix away, and where it lands."""
+    A = Tensor('A', (N, N))
+    u = Tensor('u', (N,))
+    return u, ReductionNode(optype, A['ij'], 'j')
+
+
+class TestReduction:
+    def test_a_fold_starts_from_the_neutral_element(self):
+        u, reduction = rowFold(ops.Max())
+        body = emit([u['i'] <= reduction])
+        assert 'double _acc = -std::numeric_limits<double>::infinity();' in body
+        assert '_acc = std::max(_acc, A[' in body
+
+    def test_a_fold_combines_once_per_step(self):
+        u, reduction = rowFold(ops.Add())
+        body = emit([u['i'] <= reduction])
+        assert f'_acc += A[1*_i + {N}*_j];' in body
+        assert 'u[1*_i] = _acc;' in body
+
+    def test_the_running_value_is_not_const(self):
+        u, reduction = rowFold(ops.Add())
+        assert 'double const _acc' not in emit([u['i'] <= reduction])
+
+    def test_a_destination_without_axes_gets_a_scope_all_the_same(self):
+        w = Tensor('w', (N,))
+        z = Tensor('z', ())
+        body = emit([z[''] <= ReductionNode(ops.Add(), w['i'], 'i')])
+        assert 'double _acc = 0.0;' in body
+        assert 'z[0] = _acc;' in body
+
+    def test_accumulating_uses_the_operation_that_was_folded(self):
+        u, reduction = rowFold(ops.Add())
+        assert 'u[1*_i] += _acc;' in emit([u['i'] <= u['i'] + reduction])
+
+    def test_the_flops_count_one_combination_per_step(self):
+        from yateto.codegen.reduction.factory import Description
+        from yateto.codegen.reduction.generic import tensorOp
+        descr = Description(alpha=1.0, add=False,
+                            result=description('u', 'i', (N,)),
+                            term=description('A', 'ij', (N, N)),
+                            optype=ops.Add())
+        assert ir.countFlops(tensorOp(descr).lower()) == N * N
 
 
 class TestEmission:

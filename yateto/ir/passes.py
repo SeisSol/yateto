@@ -1,6 +1,7 @@
 from .build import load, scaled
 from .core import Region
-from .ops import Arith, Const, Load, Loop, Memset, Read, Scope, Store
+from .ops import (Arith, Const, Fold, Load, Loop, Memset, Read, Scope,
+                  Store, Yield)
 
 
 def unroll(region):
@@ -70,6 +71,12 @@ def _cloneOp(op, pinned, mapping):
     copy = Loop(op.index, op.domain, Region(), op.simd, op.collapse)
     copy.region.extend(_clone(op.region, pinned, mapping))
     return copy
+  if isinstance(op, Fold):
+    copy = Fold(op.index, op.domain, op.operation, Region(), op.datatype, op.name)
+    copy.region.extend(_clone(op.region, pinned, mapping))
+    return copy
+  if isinstance(op, Yield):
+    return Yield(value(op.value))
 
   raise NotImplementedError(f'{type(op).__name__} cannot be cloned yet.')
 

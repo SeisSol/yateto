@@ -102,3 +102,16 @@ class LoopOverGEMM(TensorOp):
 
 class Reduction(TensorOp):
   """An operation folding one index of its operand away."""
+
+  def __init__(self, result, terms, optype, sumIndex, sumRange, alpha=1.0,
+               add=False, loopRanges=None):
+    super().__init__(result, terms, alpha, add, loopRanges)
+    self.optype = optype
+    #: The index that is folded away, which the destination does not have.
+    self.sumIndex = str(sumIndex)
+    #: The range that index runs over.
+    self.sumRange = sumRange
+
+  def lower(self):
+    from .lower import lowerReduction
+    return lowerReduction(self)

@@ -4,7 +4,7 @@ from ..codegen.common import scaleFactor
 from ..type import AddressingMode
 from .build import indexMap, load, loopNest, scaled, zero
 from .core import Buffer, Builder, Entries, Region, ValueOp
-from .ops import Arith, Const, Loop, Read, Scope, Store
+from .ops import Arith, Const, Fold, Loop, Read, Scope, Store, Yield
 
 
 def lowerScaleAdd(op):
@@ -70,6 +70,38 @@ def lowerFusedElementwise(op):
       produced[position].materialize = True
 
   _store(body, op, indices, produced[len(op.members) - 1], factors)
+  return region
+
+
+def lowerReduction(op):
+  """``result <op>= alpha * fold(term over one index)`` as loops.
+
+  One loop nest over the destination's index space, and inside it a fold over
+  the index the destination does not have. The running value of the fold is a
+  local of its own scope: a destination without axes has no surrounding loop
+  to separate two of them.
+  """
+  region, builder, factors = _prologue(op)
+  indices = indexMap(op.terms[0].indices)
+  body = _iteration(builder, op, indices)
+
+  scope = body.add(Scope())
+  inner = Builder(scope.region)
+
+  contribution = Builder()
+  value = _operand(contribution, op.terms[0], indices, op.result.datatype)
+  contribution.add(Yield(value))
+  folded = inner.add(Fold(indices[op.sumIndex], op.sumRange, op.optype,
+                          contribution.region(), op.result.datatype,
+                          name='_acc'))
+
+  # The factor scales the fold, and accumulating into the destination combines
+  # with the operation that was folded -- not with an addition, which for
+  # anything but a sum would be a different statement.
+  value = _scale(inner, folded, factors.get(str(op.alpha)), op.result.datatype)
+  inner.add(Store(Buffer.fromDescription(op.result),
+                  [indices[index] for index in op.result.indices],
+                  value, op.optype if op.add else None))
   return region
 
 

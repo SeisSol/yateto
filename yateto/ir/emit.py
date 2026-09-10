@@ -2,7 +2,8 @@ from ..codegen.common import INDEX_PREFIX
 from ..ops import CBinaryOperatorMixin
 from .address import address
 from .core import ValueOp
-from .ops import Arith, Const, Load, Loop, Memset, Read, Scope, Store
+from .ops import (Arith, Const, Fold, Load, Loop, Memset, Read, Scope,
+                  Store, Yield)
 
 
 class CppEmitter:
@@ -52,6 +53,12 @@ class CppEmitter:
       self._emitOp(op)
 
   def _emitOp(self, op):
+    if isinstance(op, Fold):
+      self._emitFold(op)
+      return
+    if isinstance(op, Yield):
+      # what the region contributes is spelled by whoever holds it
+      return
     if isinstance(op, ValueOp):
       if id(op) in self._locals:
         name = self._name(op)
@@ -86,14 +93,29 @@ class CppEmitter:
     with self._cpp.For(f'int {index} = {domain.start}; {index} < {domain.stop}; ++{index}'):
       self._emitRegion(loop.region)
 
-  def _store(self, store):
-    target = self._access(store.buffer, store.coords)
-    value = self._value(store.value)
-    if store.accumulate is None:
+  def _emitFold(self, fold):
+    """An accumulator, a loop over the index, and a combination per step."""
+    name = self._name(fold)
+    neutral = fold.operation.neutralLiteral(fold.datatype)
+    self._cpp(f'{fold.datatype.ctype()} {name} = {neutral};')
+    index = f'{self._prefix}{fold.index.name}'
+    domain = fold.domain
+    with self._cpp.For(
+        f'int {index} = {domain.start}; {index} < {domain.stop}; ++{index}'):
+      self._emitRegion(fold.region)
+      self._cpp(self._combine(name, fold.operation, self._value(fold.yielded())))
+
+  def _combine(self, target, operation, value):
+    """`target <op>= value`, however that operation is spelled."""
+    if operation is None:
       return f'{target} = {value};'
-    if isinstance(store.accumulate, CBinaryOperatorMixin):
-      return f'{target} {store.accumulate.cppname()}= {value};'
-    return f'{target} = {store.accumulate.callstr(target, value)};'
+    if isinstance(operation, CBinaryOperatorMixin):
+      return f'{target} {operation.cppname()}= {value};'
+    return f'{target} = {operation.callstr(target, value)};'
+
+  def _store(self, store):
+    return self._combine(self._access(store.buffer, store.coords),
+                         store.accumulate, self._value(store.value))
 
   def _access(self, buffer, coords):
     return f'{buffer.name}[{address(buffer.memoryLayout, coords).ccode(self._prefix)}]'

@@ -143,6 +143,56 @@ class Loop(Op):
     return f'Loop({", ".join(index.name for index in self.index)})'
 
 
+class Yield(Op):
+  """The value a region hands back to the operation that holds it."""
+
+  def __init__(self, value):
+    self.value = value
+
+  def operands(self):
+    return (self.value,)
+
+  def __repr__(self):
+    return 'Yield'
+
+
+class Fold(ValueOp):
+  """Fold an index away with an operation.
+
+  The region computes what one step of the index contributes and ends on a
+  `Yield` saying which value that is. The operation combines the
+  contributions, starting from its own neutral element, and what is left when
+  the index is gone is this value.
+
+  A fold keeps a running value, which is the one thing here that is written
+  more than once, so it always gets a local of its own.
+  """
+
+  def __init__(self, index, domain, operation, region=None, datatype=None,
+               name=None):
+    super().__init__(datatype, name)
+    self.index = index
+    self.domain = domain
+    self.operation = operation
+    self.region = region if region is not None else Region()
+    self.materialize = True
+
+  def yielded(self):
+    """The value one step of the index contributes."""
+    terminator = self.region.ops[-1]
+    assert isinstance(terminator, Yield), 'a fold\'s region ends on a Yield'
+    return terminator.value
+
+  def regions(self):
+    return (self.region,)
+
+  def indices(self):
+    return (self.index,)
+
+  def __repr__(self):
+    return f'Fold({self.index.name}, {self.operation})'
+
+
 class Scope(Op):
   """A region emitted inside braces of its own."""
 

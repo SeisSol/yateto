@@ -20,6 +20,11 @@ STATIC = 'static'
 INLINE = 'inline'
 MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
 STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
+#: Alignment of the constant pool and of every entry in it. Deliberately one
+#: number rather than a per-entry request: the waste is a few bytes per entry
+#: against matrices of tens of kilobytes, and it covers the widest loads any
+#: current target performs.
+POOL_ALIGNMENT = 128
 
 def groupSizeToStride(groupSize):
   if len(groupSize) == 0:
@@ -908,6 +913,37 @@ class InitializerGenerator(object):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
 
+  def collectPool(self, dataCache):
+    """Registers every constant tensor in `dataCache` and reports the symbols.
+
+    The result maps a tensor's base name (namespace included) to its group
+    size and to the pool symbol each group ended up under. Groups without
+    values are absent: they have nothing to store, and the pool leaves the
+    corresponding pointer null.
+
+    Registration happens here rather than while writing init.cpp so that the
+    two stay independent -- the pool is built from the tensors, not from the
+    text that was printed for them.
+    """
+    pool = collections.OrderedDict()
+    for baseName, tensors in self._collect.items():
+      groupSize = self._groupSize[baseName]
+      stride = groupSizeToStride(groupSize)
+      symbols = collections.OrderedDict()
+      for group, tensor in tensors.items():
+        values = tensor.values()
+        if values is None:
+          continue
+        memLayout = tensor.memoryLayout()
+        hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
+        symbols[group] = dataCache.add(hint,
+                                       memLayout.pack(values, fill='0.'),
+                                       self._arch.typename,
+                                       POOL_ALIGNMENT)
+      if symbols:
+        pool[baseName] = (groupSize, symbols)
+    return pool
+
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
@@ -1044,3 +1080,131 @@ class InitializerGenerator(object):
         initStr = '{{{}}}'.format(initStr)
 
       cpp('{}{}{} {}{}{} = {};'.format(cexpr, stat, typ, name, groupIndices, arrayIndices, initStr))
+
+class PoolGenerator(object):
+  """Emits the constant pool: one image, one allocation, one copy.
+
+  The image is a struct of named arrays rather than a flat byte blob, so that
+  every entry keeps a real array type -- sizeof works, a debugger shows
+  something useful, and the offsets come out of offsetof instead of being
+  computed here and written down a second time.
+
+  What a consumer binds against is not the image but `Pool`, a table of
+  pointers derived from a base address. Pointing it at the image gives the
+  host view with no allocation and no copy; pointing it at a device
+  allocation gives the device view. Entries that the cache merged are one
+  member of the image and two pointers in the table.
+
+  This makes every entry position-independent, which is the condition for
+  copying the image in one piece: an entry may not contain an address into
+  another one.
+  """
+
+  STORAGE_NAMESPACE = 'poolstorage'
+  STORAGE_STRUCT_NAME = 'Storage'
+  STORAGE_VAR_NAME = 'image'
+  POOL_STRUCT_NAME = 'Pool'
+  CREATE_FUN_NAME = 'create'
+  HOST_FUN_NAME = 'host'
+  BYTES_FUN_NAME = 'poolBytes'
+  DATA_FUN_NAME = 'poolData'
+  SIZE_TYPE = 'std::size_t'
+
+  def __init__(self, arch, dataCache, pool):
+    self._arch = arch
+    self._dataCache = dataCache
+    self._pool = pool
+
+  @classmethod
+  def memberName(cls, baseNameWithNamespace):
+    """Name a tensor goes by inside `Pool`.
+
+    Flattened rather than nested by namespace: a kernel may read constants
+    from several namespaces at once, so one flat table is the only shape that
+    lets it bind all of them against a single object.
+    """
+    return baseNameWithNamespace.replace('::', '_')
+
+  def _memberType(self, baseName, groupSize):
+    realPtr = '{} const*'.format(self._arch.typename)
+    if len(groupSize) == 0:
+      return realPtr
+    prefix, name = Tensor.splitBasename(baseName)
+    return '{}{}::{}::{}<{}>'.format(prefix,
+                                     InitializerGenerator.TENSOR_NAMESPACE,
+                                     name,
+                                     InitializerGenerator.CONTAINER_CLASS_NAME,
+                                     realPtr)
+
+  def _storageType(self):
+    return '{}::{}'.format(self.STORAGE_NAMESPACE, self.STORAGE_STRUCT_NAME)
+
+  def generateH(self, header):
+    with header.Namespace(self.STORAGE_NAMESPACE):
+      with header.Struct('alignas({}) {}'.format(POOL_ALIGNMENT, self.STORAGE_STRUCT_NAME)):
+        for entry in self._dataCache.entries():
+          header('alignas({}) {} const {}[{}];'.format(entry.alignment(),
+                                                       entry.typename(),
+                                                       entry.name(),
+                                                       entry.elements()))
+    header.emptyline()
+
+    with header.Struct(self.POOL_STRUCT_NAME):
+      for baseName, (groupSize, _) in self._pool.items():
+        header('{} {}{{}};'.format(self._memberType(baseName, groupSize),
+                                   self.memberName(baseName)))
+      header.emptyline()
+      header('//! Table for an image that lives at `base`, host or device.')
+      header.functionDeclaration(self.CREATE_FUN_NAME,
+                                 'void const* base',
+                                 '{} {}'.format(STATIC, self.POOL_STRUCT_NAME))
+      header('//! Table for the image in this binary. No allocation, no copy.')
+      header.functionDeclaration(self.HOST_FUN_NAME,
+                                 '',
+                                 '{} {}'.format(STATIC, self.POOL_STRUCT_NAME))
+    header.emptyline()
+
+    header('//! Size of the image, for one allocation of one block.')
+    header.functionDeclaration(self.BYTES_FUN_NAME, '', self.SIZE_TYPE)
+    header('//! Address of the image, for one copy of one block.')
+    header.functionDeclaration(self.DATA_FUN_NAME, '', 'void const*')
+
+  def generateCpp(self, cpp):
+    with cpp.Namespace(self.STORAGE_NAMESPACE):
+      entries = self._dataCache.entries()
+      # const at namespace scope already has internal linkage, so the image
+      # stays local to this translation unit; poolData() is the way out.
+      cpp('{} const {} = {{'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
+      for i, entry in enumerate(entries):
+        separator = ',' if i + 1 < len(entries) else ''
+        cpp('  {{{}}}{}'.format(', '.join(str(value) for value in entry.values()), separator))
+      cpp('};')
+    cpp.emptyline()
+
+    returnType = self.POOL_STRUCT_NAME
+    with cpp.Function('{}::{}'.format(self.POOL_STRUCT_NAME, self.CREATE_FUN_NAME),
+                      'void const* base',
+                      returnType):
+      cpp('auto const* origin = static_cast<char const*>(base);')
+      cpp('{} result;'.format(self.POOL_STRUCT_NAME))
+      for baseName, (groupSize, symbols) in self._pool.items():
+        member = self.memberName(baseName)
+        stride = groupSizeToStride(groupSize)
+        for group, symbol in symbols.items():
+          target = member if len(group) == 0 else '{}.{}[{}]'.format(
+            member, InitializerGenerator.CONTAINER_DATA_NAME, address(group, stride))
+          cpp('result.{} = reinterpret_cast<{} const*>(origin + offsetof({}, {}));'.format(
+            target, self._arch.typename, self._storageType(), symbol))
+      cpp('return result;')
+    cpp.emptyline()
+
+    with cpp.Function('{}::{}'.format(self.POOL_STRUCT_NAME, self.HOST_FUN_NAME), '', returnType):
+      cpp('return {}({}());'.format(self.CREATE_FUN_NAME, self.DATA_FUN_NAME))
+    cpp.emptyline()
+
+    with cpp.Function(self.BYTES_FUN_NAME, '', self.SIZE_TYPE):
+      cpp('return sizeof({});'.format(self._storageType()))
+    cpp.emptyline()
+
+    with cpp.Function(self.DATA_FUN_NAME, '', 'void const*'):
+      cpp('return &{}::{};'.format(self.STORAGE_NAMESPACE, self.STORAGE_VAR_NAME))

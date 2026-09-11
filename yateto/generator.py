@@ -9,6 +9,7 @@ from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors, FindPrefetchCapabilities
 from .ast.transformer import *
 from .codegen.cache import *
+from .codegen.datacache import DataCache
 from .codegen.common import KernelAttributes
 from .codegen.code import Cpp
 from .codegen.test_framework import *
@@ -221,6 +222,7 @@ class GlobalRoutineCache:
 
 class Generator(object):
   INIT_FILE_NAME = 'init'
+  POOL_FILE_NAME = 'pool'
   TENSORS_FILE_NAME = 'tensor'
   KERNELS_FILE_NAME = 'kernel'
   ROUTINES_FILE_NAME = 'subroutine'
@@ -329,6 +331,7 @@ class Generator(object):
     fKernels = self.FileNames(outputDir, self.KERNELS_FILE_NAME)
     fTensors = self.FileNames(outputDir, self.TENSORS_FILE_NAME)
     fInit = self.FileNames(outputDir, self.INIT_FILE_NAME)
+    fPool = self.FileNames(outputDir, self.POOL_FILE_NAME)
     fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
     fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
 
@@ -477,6 +480,22 @@ class Generator(object):
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
+
+    print('Generating constant pool...')
+    dataCache = DataCache()
+    poolMap = initGen.collectPool(dataCache)
+    poolGen = PoolGenerator(self._arch, dataCache, poolMap)
+    with Cpp(fPool.h) as header:
+      with header.HeaderGuard(self._headerGuardName(namespace, self.POOL_FILE_NAME)):
+        header.includeSys('cstddef')
+        header.include(fTensors.hName)
+        with header.Namespace(namespace):
+          poolGen.generateH(header)
+    with Cpp(fPool.cpp) as cpp:
+      cpp.include(fPool.hName)
+      cpp.includeSys('cstddef')
+      with cpp.Namespace(namespace):
+        poolGen.generateCpp(cpp)
 
     prefixnsp = lambda a: a.name if a.namespace == '' else f'{a.namespace}::{a.name}'
     return {

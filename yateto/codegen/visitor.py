@@ -951,9 +951,7 @@ class InitializerGenerator(object):
         values = tensor.values()
         memLayout = tensor.memoryLayout()
         if values is not None:
-          memory = ['0.']*memLayout.requiredReals()
-          for idx,x in values.items():
-            memory[memLayout.address(idx)] = x
+          memory = memLayout.pack(values, fill='0.')
           valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, index(group))
           valueNames[group] = ['&{}[0]'.format(valuesName)]
           cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))

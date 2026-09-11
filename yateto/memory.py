@@ -51,6 +51,23 @@ class MemoryLayout(ABC):
   def isCompatible(self, spp):
     pass
 
+  def pack(self, values, fill=0.0):
+    """Materialises ``values`` into the flat storage this layout describes.
+
+    ``values`` maps multi-indices to numbers, the way ``Tensor.values()``
+    hands them out. The result has ``requiredReals()`` slots; every slot the
+    layout does not map an entry of ``values`` onto -- padding, alignment
+    gaps, structural zeros -- is set to ``fill``.
+
+    ``fill`` need not be a number. Callers that render the result into source
+    text pass the literal they want to see in those slots, so that the choice
+    of literal stays with the emitter instead of being fixed here.
+    """
+    memory = [fill] * self.requiredReals()
+    for entry, value in values.items():
+      memory[self.address(entry)] = value
+    return memory
+
   def _subShape(self, positions):
     sub = 1
     for p in positions:

@@ -22,10 +22,11 @@ STATIC = 'static'
 INLINE = 'inline'
 MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
 STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
-#: Alignment of the constant pool and of every entry in it. Deliberately one
-#: number rather than a per-entry request: the waste is a few bytes per entry
-#: against matrices of tens of kilobytes, and it covers the widest loads any
-#: current target performs.
+#: Alignment of the constant pool as a whole. Every entry's place inside the
+#: image is an offset from its base, so the alignment an entry was given only
+#: survives a copy if the destination is aligned at least this far. This is
+#: the floor; a stricter entry raises it, which is why consumers are told the
+#: number by poolAlignment() rather than being expected to know it.
 POOL_ALIGNMENT = 128
 
 def groupSizeToStride(groupSize):
@@ -1048,10 +1049,14 @@ class InitializerGenerator(object):
           # as a Container<T>, and there is no T that fits both.
           raise ValueError('Mixed datatypes are not allowed within a tensor group. '
                            '({} and {} for {}.)'.format(datatype, groupDatatype, baseName))
+        # The layout already says whether anything reads this array with
+        # aligned loads; asking for a cache line unconditionally would pad
+        # every three-by-three matrix out to one.
+        alignment = self._arch.cacheline if memLayout.alignedStride() else 1
         symbols[group] = dataCache.add(hint,
                                        [groupDatatype.literal(value) for value in memLayout.pack(values)],
                                        groupDatatype.ctype(),
-                                       POOL_ALIGNMENT)
+                                       alignment)
       if symbols:
         pool[baseName] = self.PoolEntry(groupSize, datatype, symbols)
     self._pool = pool
@@ -1152,8 +1157,9 @@ class InitializerGenerator(object):
               # alignment comes along with the address, where an out-of-line
               # reference would have hidden it.
               #
-              # No alignment attribute either: the pool aligns the entry, and
-              # at least as strictly as this would ask for.
+              # No alignment attribute either: the entry was registered with
+              # this layout's own requirement, so the pool declaration already
+              # carries it.
               cpp('{} {} {} (&{})[{}] = {}::{}.{};'.format(CONSTEXPR,
                                                            STATIC,
                                                            self._realType(datatype),
@@ -1264,6 +1270,7 @@ class PoolGenerator(object):
   HOST_FUN_NAME = 'host'
   BYTES_FUN_NAME = 'poolBytes'
   DATA_FUN_NAME = 'poolData'
+  ALIGN_FUN_NAME = 'poolAlignment'
   SIZE_TYPE = 'std::size_t'
 
   def __init__(self, arch, dataCache, pool):
@@ -1303,10 +1310,11 @@ class PoolGenerator(object):
     with header.Namespace(self.STORAGE_NAMESPACE):
       with header.Struct('alignas({}) {}'.format(POOL_ALIGNMENT, self.STORAGE_STRUCT_NAME)):
         for entry in self._dataCache.entries():
-          header('alignas({}) {} const {}[{}];'.format(entry.alignment(),
-                                                       entry.typename(),
-                                                       entry.name(),
-                                                       entry.elements()))
+          alignment = 'alignas({}) '.format(entry.alignment()) if entry.alignment() > 1 else ''
+          header('{}{} const {}[{}];'.format(alignment,
+                                             entry.typename(),
+                                             entry.name(),
+                                             entry.elements()))
       header.emptyline()
       header('//! The image itself, so that init can bind references into it.')
       header('extern {} const {};'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
@@ -1329,6 +1337,8 @@ class PoolGenerator(object):
 
     header('//! Size of the image, for one allocation of one block.')
     header.functionDeclaration(self.BYTES_FUN_NAME, '', self.SIZE_TYPE)
+    header('//! Alignment the allocation has to meet for create() to hold.')
+    header.functionDeclaration(self.ALIGN_FUN_NAME, '', self.SIZE_TYPE)
     header('//! Address of the image, for one copy of one block.')
     header.functionDeclaration(self.DATA_FUN_NAME, '', 'void const*')
 
@@ -1365,6 +1375,13 @@ class PoolGenerator(object):
 
     with cpp.Function(self.BYTES_FUN_NAME, '', self.SIZE_TYPE):
       cpp('return sizeof({});'.format(self._storageType()))
+    cpp.emptyline()
+
+    with cpp.Function(self.ALIGN_FUN_NAME, '', self.SIZE_TYPE):
+      # Read off the image rather than repeated from POOL_ALIGNMENT: an entry
+      # asking for more than the floor raises the struct, and a consumer that
+      # allocated for the floor would then be one entry short.
+      cpp('return alignof({});'.format(self._storageType()))
     cpp.emptyline()
 
     with cpp.Function(self.DATA_FUN_NAME, '', 'void const*'):

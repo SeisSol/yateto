@@ -485,12 +485,12 @@ class Generator(object):
     with Cpp(fInit.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.INIT_FILE_NAME)):
         header.include(fTensors.hName)
+        header.include(fPool.hName)
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):
           initGen.generateInitH(header)
     with Cpp(fInit.cpp) as cpp:
       cpp.include(fInit.hName)
-      cpp.include(fPool.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
 

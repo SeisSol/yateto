@@ -1113,19 +1113,13 @@ class InitializerGenerator(object):
         memLayout = tensor.memoryLayout()
         datatype = tensor.getDatatype(self._arch)
         if values is not None:
-          memory = [datatype.literal(value) for value in memLayout.pack(values)]
           valuesName = f'{name}{self.VALUES_BASENAME}{index(group)}'
           valueNames[group] = [f'&{valuesName}[0]']
-          symbol = self.poolSymbol(baseName, group)
-          if symbol is None:
+          if self.poolSymbol(baseName, group) is None:
+            memory = [datatype.literal(value) for value in memLayout.pack(values)]
             cpp('{} {}[] = {{{}}};'.format(self._realType(datatype), valuesName, ', '.join(memory)))
-          else:
-            cpp('{} (&{})[{}] = {}::{}.{};'.format(self._realType(datatype),
-                                                    valuesName,
-                                                    len(memory),
-                                                    PoolGenerator.STORAGE_NAMESPACE,
-                                                    PoolGenerator.STORAGE_VAR_NAME,
-                                                    symbol))
+          # Otherwise the header has already bound it, and a constexpr
+          # reference needs no definition outside the class.
       if len(valueNames) > 1:
         _,prototensor = next(iter(tensors.items()))
         datatype = prototensor.getDatatype(self._arch)
@@ -1150,10 +1144,24 @@ class InitializerGenerator(object):
                 aligned = f' __attribute__((aligned({self._arch.cacheline})))'
               cpp('{} {} {}[]{};'.format(STATIC, self._realType(datatype), name, aligned))
             else:
-              # No alignment attribute: the entry it binds to is aligned by the
-              # pool, and more strictly than this would ask for.
-              cpp('{} {} (&{})[{}];'.format(STATIC, self._realType(datatype), name,
-                                            tensor.memoryLayout().requiredReals()))
+              # Bound here and as a constant expression, for two reasons. A
+              # reference whose initialiser lives in another translation unit
+              # has to be read before it can be followed, which costs a load
+              # and a dynamic relocation at every use; one that is a constant
+              # expression is folded to the address instead. And the entry's
+              # alignment comes along with the address, where an out-of-line
+              # reference would have hidden it.
+              #
+              # No alignment attribute either: the pool aligns the entry, and
+              # at least as strictly as this would ask for.
+              cpp('{} {} {} (&{})[{}] = {}::{}.{};'.format(CONSTEXPR,
+                                                           STATIC,
+                                                           self._realType(datatype),
+                                                           name,
+                                                           tensor.memoryLayout().requiredReals(),
+                                                           PoolGenerator.STORAGE_NAMESPACE,
+                                                           PoolGenerator.STORAGE_VAR_NAME,
+                                                           symbol))
             nValueArrays += 1
         if nValueArrays > 1:
           cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')

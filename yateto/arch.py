@@ -182,6 +182,7 @@ def getHostArchProperties(name):
     'rvv512': (64, True),
     'rvv1024': (128, True),
     'rvv2048': (256, True),
+    'rvv4096': (512, True),
     'avx2-128': (16, True),
     'avx2-256': (32, True),
     'avx10-128': (16, True),
@@ -195,11 +196,37 @@ def getHostArchProperties(name):
   else:
     return (None, None)
 
+#: Cache line in bytes per host architecture, where it is not simply the vector
+#: width. A buffer wants to start on a line boundary; a vector load only cares
+#: about the vector width. The two coincide on most targets, which is why one
+#: value used to serve for both.
+def getHostCacheline(name):
+  cachelines = {
+    'power9': 128,
+    'power10': 128,
+    'power11': 128,
+    'a64fx': 256,
+    'apple-m1': 128,
+    'apple-m2': 128,
+    'apple-m3': 128,
+    'apple-m4': 128,
+  }
+  vectorsize, _ = getHostArchProperties(name)
+  if vectorsize is None:
+    return None
+  # 64 bytes is the smallest line size in use on any of the targets below, so
+  # it is the floor; a wider vector needs at least its own width.
+  return max(cachelines.get(name, 64), vectorsize)
+
 def getArchitectureIdentifiedBy(ident):
   name, precision = _get_name_and_precision(ident)
 
   alignment, prefetch = getHostArchProperties(name)
-  return Architecture(name, precision, alignment, prefetch)
+  return Architecture(name,
+                      precision,
+                      alignment,
+                      prefetch,
+                      cacheline=getHostCacheline(name))
 
 
 def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_backend):
@@ -273,7 +300,12 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
 
     return Architecture(device_def.archname, device_def.precision, alignment, False, device_def.backend, host_def.archname, cacheline)
   else:
-    return Architecture(host_def.archname, host_def.precision, alignment, prefetch)
+    cacheline = max(getHostCacheline(host_def.archname) or alignment, alignment)
+    return Architecture(host_def.archname,
+                        host_def.precision,
+                        alignment,
+                        prefetch,
+                        cacheline=cacheline)
 
 def fixArchitectureGlobal(arch):
   DenseMemoryLayout.setAlignmentArch(arch)

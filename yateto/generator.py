@@ -382,7 +382,8 @@ class Generator(object):
       cache = RoutineCache()
     else:
       cache = routine_cache.cache
-    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters)
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters,
+                                                 namespace)
 
     kernelSource = StringIO()
     kernelSourceContent = ''
@@ -400,6 +401,7 @@ class Generator(object):
           header.includeSys('limits')
           header.include('yateto.h')
           header.include(fTensors.hName)
+          header.include(fPool.hName)
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace), header.Namespace(namespace):
               # Group kernels by namespace

@@ -144,12 +144,16 @@ class OptimizedKernelGenerator(KernelGenerator):
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
+  BIND_GLOBALS_NAME = 'bindGlobals'
+  BIND_GLOBALS_ARGUMENT = 'pool'
 
 
-  def __init__(self, arch, routineCache, routine_exporters):
+  def __init__(self, arch, routineCache, routine_exporters, namespace=''):
     super().__init__(arch)
     self._routineCache = routineCache
     self._routine_exporters = routine_exporters
+    self._poolType = '::{}{}'.format('{}::'.format(namespace) if namespace else '',
+                                     PoolGenerator.POOL_STRUCT_NAME)
 
     self._routine_factories = {
       'cpu': OptimizedKernelFactory,
@@ -419,6 +423,30 @@ class OptimizedKernelGenerator(KernelGenerator):
                      is_compute_constant_tensors[baseName],
                      datatype[baseName],
                      target)
+        header.emptyline()
+
+        # Which of the members the caller does not have to fill in itself.
+        # Writable ones are excluded even when they carry values: the member
+        # is a pointer to mutable memory and the pool hands out const.
+        constants = [baseName for baseName in tensors
+                     if is_compute_constant_tensors[baseName] and not writable[baseName]]
+        # Emitted even when there is nothing to bind, so that "bind the globals
+        # of every kernel" is a rule a caller can follow without knowing which
+        # operands a kernel happens to have. The failure modes are not
+        # symmetric: a missing call is a null pointer at run time, a redundant
+        # one is nothing. It also keeps the interface stable when a kernel
+        # gains or loses its last constant operand.
+        header('//! Points every constant operand at its entry in `{}`.'.format(
+          self.BIND_GLOBALS_ARGUMENT))
+        with header.Function(self.BIND_GLOBALS_NAME,
+                             '{} const& {}'.format(self._poolType, self.BIND_GLOBALS_ARGUMENT)):
+          if not constants:
+            header('static_cast<void>({});'.format(self.BIND_GLOBALS_ARGUMENT))
+          for baseName in constants:
+            _, memberName = Tensor.splitBasename(baseName)
+            header('{} = {}.{};'.format(memberName,
+                                        self.BIND_GLOBALS_ARGUMENT,
+                                        PoolGenerator.memberName(baseName)))
         header.emptyline()
 
         # containers with extra offsets for GPU-like computations

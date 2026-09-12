@@ -484,12 +484,15 @@ class Generator(object):
         initGen.generateTensorsCpp(cpp)
     with Cpp(fInit.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.INIT_FILE_NAME)):
+        header.includeSys('cstdint')
+        header.includeSys('limits')
         header.include(fTensors.hName)
         header.include(fPool.hName)
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):
           initGen.generateInitH(header)
     with Cpp(fInit.cpp) as cpp:
+      cpp.includeSys('limits')
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
@@ -498,12 +501,15 @@ class Generator(object):
     with Cpp(fPool.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.POOL_FILE_NAME)):
         header.includeSys('cstddef')
+        header.includeSys('cstdint')
+        header.includeSys('limits')
         header.include(fTensors.hName)
         with header.Namespace(namespace):
           poolGen.generateH(header)
     with Cpp(fPool.cpp) as cpp:
       cpp.include(fPool.hName)
       cpp.includeSys('cstddef')
+      cpp.includeSys('limits')
       with cpp.Namespace(namespace):
         poolGen.generateCpp(cpp)
 

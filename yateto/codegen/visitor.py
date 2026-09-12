@@ -867,6 +867,11 @@ class InitializerGenerator(object):
     def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
       cpp(self.formatArray(numberType, namespace + self.PATTERN_NAME + index, memLayout.pattern(), declarationOnly))
 
+  #: What the pool needs to know about one tensor group: how large the group
+  #: is, which element type its entries were stored as, and where each member
+  #: of it ended up.
+  PoolEntry = collections.namedtuple('PoolEntry', ['groupSize', 'datatype', 'symbols'])
+
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
     self._numberType = f'{self._arch.uintTypename} const'
@@ -1010,9 +1015,14 @@ class InitializerGenerator(object):
     """Registers every constant tensor in `dataCache` and reports the symbols.
 
     The result maps a tensor's base name (namespace included) to its group
-    size and to the pool symbol each group ended up under. Groups without
-    values are absent: they have nothing to store, and the pool leaves the
-    corresponding pointer null.
+    size, its element type and the pool symbol each group ended up under.
+    Groups without values are absent: they have nothing to store, and the
+    pool leaves the corresponding pointer null.
+
+    The element type is the tensor's own, not the architecture's. A tensor
+    may carry a datatype of its own, and an entry stored under the wrong one
+    is not a matter of spelling: init binds a reference of the tensor's type
+    to it, and that reference does not bind.
 
     Registration happens here rather than while writing init.cpp so that the
     two stay independent -- the pool is built from the tensors, not from the
@@ -1023,19 +1033,27 @@ class InitializerGenerator(object):
       groupSize = self._groupSize[baseName]
       stride = groupSizeToStride(groupSize)
       symbols = collections.OrderedDict()
+      datatype = None
       for group, tensor in tensors.items():
         values = tensor.values()
         if values is None:
           continue
         memLayout = tensor.memoryLayout()
         hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
-        datatype = tensor.getDatatype(self._arch)
+        groupDatatype = tensor.getDatatype(self._arch)
+        if datatype is None:
+          datatype = groupDatatype
+        elif datatype != groupDatatype:
+          # One member of a group, one element type: the group is handed out
+          # as a Container<T>, and there is no T that fits both.
+          raise ValueError('Mixed datatypes are not allowed within a tensor group. '
+                           '({} and {} for {}.)'.format(datatype, groupDatatype, baseName))
         symbols[group] = dataCache.add(hint,
-                                       [datatype.literal(value) for value in memLayout.pack(values)],
-                                       datatype.ctype(),
+                                       [groupDatatype.literal(value) for value in memLayout.pack(values)],
+                                       groupDatatype.ctype(),
                                        POOL_ALIGNMENT)
       if symbols:
-        pool[baseName] = (groupSize, symbols)
+        pool[baseName] = self.PoolEntry(groupSize, datatype, symbols)
     self._pool = pool
     return pool
 
@@ -1048,8 +1066,8 @@ class InitializerGenerator(object):
     one that matches what init promises can be bound this way, and the rest of
     them answer None here and get their own array.
     """
-    groupSize, symbols = self._pool.get(baseName, (None, {}))
-    return symbols.get(group)
+    entry = self._pool.get(baseName)
+    return entry.symbols.get(group) if entry is not None else None
 
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
@@ -1255,16 +1273,20 @@ class PoolGenerator(object):
     """
     return baseNameWithNamespace.replace('::', '_')
 
-  def _memberType(self, baseName, groupSize):
-    realPtr = '{} const*'.format(self._arch.typename)
-    if len(groupSize) == 0:
-      return realPtr
+  @staticmethod
+  def _elementPtrType(datatype):
+    return '{} const*'.format(datatype.ctype())
+
+  def _memberType(self, baseName, entry):
+    elementPtr = self._elementPtrType(entry.datatype)
+    if len(entry.groupSize) == 0:
+      return elementPtr
     prefix, name = Tensor.splitBasename(baseName)
     return '{}{}::{}::{}<{}>'.format(prefix,
                                      InitializerGenerator.TENSOR_NAMESPACE,
                                      name,
                                      InitializerGenerator.CONTAINER_CLASS_NAME,
-                                     realPtr)
+                                     elementPtr)
 
   def _storageType(self):
     return '{}::{}'.format(self.STORAGE_NAMESPACE, self.STORAGE_STRUCT_NAME)
@@ -1283,8 +1305,8 @@ class PoolGenerator(object):
     header.emptyline()
 
     with header.Struct(self.POOL_STRUCT_NAME):
-      for baseName, (groupSize, _) in self._pool.items():
-        header('{} {}{{}};'.format(self._memberType(baseName, groupSize),
+      for baseName, entry in self._pool.items():
+        header('{} {}{{}};'.format(self._memberType(baseName, entry),
                                    self.memberName(baseName)))
       header.emptyline()
       header('//! Table for an image that lives at `base`, host or device.')
@@ -1318,14 +1340,14 @@ class PoolGenerator(object):
                       returnType):
       cpp('auto const* origin = static_cast<char const*>(base);')
       cpp('{} result;'.format(self.POOL_STRUCT_NAME))
-      for baseName, (groupSize, symbols) in self._pool.items():
+      for baseName, entry in self._pool.items():
         member = self.memberName(baseName)
-        stride = groupSizeToStride(groupSize)
-        for group, symbol in symbols.items():
+        stride = groupSizeToStride(entry.groupSize)
+        for group, symbol in entry.symbols.items():
           target = member if len(group) == 0 else '{}.{}[{}]'.format(
             member, InitializerGenerator.CONTAINER_DATA_NAME, address(group, stride))
-          cpp('result.{} = reinterpret_cast<{} const*>(origin + offsetof({}, {}));'.format(
-            target, self._arch.typename, self._storageType(), symbol))
+          cpp('result.{} = reinterpret_cast<{}>(origin + offsetof({}, {}));'.format(
+            target, self._elementPtrType(entry.datatype), self._storageType(), symbol))
       cpp('return result;')
     cpp.emptyline()
 

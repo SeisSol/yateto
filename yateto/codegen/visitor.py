@@ -1029,9 +1029,10 @@ class InitializerGenerator(object):
           continue
         memLayout = tensor.memoryLayout()
         hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
+        datatype = tensor.getDatatype(self._arch)
         symbols[group] = dataCache.add(hint,
-                                       memLayout.pack(values, fill='0.'),
-                                       self._arch.typename,
+                                       [datatype.literal(value) for value in memLayout.pack(values)],
+                                       datatype.ctype(),
                                        POOL_ALIGNMENT)
       if symbols:
         pool[baseName] = (groupSize, symbols)
@@ -1094,7 +1095,7 @@ class InitializerGenerator(object):
         memLayout = tensor.memoryLayout()
         datatype = tensor.getDatatype(self._arch)
         if values is not None:
-          memory = memLayout.pack(values, fill='0.')
+          memory = [datatype.literal(value) for value in memLayout.pack(values)]
           valuesName = f'{name}{self.VALUES_BASENAME}{index(group)}'
           valueNames[group] = [f'&{valuesName}[0]']
           symbol = self.poolSymbol(baseName, group)

@@ -51,17 +51,19 @@ class MemoryLayout(ABC):
   def isCompatible(self, spp):
     pass
 
-  def pack(self, values, fill=0.0):
-    """Materialises ``values`` into the flat storage this layout describes.
+  def pack(self, values, fill=0):
+    """Places ``values`` at the addresses this layout assigns them.
 
-    ``values`` maps multi-indices to numbers, the way ``Tensor.values()``
+    ``values`` maps multi-indices to entries, the way ``Tensor.values()``
     hands them out. The result has ``requiredReals()`` slots; every slot the
     layout does not map an entry of ``values`` onto -- padding, alignment
-    gaps, structural zeros -- is set to ``fill``.
+    gaps, structural zeros -- holds ``fill``.
 
-    ``fill`` need not be a number. Callers that render the result into source
-    text pass the literal they want to see in those slots, so that the choice
-    of literal stays with the emitter instead of being fixed here.
+    Entries come back exactly as they went in, ``fill`` included. Turning
+    them into source text is the emitter's job: it is the one that knows
+    which datatype the array will have, and a slot holding a rendered zero
+    next to slots holding unrendered values is a list that nothing can use
+    as a whole.
     """
     memory = [fill] * self.requiredReals()
     for entry, value in values.items():

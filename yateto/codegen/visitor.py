@@ -1299,6 +1299,19 @@ class PoolGenerator(object):
     """
     return baseNameWithNamespace.replace('::', '_')
 
+  def imageAlignment(self):
+    """Alignment the image is declared with.
+
+    The floor, or the strictest entry where that asks for more. alignas on a
+    class states a minimum and a member asking for more raises the class past
+    it, so declaring the floor alone would leave pool.h saying 128 for a type
+    that is actually aligned to 256 -- and would have the declaration weaken
+    an alignment that alignas is not meant to weaken. Naming the maximum
+    keeps the declared number, alignof() and poolAlignment() one number
+    instead of two.
+    """
+    return max([POOL_ALIGNMENT] + [entry.alignment() for entry in self._dataCache.entries()])
+
   @classmethod
   def assignMembers(cls, pool):
     """Member name per tensor, with the collisions flattening can cause refused.
@@ -1340,7 +1353,7 @@ class PoolGenerator(object):
 
   def generateH(self, header):
     with header.Namespace(self.STORAGE_NAMESPACE):
-      with header.Struct('alignas({}) {}'.format(POOL_ALIGNMENT, self.STORAGE_STRUCT_NAME)):
+      with header.Struct('alignas({}) {}'.format(self.imageAlignment(), self.STORAGE_STRUCT_NAME)):
         for entry in self._dataCache.entries():
           alignment = 'alignas({}) '.format(entry.alignment()) if entry.alignment() > 1 else ''
           header('{}{} const {}[{}];'.format(alignment,
@@ -1410,9 +1423,9 @@ class PoolGenerator(object):
     cpp.emptyline()
 
     with cpp.Function(self.ALIGN_FUN_NAME, '', self.SIZE_TYPE):
-      # Read off the image rather than repeated from POOL_ALIGNMENT: an entry
-      # asking for more than the floor raises the struct, and a consumer that
-      # allocated for the floor would then be one entry short.
+      # Read off the image rather than repeated from the number the struct was
+      # declared with, so that the two cannot drift apart -- a consumer that
+      # allocated for less than the image wants would be one entry short.
       cpp('return alignof({});'.format(self._storageType()))
     cpp.emptyline()
 

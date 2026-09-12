@@ -213,3 +213,33 @@ class TestPoolAlignment:
 
         entry, = cache.entries()
         assert entry.alignment() == max(POOL_ALIGNMENT, arch.cacheline)
+
+
+class TestImageAlignment:
+    """The image is declared with the alignment it actually has."""
+
+    @staticmethod
+    def _generator(archName, tensors):
+        arch = useArchitectureIdentifiedBy(archName)
+        cache = DataCache()
+        pool = InitializerGenerator(arch, tensors, []).collectPool(cache)
+        return PoolGenerator(arch, cache, pool), cache
+
+    def test_the_floor_holds_with_nothing_in_the_image(self):
+        generator, _ = self._generator('dhsw', [])
+
+        assert generator.imageAlignment() == POOL_ALIGNMENT
+
+    def test_the_floor_holds_when_no_entry_asks_for_more(self):
+        generator, _ = self._generator('dhsw', [Tensor('v', (3, 3), np.eye(3))])
+
+        assert generator.imageAlignment() == POOL_ALIGNMENT
+
+    def test_the_strictest_entry_raises_the_image(self):
+        """Declaring less than a member asks for would say 128 and mean 256."""
+        tensor = Tensor('m', (8, 8), np.eye(8), alignStride=True)
+        generator, cache = self._generator('da64fx', [tensor])
+
+        entry, = cache.entries()
+        assert entry.alignment() > POOL_ALIGNMENT
+        assert generator.imageAlignment() == entry.alignment()

@@ -779,6 +779,7 @@ class InitializerGenerator(object):
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
     self._numberType = '{} const'.format(self._arch.uintTypename)
+    self._pool = dict()
     self._realType = '{} const'.format(self._arch.typename)
     self._realPtrType = self._realType + '*'
     self._scalarCollect = collections.OrderedDict()
@@ -942,7 +943,20 @@ class InitializerGenerator(object):
                                        POOL_ALIGNMENT)
       if symbols:
         pool[baseName] = (groupSize, symbols)
+    self._pool = pool
     return pool
+
+  def poolSymbol(self, baseName, group):
+    """Pool entry holding exactly what init would otherwise print, if there is one.
+
+    There is one as long as a tensor has a single realisation, which is why
+    the initialiser can bind a reference instead of materialising the values a
+    second time. Once a tensor is realised in more than one layout, only the
+    one that matches what init promises can be bound this way, and the rest of
+    them answer None here and get their own array.
+    """
+    groupSize, symbols = self._pool.get(baseName, (None, {}))
+    return symbols.get(group)
 
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
@@ -990,7 +1004,16 @@ class InitializerGenerator(object):
           memory = memLayout.pack(values, fill='0.')
           valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, index(group))
           valueNames[group] = ['&{}[0]'.format(valuesName)]
-          cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))
+          symbol = self.poolSymbol(baseName, group)
+          if symbol is None:
+            cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))
+          else:
+            cpp('{} (&{})[{}] = {}::{}.{};'.format(self._realType,
+                                                    valuesName,
+                                                    len(memory),
+                                                    PoolGenerator.STORAGE_NAMESPACE,
+                                                    PoolGenerator.STORAGE_VAR_NAME,
+                                                    symbol))
       if len(valueNames) > 1:
         self._array(cpp, self._realPtrType, name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
     else:
@@ -1005,10 +1028,17 @@ class InitializerGenerator(object):
           values = tensor.values()
           if values is not None:
             name = '{}{}'.format(self.VALUES_BASENAME, index(group))
-            aligned = ''
-            if tensor.memoryLayout().alignedStride():
-              aligned = ' __attribute__((aligned({})))'.format(self._arch.cacheline)
-            cpp('{} {} {}[]{};'.format(STATIC, self._realType, name, aligned))
+            symbol = self.poolSymbol(baseName, group)
+            if symbol is None:
+              aligned = ''
+              if tensor.memoryLayout().alignedStride():
+                aligned = ' __attribute__((aligned({})))'.format(self._arch.cacheline)
+              cpp('{} {} {}[]{};'.format(STATIC, self._realType, name, aligned))
+            else:
+              # No alignment attribute: the entry it binds to is aligned by the
+              # pool, and more strictly than this would ask for.
+              cpp('{} {} (&{})[{}];'.format(STATIC, self._realType, name,
+                                            tensor.memoryLayout().requiredReals()))
             nValueArrays += 1
         if nValueArrays > 1:
           cpp('{} {} {}[];'.format(STATIC, self._realPtrType, self.VALUES_BASENAME))
@@ -1147,6 +1177,9 @@ class PoolGenerator(object):
                                                        entry.typename(),
                                                        entry.name(),
                                                        entry.elements()))
+      header.emptyline()
+      header('//! The image itself, so that init can bind references into it.')
+      header('extern {} const {};'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
     header.emptyline()
 
     with header.Struct(self.POOL_STRUCT_NAME):
@@ -1172,9 +1205,7 @@ class PoolGenerator(object):
   def generateCpp(self, cpp):
     with cpp.Namespace(self.STORAGE_NAMESPACE):
       entries = self._dataCache.entries()
-      # const at namespace scope already has internal linkage, so the image
-      # stays local to this translation unit; poolData() is the way out.
-      cpp('{} const {} = {{'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
+      cpp('extern {} const {} = {{'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
       for i, entry in enumerate(entries):
         separator = ',' if i + 1 < len(entries) else ''
         cpp('  {{{}}}{}'.format(', '.join(str(value) for value in entry.values()), separator))

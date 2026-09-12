@@ -462,6 +462,12 @@ class Generator(object):
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
     initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key))
+
+    # Before the initialisation code, not after: init binds references into the
+    # pool where it can, so it has to know which entries exist.
+    print('Generating constant pool...')
+    dataCache = DataCache()
+    poolMap = initGen.collectPool(dataCache)
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):
@@ -478,12 +484,10 @@ class Generator(object):
           initGen.generateInitH(header)
     with Cpp(fInit.cpp) as cpp:
       cpp.include(fInit.hName)
+      cpp.include(fPool.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
 
-    print('Generating constant pool...')
-    dataCache = DataCache()
-    poolMap = initGen.collectPool(dataCache)
     poolGen = PoolGenerator(self._arch, dataCache, poolMap)
     with Cpp(fPool.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.POOL_FILE_NAME)):

@@ -111,6 +111,21 @@ class Datatype(Enum):
       Datatype.F128: 16,
     }[self]
 
+  @staticmethod
+  def asnumber(value):
+    """Turns whatever a caller stored into a number the branches below can read.
+
+    ``Tensor.values()`` keeps its entries as strings, so a literal request can
+    arrive as `'nan'` just as easily as as `float('nan')`. Everything that
+    decides how a value is spelled -- finiteness, saturation, truthiness --
+    needs to see the number, so the conversion happens once, here, rather than
+    in each branch. Integers and booleans pass through untouched so that they
+    keep their exact value and their truthiness.
+    """
+    if isinstance(value, (bool, int)):
+      return value
+    return float(value)
+
   def safeint(self, value):
     # allow inf/-inf to be treated as int: saturate at the type's own limits
     lo, hi = self.limits()
@@ -121,6 +136,8 @@ class Datatype(Enum):
     return int(max(lo, min(hi, value)))
 
   def literal(self, value):
+    value = self.asnumber(value)
+
     # Non-finite values have no literal spelling in C/C++; route them through
     # <limits> instead. For the integer types they saturate.
     if isinstance(value, float) and not math.isfinite(value):
@@ -148,7 +165,7 @@ class Datatype(Enum):
       Datatype.F64: lambda value: f'{float(value):.16}',
       Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
       Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
-      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({value!r}q)',
+      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({float(value):.36}q)',
     }[self](value)
 
 class AddressingMode(Enum):

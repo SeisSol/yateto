@@ -62,6 +62,7 @@ foreach(EXAMPLE ${EXAMPLES})
     set(GENERATED_SRC ${GEN_DIR}/subroutine.cpp
                       ${GEN_DIR}/init.cpp
                       ${GEN_DIR}/kernel.cpp
+                      ${GEN_DIR}/pool.cpp
                       ${GEN_DIR}/tensor.cpp)
 
     # execute code generator
@@ -76,6 +77,7 @@ foreach(EXAMPLE ${EXAMPLES})
                         ${GENERATED_SRC}
                         ${GEN_DIR}/init.h
                         ${GEN_DIR}/kernel.h
+                        ${GEN_DIR}/pool.h
                         ${GEN_DIR}/tensor.h
                         ${GEN_DIR}/subroutine.h
                         ${GEN_DIR}/KernelTest.t.h

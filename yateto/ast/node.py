@@ -186,7 +186,9 @@ class Node(ABC):
 
   def __add__(self, other):
     if not isinstance(other, Node):
-      raise ValueError(f'Unsupported operation: Cannot add {self} to {other}.')
+      # A scalar or literal has no indices to merge, so it cannot join an
+      # accumulation. It broadcasts instead, which is what Elementwise does.
+      return Elementwise(ops.Add(), self, other)
     return self._accumulate(other, ops.Add())
 
   def __radd__(self, other):
@@ -196,7 +198,12 @@ class Node(ABC):
     return self.scaled(-1.0)
 
   def __sub__(self, other):
+    if not isinstance(other, Node):
+      return Elementwise(ops.Add(), self, -other)
     return self._accumulate(-other, ops.Add())
+
+  def __rsub__(self, other):
+    return Elementwise(ops.Add(), -self, other)
 
   def __le__(self, other):
     return Assign(self, other)

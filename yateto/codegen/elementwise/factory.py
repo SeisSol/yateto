@@ -32,7 +32,10 @@ class Description(object):
           f'Operand {term.name} exceeds the result\'s loop ranges.'
         for index, rng in termRange.items():
           assert self.loopRanges[index] == rng or index not in term.indices, \
-            f'Inconsistent loop range for index {index}.'
+            f'Inconsistent loop range for index {index}: {self.loopRanges[index]} ' \
+            f'from an earlier operand against {rng} from {term.name}. An index ' \
+            f'letter carries one extent per kernel, so give the differing axis a ' \
+            f'letter of its own.'
           self.loopRanges[index] = rng
 
   def fillTerms(self, args):

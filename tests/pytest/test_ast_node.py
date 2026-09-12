@@ -49,7 +49,6 @@ from yateto.ast.node import (
     LoopOverGEMM,
     Op,
     Permute,
-    Elementwise,
     SliceView,
     UnaryOp,
 )
@@ -204,10 +203,11 @@ class TestAddBuilding:
         assert expr[1].isScaling()
         assert TestScaling.scaleOf(expr[1]) == -1.0
 
-    def test_add_with_non_node_raises(self, square_tensors):
+    def test_add_with_non_node_broadcasts(self, square_tensors):
         A = square_tensors["A"]
-        with pytest.raises(ValueError, match="Cannot add"):
-            A["ij"] + 5
+        for expr in (A["ij"] + 5, 5 + A["ij"], A["ij"] - 5, 5 - A["ij"]):
+            assert isinstance(expr, Elementwise)
+            assert expr.optype == ops.Add()
 
 
 # ---------------------------------------------------------------------------

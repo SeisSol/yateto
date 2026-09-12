@@ -338,9 +338,27 @@ class SetDatatype(Transformer):
       node.datatype = node.tensor.getDatatype(self.arch)
     return node
 
+  def _operandTypes(self, node):
+    """Datatypes in operand order.
+
+    An Elementwise may carry literal operands, which are templates rather than
+    children. Asking the children alone shifts every operand after a literal
+    into the wrong slot, so the literals are filled back in here. A literal
+    takes the datatype of the first tensor-valued operand, which is the type it
+    is written against.
+    """
+    childTypes = self._childTypes(node)
+    if not hasattr(node, 'nodeTermIndices'):
+      return childTypes
+    prevailing = childTypes[0] if childTypes else None
+    types = []
+    for position, index in enumerate(node.nodeTermIndices):
+      types.append(prevailing if index is None else childTypes[index])
+    return types
+
   def visit_Elementwise(self, node):
     super().generic_visit(node)
-    node.datatype = node.optype.datatypeResult(self._childTypes(node))
+    node.datatype = node.optype.datatypeResult(self._operandTypes(node))
     return node
 
   def visit_Reduction(self, node):

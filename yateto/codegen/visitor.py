@@ -22,11 +22,19 @@ STATIC = 'static'
 INLINE = 'inline'
 MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
 STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
-#: Alignment of the constant pool as a whole. Every entry's place inside the
-#: image is an offset from its base, so the alignment an entry was given only
-#: survives a copy if the destination is aligned at least this far. This is
-#: the floor; a stricter entry raises it, which is why consumers are told the
-#: number by poolAlignment() rather than being expected to know it.
+#: Alignment floor, for the image and for every entry in it.
+#:
+#: For the image, because an entry's place inside it is an offset from its
+#: base: the alignment an entry was given only survives a copy if the
+#: destination is aligned at least this far.
+#:
+#: For each entry, because entries are not only read one at a time. Constant
+#: operands that a merged kernel picks between at runtime have to be reachable
+#: with one stride, and a floor every entry meets is what makes the stride the
+#: same for all of them regardless of how large each one happens to be. An
+#: entry whose layout asks for more than the floor gets more; nothing gets
+#: less, so consumers are told the number by poolAlignment() rather than being
+#: expected to know it.
 POOL_ALIGNMENT = 128
 
 def groupSizeToStride(groupSize):
@@ -1049,10 +1057,12 @@ class InitializerGenerator(object):
           # as a Container<T>, and there is no T that fits both.
           raise ValueError('Mixed datatypes are not allowed within a tensor group. '
                            '({} and {} for {}.)'.format(datatype, groupDatatype, baseName))
-        # The layout already says whether anything reads this array with
-        # aligned loads; asking for a cache line unconditionally would pad
-        # every three-by-three matrix out to one.
-        alignment = self._arch.cacheline if memLayout.alignedStride() else 1
+        # The floor is what keeps entries at a common stride; the layout is
+        # asked on top of it, because a target whose cache line is wider than
+        # the floor -- a64fx -- would otherwise get less than its aligned
+        # loads need.
+        layoutAlignment = self._arch.cacheline if memLayout.alignedStride() else 1
+        alignment = max(POOL_ALIGNMENT, layoutAlignment)
         symbols[group] = dataCache.add(hint,
                                        [groupDatatype.literal(value) for value in memLayout.pack(values)],
                                        groupDatatype.ctype(),
@@ -1157,9 +1167,9 @@ class InitializerGenerator(object):
               # alignment comes along with the address, where an out-of-line
               # reference would have hidden it.
               #
-              # No alignment attribute either: the entry was registered with
-              # this layout's own requirement, so the pool declaration already
-              # carries it.
+              # No alignment attribute either: the pool aligns the entry to
+              # at least POOL_ALIGNMENT, which is not less than this would
+              # have asked for.
               cpp('{} {} {} (&{})[{}] = {}::{}.{};'.format(CONSTEXPR,
                                                            STATIC,
                                                            self._realType(datatype),

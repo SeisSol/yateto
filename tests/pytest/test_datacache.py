@@ -13,7 +13,7 @@ import pytest
 
 from yateto import Tensor, useArchitectureIdentifiedBy
 from yateto.codegen.datacache import DataCache
-from yateto.codegen.visitor import InitializerGenerator, PoolGenerator
+from yateto.codegen.visitor import POOL_ALIGNMENT, InitializerGenerator, PoolGenerator
 from yateto.type import Datatype
 
 
@@ -182,3 +182,34 @@ class TestPoolMembers:
         """`a::b` and `a_b` flatten alike; one would write into the other."""
         with pytest.raises(ValueError, match='a_b'):
             PoolGenerator.assignMembers(['a::b', 'a_b'])
+
+
+class TestPoolAlignment:
+    """Every entry meets the pool's floor, whatever its own layout asks for."""
+
+    @staticmethod
+    def _entries(tensor):
+        arch = useArchitectureIdentifiedBy('dhsw')
+        cache = DataCache()
+        InitializerGenerator(arch, [tensor], []).collectPool(cache)
+        return cache.entries()
+
+    def test_an_unaligned_layout_still_meets_the_floor(self):
+        entry, = self._entries(Tensor('v', (3, 3), np.eye(3)))
+
+        assert entry.alignment() >= POOL_ALIGNMENT
+
+    def test_an_aligned_layout_meets_it_too(self):
+        entry, = self._entries(Tensor('m', (8, 8), np.eye(8), alignStride=True))
+
+        assert entry.alignment() >= POOL_ALIGNMENT
+
+    def test_a_wider_cache_line_wins_over_the_floor(self):
+        """a64fx reads 256-byte lines; the floor must not cap that."""
+        arch = useArchitectureIdentifiedBy('da64fx')
+        cache = DataCache()
+        tensor = Tensor('m', (8, 8), np.eye(8), alignStride=True)
+        InitializerGenerator(arch, [tensor], []).collectPool(cache)
+
+        entry, = cache.entries()
+        assert entry.alignment() == max(POOL_ALIGNMENT, arch.cacheline)

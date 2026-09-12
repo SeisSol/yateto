@@ -7,7 +7,6 @@ from .ast.indices import Indices
 import numpy as np
 
 def create_collection(matrices):
-  maxIndex = dict()
   collection = Collection()
   for name, matrix in matrices.items():
     if not Tensor.isValidName(name):

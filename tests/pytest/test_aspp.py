@@ -190,3 +190,14 @@ class TestDispatch:
         # Yateto occasionally compares ``None`` equivalents.
         assert aspp.array_equal(None, None)
         assert not aspp.array_equal(None, aspp.dense((2, 2)))
+
+
+def test_nnzbounds_of_an_all_zero_pattern_is_an_empty_range():
+    """A structurally zero tensor has an empty bounding box, not a crash."""
+    import numpy as np
+    from yateto import aspp
+    from yateto.ast.indices import BoundingBox
+
+    pattern = aspp.general(np.zeros((3, 4), dtype=bool))
+    assert pattern.nnzbounds() == [(0, -1), (0, -1)]
+    assert BoundingBox.fromSpp(pattern).size() == 0

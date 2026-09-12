@@ -123,7 +123,7 @@ def _outline(attrs, target="gpu"):
         tensors=collections.OrderedDict(), writable={},
         prefetch=collections.OrderedDict(), scalars=collections.OrderedDict(),
         function="  // body\n", tmp_mem_size=0, is_compute_constant_tensors={},
-        target=target, attrs=attrs)
+        datatype={}, target=target, attrs=attrs)
 
 
 def _struct(arch, outlines, familyStride=None):
@@ -201,12 +201,54 @@ class TestExporterHandover:
         seen = {}
 
         class Exporter:
+            INTERFACE_VERSION = 6
+
             def __init__(self, arch, attrs=None):
                 seen["attrs"] = attrs
 
         ExportFactory.makeFactory(Exporter)(
             Cpp(StringIO()), arch, "gpu", KernelAttributes({"flags": True}))
         assert seen["attrs"] == {"flags": True}
+
+    def test_an_exporter_speaking_an_older_interface_is_refused(self, arch):
+        # It would read a description whose per-occurrence bounding box it
+        # does not know about, and run every operation over the whole storage
+        # instead -- which for an assignment writes over entries the operation
+        # was never meant to touch. Nothing about that shows up as an error
+        # later, so it has to show up here.
+        class OldExporter:
+            def __init__(self, arch, attrs=None):
+                pass
+
+        with pytest.raises(RuntimeError, match="interface version"):
+            ExportFactory.makeFactory(OldExporter)(
+                Cpp(StringIO()), arch, "gpu", KernelAttributes())
+
+    def test_an_exporter_speaking_a_newer_interface_is_accepted(self, arch):
+        """Fields it knows and this yateto does not send do not appear."""
+        class NewExporter:
+            INTERFACE_VERSION = 99
+
+            def __init__(self, arch, attrs=None):
+                pass
+
+        ExportFactory.makeFactory(NewExporter)(
+            Cpp(StringIO()), arch, "gpu", KernelAttributes())
+
+    def test_the_version_is_asked_of_the_exporter_not_of_its_factory(self, arch):
+        """A factory function is a fine way to register one, and it carries
+        no version of its own."""
+        class Exporter:
+            INTERFACE_VERSION = 6
+
+            def __init__(self, arch, attrs=None):
+                pass
+
+        def make(arch, attrs=None):
+            return Exporter(arch, attrs)
+
+        ExportFactory.makeFactory(make)(
+            Cpp(StringIO()), arch, "gpu", KernelAttributes())
 
     def test_an_exporter_without_the_channel_is_refused(self, arch):
         # It would generate a kernel taking flags while this side emits no

@@ -1,8 +1,11 @@
 import re
+from copy import deepcopy
 from ..memory import DenseMemoryLayout
 from .indices import BoundingBox, Indices, LoGCost
 from abc import ABC, abstractmethod
 from .. import aspp
+from ..type import AddressingMode, Tensor, derivedScalar
+from .. import ops
 import numpy as np
 
 class Node(ABC):
@@ -10,6 +13,8 @@ class Node(ABC):
     self.indices = None
     self._children = []
     self._eqspp = None
+    self._boundingBox = None
+    self.datatype = None
     self.prefetch = None
 
   def size(self):
@@ -41,7 +46,15 @@ class Node(ABC):
     self._eqspp = spp
 
   def boundingBox(self):
-    return BoundingBox.fromSpp(self._eqspp)
+    # keyed on the identity of the pattern, so any replacement of _eqspp
+    # (setEqspp, setIndexPermutation, deepcopy) drops the cached box; the cache
+    # keeps the pattern alive, so no other object can take over its address
+    cached = self._boundingBox
+    if cached is not None and cached[0] is self._eqspp:
+      return cached[1]
+    box = BoundingBox.fromSpp(self._eqspp)
+    self._boundingBox = (self._eqspp, box)
+    return box
 
   @abstractmethod
   def memoryLayout(self):
@@ -73,9 +86,75 @@ class Node(ABC):
     bcst = [1 if idx in indices else self.indices.indexSize(idx) for idx in self.indices]
     return reshaped.broadcast(bcst)
 
-  def _checkMultipleScalarMults(self):
-    if isinstance(self, ScalarMultiplication):
-      raise ValueError('Multiple multiplications with scalars are not allowed. Merge them into a single one.')
+  @staticmethod
+  def _operand(value):
+    """A tensor written without indices is the rank-0 operand of that tensor.
+
+    Which is what a scalar is: it has a shape, a layout and a name, and only
+    its calling convention sets it apart. Anything else -- a number -- is a
+    literal, and Elementwise carries those as templates, since a literal needs
+    neither storage nor a name.
+    """
+    return value[''] if isinstance(value, Tensor) else value
+
+  @staticmethod
+  def _scalarOperand(value):
+    """Turn a scale factor into an operand.
+
+    A number stays a number, and a named scalar becomes a rank-0 operand.
+    """
+    if isinstance(value, Node):
+      return value
+    if isinstance(value, Tensor):
+      return value['']
+    return float(value)
+
+  @staticmethod
+  def _combineFactors(left, right):
+    """Multiply two scale factors into one.
+
+    Two numbers collapse right away; anything else becomes a derived scalar,
+    computed once in the kernel prologue rather than in a loop.
+    """
+    if left is None:
+      return right
+    if right is None:
+      return left
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+      return left * right
+    return derivedScalar(ops.Mul(), left, right)
+
+  def isScaling(self):
+    """Whether this node multiplies a term by a scale factor."""
+    return self.scalingOperands() is not None
+
+  def scalingOperands(self):
+    return None
+
+  def splitScaling(self):
+    """``(factor, term)`` with the scale factor peeled off; factor may be None."""
+    scaling = self.scalingOperands()
+    return scaling if scaling is not None else (None, self)
+
+  def scaled(self, factor):
+    """Multiply by a scale factor, collapsing with one already present."""
+    mine, term = self.splitScaling()
+    combined = Node._combineFactors(mine, factor)
+    return Elementwise(ops.Mul(), Node._scalarOperand(combined), term)
+
+  def _accumulate(self, other, optype):
+    """Flatten chains of the same operation into one n-ary Accumulate."""
+    matches = lambda node: isinstance(node, Accumulate) and node.optype == optype
+    if matches(self):
+      if matches(other):
+        self._children.extend(other._children)
+      else:
+        self._children.append(other)
+      return self
+    elif matches(other):
+      other._children.insert(0, self)
+      return other
+    return Accumulate(optype, self, other)
 
   def _binOp(self, other, opType):
     if isinstance(self, opType):
@@ -91,38 +170,49 @@ class Node(ABC):
 
   def __mul__(self, other):
     if not isinstance(other, Node):
-      self._checkMultipleScalarMults()
-      return ScalarMultiplication(other, self)
-    if isinstance(self, ScalarMultiplication):
-      other._checkMultipleScalarMults()
-      self.setTerm(self.term() * other)
-      return self
-    elif isinstance(other, ScalarMultiplication):
-      self._checkMultipleScalarMults()
-      other.setTerm(self * other.term())
-      return other
-    return self._binOp(other, Einsum)
+      return self.scaled(other)
+
+    # peel the scale factors off both sides, multiply the tensors, and put the
+    # combined factor back on top -- so a product carries at most one factor
+    leftFactor, leftTerm = self.splitScaling()
+    rightFactor, rightTerm = other.splitScaling()
+    product = leftTerm._binOp(rightTerm, Einsum)
+
+    factor = Node._combineFactors(leftFactor, rightFactor)
+    return product if factor is None else product.scaled(factor)
 
   def __rmul__(self, other):
     return self.__mul__(other)
 
   def __add__(self, other):
     if not isinstance(other, Node):
-      raise ValueError('Unsupported operation: Cannot add {} to {}.'.format(self, other))
-    return self._binOp(other, Add)
+      # A scalar or literal has no indices to merge, so it cannot join an
+      # accumulation. It broadcasts instead, which is what Elementwise does.
+      return Elementwise(ops.Add(), self, other)
+    return self._accumulate(other, ops.Add())
 
   def __radd__(self, other):
     return self.__add__(other)
 
   def __neg__(self):
-    self._checkMultipleScalarMults()
-    return ScalarMultiplication(-1.0, self)
+    return self.scaled(-1.0)
 
   def __sub__(self, other):
-    return self._binOp(-other, Add)
+    if not isinstance(other, Node):
+      return Elementwise(ops.Add(), self, -other)
+    return self._accumulate(-other, ops.Add())
+
+  def __rsub__(self, other):
+    return Elementwise(ops.Add(), -self, other)
 
   def __le__(self, other):
     return Assign(self, other)
+
+  def __truediv__(self, other):
+    return Elementwise(ops.Div(), self, other)
+
+  def __rtruediv__(self, other):
+    return Elementwise(ops.Div(), other, self)
 
   def subslice(self, index, start, end):
     return SliceView(self, index, start, end)
@@ -209,7 +299,29 @@ class IndexedTensor(Node):
     return it
 
   def __str__(self):
-    return '{}[{}]'.format(self.tensor.name(), str(self.indices))
+    return f'{self.tensor.name()}[{str(self.indices)}]'
+
+class NAryOp(Node):
+  """Mixin for operations whose indices are the merge of their operands'."""
+
+  def deduceIndices(self):
+    # Indices are built once and never written to afterwards, so the merge can
+    # start from the first child's object instead of a copy of it
+    indices = self[0].indices
+    for i in range(1, len(self)):
+      indices = indices.mergeStrict(self[i].indices)
+    if not all(child.indices <= indices for child in self):
+      raise ValueError(f'{type(self).__name__}: Indices do not match: ',
+                       *[child.indices for child in self])
+    self.indices = indices
+    return self.indices
+
+  def _deduceIndicesIfPossible(self):
+    # the tree is built bottom-up in some places (the contraction search) and
+    # top-down in others; deduce eagerly when the children already know theirs.
+    # An empty node is legal while a sum is still being assembled.
+    if len(self) > 0 and all(child.indices is not None for child in self):
+      self.deduceIndices()
 
 class Op(Node):
   def __init__(self, *args):
@@ -227,7 +339,7 @@ class Op(Node):
     alignStride = False
     alignOffset = float('inf')
 
-    if len(self.indices) > 0:
+    if self.indices is not None and len(self.indices) > 0:
       for child in self:
         if self.indices[0] in child.indices:
           position = child.indices.find(self.indices[0])
@@ -266,69 +378,9 @@ class Einsum(Op):
   def nonZeroFlops(self):
     raise NotImplementedError
 
-class Add(Op):
-  def computeSparsityPattern(self, *spps):
-    if len(spps) == 0:
-      spps = [node.eqspp() for node in self]
-    permute_summand = lambda i: self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], False))
-    spp = permute_summand(0)
-    for i in range(1, len(spps)):
-      add_spp = permute_summand(i)
-      spp = aspp.add(spp, add_spp)
-    return spp
-
-  def nonZeroFlops(self):
-    nzFlops = 0
-    for child in self:
-      permuted = self.broadcast(child.indices, self.permute(child.indices, child.eqspp(), False))
-      nzFlops += permuted.count_nonzero()
-
-    # ignore all first adds against zero (i.e. those in self.eqspp())
-    return nzFlops - self.eqspp().count_nonzero()
-
 class UnaryOp(Op):
   def term(self):
     return self._children[0]
-
-class ScalarMultiplication(UnaryOp):
-  def __init__(self, scalar, term):
-    super().__init__(term)
-    self._isConstant = isinstance(scalar, float) or isinstance(scalar, int)
-    self._scalar = float(scalar) if self._isConstant else scalar
-    self.setTerm(term)
-
-  def fixedIndexPermutation(self):
-    return self.term().fixedIndexPermutation()
-
-  def setTerm(self, term):
-    self._children[0] = term
-    if self.fixedIndexPermutation():
-      self.indices = self.term().indices
-    else:
-      self.indices = None
-
-  def name(self):
-    return str(self._scalar) if self._isConstant else self._scalar.name()
-
-  def is_constant(self):
-    return self._isConstant
-
-  def scalar(self):
-    return self._scalar
-
-  def computeSparsityPattern(self, *spps):
-    if len(spps) == 0:
-      return self.term().eqspp()
-    assert len(spps) == 1
-    return spps[0]
-
-  def nonZeroFlops(self):
-    if self._isConstant and self._scalar in [-1.0, 1.0]:
-      return 0
-    return self.eqspp().count_nonzero()
-
-  def __str__(self):
-    return '{}: {}'.format(super().__str__(), str(self._scalar))
 
 class BinOp(Op):
   def __init__(self, lTerm, rTerm):
@@ -345,18 +397,53 @@ class BinOp(Op):
       raise ValueError('BinOp node must have exactly 2 children.')
     super().setChildren(children)
 
-class Assign(BinOp):
+class Assign(Op):
+  def __init__(self, lTerm, rTerm, condition=True):
+    if isinstance(condition, Node):
+      super().__init__(lTerm, rTerm, condition)
+    else:
+      super().__init__(lTerm, rTerm)
+
+    self._checkLeftTerm(self._children[0])
+    self._condition = condition
+
+  @staticmethod
+  def _checkLeftTerm(child):
+    lhs = child.viewed()
+    if not isinstance(lhs, IndexedTensor):
+      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(lhs))
+    if lhs.tensor.isPassedByValue():
+      # a by-value operand has no storage to write back into; a rank-0 tensor
+      # does, and is the way to compute a scalar result inside a kernel
+      raise ValueError(
+        f'Cannot assign to "{lhs.name()}": it is passed by value. '
+        f'Use a rank-0 tensor if you need to compute the value inside a kernel.')
+
+  def leftTerm(self):
+    return self._children[0]
+
+  def rightTerm(self):
+    return self._children[1]
+
+  def condition(self):
+    return self._condition
+
   def setChildren(self, children):
-    if not isinstance(children[0].viewed(), IndexedTensor):
-      raise ValueError('First child of Assign node must be an IndexedTensor: ' + str(children[0].viewed()))
+    self._checkLeftTerm(children[0])
     super().setChildren(children)
 
   def nonZeroFlops(self):
     return 0
 
   def computeSparsityPattern(self, *spps):
-    spp = spps[1] if len(spps) == 2 else self.rightTerm().eqspp()
+    spp = spps[1] if len(spps) >= 2 else self.rightTerm().eqspp()
     return self.broadcast(self.rightTerm().indices, self.permute(self.rightTerm().indices, spp, False))
+
+  def __str__(self):
+    selfname = type(self).__name__
+    indices = self.indices if self.indices is not None else '<not deduced>'
+    condition = '' if isinstance(self.condition(), bool) and self.condition() else f' if {self.condition()}'
+    return f'{selfname}[{indices}]: {self.leftTerm()} <- {self.rightTerm()}{condition}'
 
 class Permute(UnaryOp):
   # permute a given tensor
@@ -403,40 +490,6 @@ def _productContractionLoGSparsityPattern(node, *spps):
   assert len(spps) == 2
   einsumDescription = '{},{}->{}'.format(node.leftTerm().indices.tostring(), node.rightTerm().indices.tostring(), node.indices.tostring())
   return aspp.einsum(einsumDescription, spps[0], spps[1])
-
-class Product(BinOp):
-  def __init__(self, lTerm, rTerm):
-    super().__init__(lTerm, rTerm)
-    K = lTerm.indices & rTerm.indices
-    assert lTerm.indices.subShape(K) == rTerm.indices.subShape(K)
-
-    self.indices = lTerm.indices.merged(rTerm.indices - K)
-
-  def nonZeroFlops(self):
-    return self.eqspp().count_nonzero()
-
-  def computeSparsityPattern(self, *spps):
-    if len(spps) == 0:
-      spps = [node.eqspp() for node in self]
-    assert len(spps) == 2
-    return _productContractionLoGSparsityPattern(self, *spps)
-
-class IndexSum(UnaryOp):
-  def __init__(self, term, sumIndex):
-    super().__init__(term)
-    self.indices = term.indices - set([sumIndex])
-    self._sumIndex = term.indices.extract(sumIndex)
-
-  def nonZeroFlops(self):
-    return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
-
-  def sumIndex(self):
-    return self._sumIndex
-
-  def computeSparsityPattern(self, *spps):
-    assert len(spps) <= 1
-    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
-    return spp.indexSum(self.term().indices, self.indices, {})
 
 class Contraction(BinOp):
   def __init__(self, indices, lTerm, rTerm, sumIndices):
@@ -486,7 +539,7 @@ class LoopOverGEMM(BinOp):
     return len(x) == 0
 
   def nonZeroFlops(self):
-    p = Product(self.leftTerm(), self.rightTerm())
+    p = Elementwise(ops.Mul(), self.leftTerm(), self.rightTerm())
     p.setEqspp( p.computeSparsityPattern() )
     return 2*p.nonZeroFlops() - self.eqspp().count_nonzero()
 
@@ -556,7 +609,6 @@ class LoopOverGEMM(BinOp):
 
     return True if len(left_indices - right_indices) == 1 else False
 
-
 class FusedGEMMs(Op):
   def __init__(self):
     super().__init__()
@@ -581,3 +633,199 @@ class FusedGEMMs(Op):
 
   def is_empty(self):
     return len(self._children) == 0
+
+class IfThenElse(Op):
+  def __init__(self, condition, yesTerm, noTerm):
+    if isinstance(condition, Node):
+      super().__init__(yesTerm, noTerm, condition)
+    else:
+      super().__init__(yesTerm, noTerm)
+
+    self._condition = condition
+
+  def yesTerm(self):
+    return self._children[0]
+
+  def noTerm(self):
+    return self._children[1]
+
+  def condition(self):
+    return self._condition
+
+  def nonZeroFlops(self):
+    return 0
+
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [child.eqspp() for child in self]
+    # either branch may be taken, so over-approximate with their union
+    permuted = [self.permute(self[i].indices, spps[i]) for i in range(2)]
+    return aspp.add(permuted[0], permuted[1])
+
+  def __str__(self):
+    indices = self.indices if self.indices is not None else '<not deduced>'
+    return f'{type(self).__name__}[{indices}]'
+
+class Elementwise(NAryOp, Op):
+  def __init__(self, optype: ops.Operation, *terms):
+    optype.checkArity(len(terms))
+
+    # A tensor handed over without indices is an operand, not a template: it
+    # has a name the kernel has to declare and a value the caller sets, and
+    # writing it into the expression as if it were a literal leaves the
+    # generated code naming something that was never declared.
+    terms = tuple(Node._operand(term) for term in terms)
+
+    nodeTerms = [term for term in terms if isinstance(term, Node)]
+    if len(nodeTerms) == 0:
+      raise ValueError('Elementwise needs at least one tensor-valued operand.')
+    super().__init__(*nodeTerms)
+
+    self.nodeTermIndices = [None] * len(terms)
+    self.termTemplate = [None] * len(terms)
+    index = 0
+    for i, term in enumerate(terms):
+      if isinstance(term, Node):
+        self.nodeTermIndices[i] = index
+        index += 1
+      else:
+        self.nodeTermIndices[i] = None
+        self.termTemplate[i] = term
+
+    self.optype = optype
+    self._deduceIndicesIfPossible()
+
+    # The indices are deduced by DeduceIndices, which is the first point at
+    # which the children's indices are guaranteed to be known.
+
+  @property
+  def terms(self):
+    """The operands in their original order, derived from the children.
+
+    Kept derived rather than stored: a transformer may replace a child (an
+    Einsum becomes a contraction tree, for instance), and a parallel list would
+    go stale the moment it does.
+    """
+    return tuple(self._children[index] if template is None else template
+                 for template, index in zip(self.termTemplate, self.nodeTermIndices))
+
+  def nonZeroFlops(self):
+    scaling = self.scalingOperands()
+    if scaling is not None and scaling[0] in (-1.0, 1.0):
+      return 0
+    return self.eqspp().count_nonzero()
+
+  def scalingOperands(self):
+    """``(factor, term)`` if this is a multiplication by a scale factor.
+
+    The factor is either a number or a by-value rank-0 tensor. Such a product is
+    lowered into the scale factor of a single program action rather than into a
+    loop, which is what lets it fold into a GEMM's alpha.
+    """
+    if self.optype != ops.Mul() or len(self.terms) != 2:
+      return None
+    for i, j in ((0, 1), (1, 0)):
+      candidate = self.terms[i]
+      if isinstance(candidate, (int, float)):
+        return candidate, self.terms[j]
+      if isinstance(candidate, IndexedTensor) and candidate.tensor.isPassedByValue():
+        return candidate.tensor, self.terms[j]
+    return None
+
+  def scaledTerm(self):
+    return self.scalingOperands()[1]
+
+  def setScaledTerm(self, term):
+    _, old = self.scalingOperands()
+    self._children[self._children.index(old)] = term
+    self.indices = None
+    self._deduceIndicesIfPossible()
+    return self
+
+  def fillTerms(self, terms):
+    assert len(terms) == len(self)
+    return [terms[index] if template is None else template for template, index in zip(self.termTemplate, self.nodeTermIndices)]
+
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [child.eqspp() for child in self]
+    # bring every operand into this node's index order and shape first, so the
+    # operation only has to combine patterns of equal shape
+    aligned = [self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], strict=False))
+               for i in range(len(spps))]
+    return self.optype.sparsityResult(aligned)
+
+  def __str__(self):
+    indices = self.indices if self.indices is not None else '<not deduced>'
+    return f'{type(self).__name__}({self.optype})[{indices}]'
+
+class Reduction(UnaryOp):
+  def __init__(self, optype, term, sumIndex):
+    super().__init__(term)
+    # term.indices may still be None here (e.g. for an Add/Einsum child); in
+    # that case DeduceIndices.visit_Reduction computes them later.
+    self._sumIndexName = str(sumIndex)
+    self._reductionIndex = None
+    if term.indices is not None:
+      self.deduceIndices()
+    self.optype = optype
+
+  def deduceIndices(self):
+    term = self.term()
+    self.indices = term.indices - set(self._sumIndexName)
+    self._reductionIndex = term.indices.extract(self._sumIndexName)
+    return self.indices
+
+  def nonZeroFlops(self):
+    return self.term().eqspp().count_nonzero() - self.eqspp().count_nonzero()
+
+  def sumIndexName(self):
+    """The reduced index, as a plain single-character name."""
+    return self._sumIndexName
+
+  def reductionIndex(self):
+    return self._reductionIndex
+
+  def reductionIndices(self):
+    return [self._reductionIndex]
+
+  def computeSparsityPattern(self, *spps):
+    assert len(spps) <= 1
+    spp = spps[0] if len(spps) == 1 else self.term().eqspp()
+    if not self.optype.preservesZero():
+      # folding an all-zero slice need not give zero, so nothing can be ruled out
+      return aspp.dense(self.indices.shape())
+    # the fold is over slices that are all zero unless one of them is not, which
+    # is what the union along the reduced axis says
+    return spp.indexSum(self.term().indices, self.indices)
+
+  def __str__(self):
+    indices = self.indices if self.indices is not None else '<not deduced>'
+    return f'{type(self).__name__}({self.optype})[{indices}]'
+
+class Accumulate(NAryOp, Op):
+  def __init__(self, optype, *operands):
+    super().__init__(*[Node._operand(operand) for operand in operands])
+
+    self.optype = optype
+    self._deduceIndicesIfPossible()
+
+  def computeSparsityPattern(self, *spps):
+    if len(spps) == 0:
+      spps = [child.eqspp() for child in self]
+    aligned = [self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], strict=False))
+               for i in range(len(spps))]
+    return self.optype.sparsityResult(aligned)
+
+  def nonZeroFlops(self):
+    nzFlops = 0
+    for child in self:
+      permuted = self.broadcast(child.indices, self.permute(child.indices, child.eqspp(), False))
+      nzFlops += permuted.count_nonzero()
+
+    # ignore all first adds against zero (i.e. those in self.eqspp())
+    return nzFlops - self.eqspp().count_nonzero()
+
+  def __str__(self):
+    indices = self.indices if self.indices is not None else '<not deduced>'
+    return f'{type(self).__name__}({self.optype})[{indices}]'

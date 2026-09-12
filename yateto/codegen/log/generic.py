@@ -17,7 +17,7 @@ class Generic(object):
     addressStr = term.memoryLayout.addressString(term.indices, indices, fixed) if len(indices) > 0 else ''
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
-    cpp('{} {}* {} = {}{};'.format(self._arch.typename, 'const' if const else '', targetName, baseName, addressStr))
+    cpp('{} {}* {} = {}{};'.format(term.datatype.ctype(), 'const' if const else '', targetName, baseName, addressStr))
 
   def _alignedStart(self, term, loopIndices, fixed):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices, fixed)
@@ -84,9 +84,9 @@ class Generic(object):
     Ceqspp = self._reduce(d.result, C, CmemLayout, fixed)
 
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary),
-      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, datatype=d.leftTerm.datatype),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, datatype=d.rightTerm.datatype),
+      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary, datatype=d.result.datatype),
       transA = d.transA,
       transB = d.transB,
       alpha = d.alpha,
@@ -104,7 +104,7 @@ class Generic(object):
       lr.update( self._defuse(m, d.leftTerm, Im) )
       lr.update( self._defuse(n, d.rightTerm, In) )
       writeBB = boundingBoxFromLoopRanges(d.result.indices, lr)
-      initializeWithZero(cpp, self._arch, d.result, writeBB)
+      initializeWithZero(cpp, d.result, writeBB)
 
     class LoGBody(object):
       def __call__(s):
@@ -160,15 +160,6 @@ class Generic(object):
   def generate(self, cpp, routineCache, gemm_cfg):
     d = self._descr
 
-    A = d.leftTerm.indices - d.loopIndices
-    B = d.rightTerm.indices - d.loopIndices
-    C = d.result.indices - d.loopIndices
-    Im = set(A) & set(C)
-    In = set(B) & set(C)
-    Ik = set(A) & set(B)
-
-    toBeUnrolled = d.loopRanges.keys()
-
     unrollNeeded = set()
     if d.leftTerm.memoryLayout.isSparse():
       unrollNeeded |= set(d.leftTerm.indices)
@@ -177,6 +168,10 @@ class Generic(object):
     if d.result.memoryLayout.isSparse():
       unrollNeeded |= set(d.result.indices)
 
-    toBeUnrolled &= unrollNeeded
+    # NOTE: the unrolled indices are nested loops in the emitted code, so their
+    #       order is part of the output. Filtering the loop ranges keeps that
+    #       order; intersecting a key view with a set hands back a set, which
+    #       enumerates in an order PYTHONHASHSEED varies between runs.
+    toBeUnrolled = [index for index in d.loopRanges if index in unrollNeeded]
 
-    return self._generateUnroll(cpp, routineCache, gemm_cfg, {}, list(toBeUnrolled))
+    return self._generateUnroll(cpp, routineCache, gemm_cfg, {}, toBeUnrolled)

@@ -21,9 +21,6 @@ class MetaGenerator:
     def compile_list(self, outputDir=''):
         outfiles = []
         for gendata in self.generators:
-            outdirname = f'metagen_{gendata["name"]}'
-            outdir = os.path.join(outputDir, outdirname)
-
             genout = []
             for file in ['tensor', 'init', 'kernel', 'test-kernel']:
                 genout += [file]

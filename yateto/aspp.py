@@ -91,6 +91,11 @@ class dense(ASpp):
     return dense(a1.shape)
 
   @staticmethod
+  def multiply(a1, a2):
+    assert(a1.shape == a2.shape)
+    return dense(a1.shape)
+
+  @staticmethod
   def einsum(description, a1, a2):
     p = re.match(r'(\w*),(\w*)->(\w*)', description)
     if p:
@@ -152,8 +157,13 @@ class general(ASpp):
       reduction = self.sumAxes(self.pattern, cache, axes)
       nonzeros = np.where(reduction)
       assert len(nonzeros) == 1
-      m, M = nonzeros[0][[0,-1]]
-      bounds.append((m, M))
+      if len(nonzeros[0]) == 0:
+        # nothing is non-zero along this axis, and an inclusive upper bound of
+        # -1 turns into the empty range in BoundingBox.fromSpp
+        bounds.append((0, -1))
+      else:
+        m, M = nonzeros[0][[0,-1]]
+        bounds.append((m, M))
     return bounds
 
   def nonzero(self):
@@ -180,6 +190,11 @@ class general(ASpp):
   @staticmethod
   def add(a1, a2):
     return general(np.add(a1.pattern, a2.pattern))
+
+  @staticmethod
+  def multiply(a1, a2):
+    assert(a1.shape == a2.shape)
+    return general(np.logical_and(a1.pattern, a2.pattern))
 
   @staticmethod
   def einsum(description, a1, a2):
@@ -209,6 +224,21 @@ def dispatch(a1, a2):
 def add(a1, a2):
   cls, a1, a2 = dispatch(a1, a2)
   return cls.add(a1, a2)
+
+def multiply(a1, a2):
+  """Element-wise intersection of two sparsity patterns."""
+  cls, a1, a2 = dispatch(a1, a2)
+  return cls.multiply(a1, a2)
+
+def nonzeroIndices(spp):
+  """Multi-indices of the non-zeros as a list of tuples.
+
+  Unlike ASpp.nonzero(), this also works for rank-0 patterns, for which numpy
+  refuses to compute nonzero() at all.
+  """
+  if spp.ndim == 0:
+    return [()] if spp.count_nonzero() else []
+  return [entry for entry in zip(*spp.nonzero())]
 
 def einsum(description, a1, a2):
   cls, a1, a2 = dispatch(a1, a2)

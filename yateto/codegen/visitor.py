@@ -1277,6 +1277,7 @@ class PoolGenerator(object):
     self._arch = arch
     self._dataCache = dataCache
     self._pool = pool
+    self._members = self.assignMembers(pool)
 
   @classmethod
   def memberName(cls, baseNameWithNamespace):
@@ -1287,6 +1288,27 @@ class PoolGenerator(object):
     lets it bind all of them against a single object.
     """
     return baseNameWithNamespace.replace('::', '_')
+
+  @classmethod
+  def assignMembers(cls, pool):
+    """Member name per tensor, with the collisions flattening can cause refused.
+
+    Two tensors that differ only in where the namespace separator sat --
+    `a::b` and `a_b` -- flatten to the same identifier. Declaring the member
+    twice would not compile, and were the name to come from a hint instead
+    one of them would quietly write into the other's slot. Say which two, and
+    let the caller rename one.
+    """
+    members = collections.OrderedDict()
+    taken = dict()
+    for baseName in pool:
+      member = cls.memberName(baseName)
+      if member in taken:
+        raise ValueError('The tensors {} and {} share the pool member {}. '
+                         'Rename one of them.'.format(taken[member], baseName, member))
+      taken[member] = baseName
+      members[baseName] = member
+    return members
 
   @staticmethod
   def _elementPtrType(datatype):
@@ -1323,7 +1345,7 @@ class PoolGenerator(object):
     with header.Struct(self.POOL_STRUCT_NAME):
       for baseName, entry in self._pool.items():
         header('{} {}{{}};'.format(self._memberType(baseName, entry),
-                                   self.memberName(baseName)))
+                                   self._members[baseName]))
       header.emptyline()
       header('//! Table for an image that lives at `base`, host or device.')
       header.functionDeclaration(self.CREATE_FUN_NAME,
@@ -1359,7 +1381,7 @@ class PoolGenerator(object):
       cpp('auto const* origin = static_cast<char const*>(base);')
       cpp('{} result;'.format(self.POOL_STRUCT_NAME))
       for baseName, entry in self._pool.items():
-        member = self.memberName(baseName)
+        member = self._members[baseName]
         stride = groupSizeToStride(entry.groupSize)
         for group, symbol in entry.symbols.items():
           target = member if len(group) == 0 else '{}.{}[{}]'.format(

@@ -13,7 +13,7 @@ import pytest
 
 from yateto import Tensor, useArchitectureIdentifiedBy
 from yateto.codegen.datacache import DataCache
-from yateto.codegen.visitor import InitializerGenerator
+from yateto.codegen.visitor import InitializerGenerator, PoolGenerator
 from yateto.type import Datatype
 
 
@@ -165,3 +165,20 @@ class TestCollectPool:
         ]
         with pytest.raises(ValueError, match='Mixed datatypes'):
             self._collect(tensors)
+
+
+class TestPoolMembers:
+    """Pool members are flat, so two tensor names can meet in one identifier."""
+
+    def test_namespaces_are_flattened(self):
+        assert PoolGenerator.memberName('nodal::rDivM') == 'nodal_rDivM'
+
+    def test_each_tensor_gets_its_own_member(self):
+        members = PoolGenerator.assignMembers(['nodal::rDivM', 'fMrT'])
+
+        assert members == {'nodal::rDivM': 'nodal_rDivM', 'fMrT': 'fMrT'}
+
+    def test_a_collision_is_refused(self):
+        """`a::b` and `a_b` flatten alike; one would write into the other."""
+        with pytest.raises(ValueError, match='a_b'):
+            PoolGenerator.assignMembers(['a::b', 'a_b'])

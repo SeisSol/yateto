@@ -16,8 +16,15 @@ class Description(object):
 
     assert self.beta == 1.0 or self.beta == 0.0, 'copyscaleadd supports only beta=0.0 or beta=1.0 at the moment.'
 
-    rA = loopRanges(self.term, self.term.indices)
     rB = loopRanges(self.result, self.result.indices)
+
+    if self.alpha == 0.0:
+      # A zero factor makes the term irrelevant, and with it everything about
+      # where the term reaches: what is left is the zero it scales to.
+      self.loopRanges = rB
+      return
+
+    rA = loopRanges(self.term, self.term.indices)
     assert testLoopRangesAContainedInB(rA, rB)
     assert self.term.indices <= self.result.indices
 

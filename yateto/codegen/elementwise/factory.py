@@ -3,6 +3,7 @@ from .generic import Generic
 
 from ... import aspp
 from ...ast.indices import Range
+from ...ast.node import literalSparsityPattern
 from ...ops import Operation
 
 import numpy as np
@@ -58,7 +59,12 @@ class Description(object):
       covered = np.zeros((resultRange.stop,), dtype=bool)
       covered[rng.start:rng.stop] = True
       patterns.append(aspp.general(covered))
-    live = np.flatnonzero(self.optype.sparsityResult(patterns).as_ndarray())
+    # the operation reads its operands by position, so the literals go back in
+    # before it sees them
+    operands = [patterns[position] if template is None
+                else literalSparsityPattern(template, (resultRange.stop,))
+                for position, template in zip(self.nodeTermIndices, self.termTemplate)]
+    live = np.flatnonzero(self.optype.sparsityResult(operands).as_ndarray())
     if live.size == 0:
       return Range(resultRange.start, resultRange.start)
     return Range(max(resultRange.start, int(live[0])),

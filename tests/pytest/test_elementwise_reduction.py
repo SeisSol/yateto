@@ -240,3 +240,97 @@ class TestSparseOperands:
         assert 'C[0] = (A[0]) + (B[0]);' in kernel
         assert 'C[5] = (A[1]) + (0.0);' in kernel
         assert 'C[7] = (0.0) + (B[1]);' in kernel
+
+
+class TestNarrowOperands:
+    """A constant with zeros in it patterns narrower than the axis it sits on,
+    and so does anything computed from it. Past its own end such an operand has
+    no value stored, so the range is split and the structural zero goes into
+    the expression as a literal."""
+
+    TRACE = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+
+    def emit(self, arch, statement, tmp_path):
+        generator = Generator(arch)
+        generator.add('k', statement)
+        generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return (tmp_path / 'kernel.cpp').read_text()
+
+    def test_a_summand_stopping_early_is_read_as_zero(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        v = Tensor('v', (N,))
+        A = Tensor('A', (N, 6))
+        out = Tensor('out', (N, 6))
+        code = self.emit(arch, out['ic'] <= yf.add(yf.mul(v['i'], trace['c']), A['ic']),
+                         tmp_path)
+        assert 'for (int _c = 0; _c < 3; ++_c)' in code
+        assert 'for (int _c = 3; _c < 6; ++_c)' in code
+        assert '(0.0)' in code
+
+    def test_a_broadcast_summand_covers_the_whole_axis(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        v = Tensor('v', (N,))
+        out = Tensor('out', (N, 6))
+        code = self.emit(arch, out['ic'] <= yf.add(v['i'], trace['c']), tmp_path)
+        # the other summand is non-zero throughout, so the tail is computed and
+        # not left to a memset
+        assert 'out[1*_i + 6*_c] = (v[1*_i]) + (0.0);' in code
+        assert 'memset(out' not in code
+
+    def test_a_function_of_zero_is_computed_in_the_tail(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        out = Tensor('out', (6,))
+        code = self.emit(arch, out['c'] <= yf.exp(trace['c']), tmp_path)
+        assert 'std::exp(0.0)' in code
+
+    def test_a_product_stops_where_a_factor_does(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        v = Tensor('v', (N,))
+        out = Tensor('out', (N, 6))
+        code = self.emit(arch, out['ic'] <= yf.mul(v['i'], trace['c']), tmp_path)
+        # nothing to compute past the factor's end, so the tail is a memset
+        assert 'for (int _c = 3; _c < 6; ++_c)' not in code
+        assert 'memset(out' in code
+
+    def test_an_index_letter_carrying_two_extents_is_still_an_error(self, arch, tmp_path):
+        # the narrower bounds above are a matter of sparsity; an index letter
+        # used for two different axes is caught while the indices are deduced
+        wide = Tensor('wide', (N, 11))
+        narrow = Tensor('narrow', (N, 6))
+        out = Tensor('out', (N, 11))
+        with pytest.raises(Exception, match='Index merge failed'):
+            self.emit(arch, out['ic'] <= yf.add(wide['ic'], narrow['ic']), tmp_path)
+
+
+class TestZeroScale:
+    """A zero scale factor is a zero fill, and nothing at all where the result
+    is accumulated into."""
+
+    def emit(self, arch, statement, tmp_path):
+        generator = Generator(arch)
+        generator.add('k', statement)
+        generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return (tmp_path / 'kernel.cpp').read_text()
+
+    def test_scaling_by_zero_fills_with_zero(self, arch, tmp_path):
+        A = Tensor('A', (N, N))
+        out = Tensor('out', (N, N))
+        code = self.emit(arch, out['ij'] <= 0.0 * A['ij'], tmp_path)
+        assert 'memset(out' in code
+        assert 'A[' not in code[code.index('k::execute'):]
+
+    def test_accumulating_a_zero_scale_is_nothing(self, arch, tmp_path):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        code = self.emit(arch, [out['ij'] <= B['ij'], out['ij'] <= out['ij'] + 0.0 * A['ij']],
+                         tmp_path)
+        body = code[code.index('k::execute'):]
+        assert 'A[' not in body
+
+    def test_a_zero_scale_inside_an_operation_stays_a_zero_operand(self, arch, tmp_path):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        code = self.emit(arch, out['ij'] <= yf.maximum(B['ij'], 0.0 * A['ij']), tmp_path)
+        assert 'std::max' in code

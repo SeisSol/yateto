@@ -233,7 +233,9 @@ class Max(CFunctionMixin, BinaryArgsMixin, CommutativeMonoidMixin, ZeroPreservin
             return datatype.limits()[0]
         return -float('inf')
     def cppname(self):
-        return 'std::max'
+        # Not std::max: it takes both arguments by the same type, so a kernel
+        # in single precision comparing against a literal would not compile.
+        return 'yateto::max'
     def call(self, *args):
         # NOTE: the builtin max() is ambiguous on arrays
         return np.maximum(args[0], args[1])
@@ -246,7 +248,8 @@ class Min(CFunctionMixin, BinaryArgsMixin, CommutativeMonoidMixin, ZeroPreservin
             return datatype.limits()[1]
         return float('inf')
     def cppname(self):
-        return 'std::min'
+        # See Max.
+        return 'yateto::min'
     def call(self, *args):
         return np.minimum(args[0], args[1])
 

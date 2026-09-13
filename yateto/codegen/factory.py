@@ -2,6 +2,7 @@ import inspect
 import string
 from ..ast.indices import BoundingBox, Indices, Range
 from ..ast.node import IndexedTensor
+from ..ast.visitor import FindTensors
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
 from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
@@ -25,8 +26,37 @@ class KernelFactory(object):
 
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
+    self._checkImmediates(node, method)
     factory = getattr(self, method, self.generic_create)
     return factory(node, *args)
+
+  def acceptsImmediate(self, method):
+    """Whether `method`'s generator can read an operand with no storage.
+
+    Two ways to be able to: spell the numbers out where the operand is read,
+    or read a buffer of one's own that was filled from them. A generator
+    doing neither forms an address for every operand, and an operand
+    addressed as `immediate` has none -- so it would either name a parameter
+    that the kernel does not declare or read the pool entry that was never
+    registered.
+
+    No by default, because that is the answer for a generator that has not
+    been taught either way.
+    """
+    return False
+
+  def _checkImmediates(self, node, method):
+    """States the refusal at the operation rather than in the emitted code."""
+    if self.acceptsImmediate(method):
+      return
+    for name, tensor in FindTensors().visit(node).items():
+      if tensor.isPassedAsArgument():
+        continue
+      raise NotImplementedError(
+        f'{name} is addressed as {tensor.addressing}, and the generator for '
+        f'{node.__class__.__name__} reads its operands from memory. Address '
+        f'the tensor in memory, or generate this kernel for a target whose '
+        f'generator writes the values into the code.')
 
   def generic_create(self, node, *args):
     raise NotImplementedError
@@ -220,6 +250,15 @@ class UnitTestFactory(KernelFactory):
     self._rand = 0
     self._testFramework = testFramework
 
+  def acceptsImmediate(self, method):
+    """Always: the reference implementation reads buffers of its own.
+
+    The test fills one for every tensor, from the same values, so it can
+    compute the reference for an operand the kernel writes into its code --
+    and comparing the two is what the test is for.
+    """
+    return True
+
   def _formatTerm(self, var, indices):
     address = var.memoryLayout().addressString(indices)
     return f'{self._name(var)}[{address}]'
@@ -385,6 +424,16 @@ class UnitTestFactory(KernelFactory):
       self._rand += 1
       return
 
+    if not node.isPassedAsArgument():
+      # The kernel writes these numbers into its own code, so the reference
+      # has to compute with the same ones. A filling pattern would put a
+      # different operand on each side and the comparison would fail by
+      # construction.
+      memory = [datatype.literal(value) for value in ml.pack(node.values())]
+      self.temporary(resultName, size, datatype, memory=memory)
+      self._rand += 1
+      return
+
     spp = node.spp()
     isDense = spp.count_nonzero() == size
     if isDense:
@@ -440,6 +489,14 @@ class ExportGenerator:
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
+  #: 7: a tensor states its `residence`: `memory`, `argument` or `code`.
+  #:    `code` means its data is nowhere at run time -- the exporter writes
+  #:    the `values` the description carries into the kernel, nothing is
+  #:    passed for the operand and no pool entry is bound for it. Its
+  #:    `addressing` is `null`, so an exporter ignoring the field falls off
+  #:    the end of its formula table, or addresses a parameter that no
+  #:    kernel declares.
+  #:
   #: 6: a scale factor is stated once, as `linear.alpha`, for every kind of
   #:    operation. A multilinear one also listed it among its operands, so an
   #:    exporter honouring both -- which is the only way to be right about an
@@ -467,7 +524,7 @@ class ExportGenerator:
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 6
+  INTERFACE_VERSION = 7
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -486,6 +543,15 @@ class ExportGenerator:
     pass
 
 class ExportFactory(KernelFactory):
+  def acceptsImmediate(self, method):
+    """Always: the description states the values, so the far side decides.
+
+    Whether it can materialise them is its own question and it is asked
+    there. Refusing here would answer it for every exporter, including the
+    ones that can.
+    """
+    return True
+
   @classmethod
   def makeFactory(cls, generator):
     return lambda cpp, arch, target, attrs=None: cls(
@@ -588,8 +654,29 @@ class ExportFactory(KernelFactory):
       return 'n&+o&'
     elif addressing == AddressingMode.SCALAR:
       return ''
+    elif not addressing.isPassedAsArgument():
+      # There is no parameter to start from, so there is no formula. `null`
+      # rather than the empty string: the empty string is a formula, the one
+      # that says the parameter is the value.
+      return None
 
     raise NotImplementedError(addressing)
+
+  @staticmethod
+  def _residence(desc):
+    """Where the operand's data is while the kernel runs.
+
+    Not the same question as how it is addressed, which is why it is not the
+    same field: `memory` leaves every address formula open, while `argument`
+    and `code` each admit only one thing and it is not an address. Stated
+    outright rather than left to be read off the formula, because a reader
+    that has to infer it will infer it differently from the next one.
+    """
+    if desc.addressing is None or desc.addressing.hasStorage():
+      return 'memory'
+    if desc.addressing.isPassedAsArgument():
+      return 'argument'
+    return 'code'
 
   def _handleTensorDesc(self, tensorIndexed: IndexedTensorDescription):
     """Describe one occurrence of a tensor.
@@ -645,6 +732,7 @@ class ExportFactory(KernelFactory):
     tensor = {
       'name': tensorIndexed.name,
       'addressing': self._handleAddressing(tensorIndexed),
+      'residence': self._residence(tensorIndexed),
       #'eqspp': spp,
       'datatype': str(tensorIndexed.datatype),
       'storage': storage,
@@ -728,6 +816,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': name,
         'addressing': '',
+        'residence': 'argument',
         'datatype': str(self._arch.datatype),
         'storage': {
           'shape': [],
@@ -745,6 +834,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': scalar.name(),
         'addressing': '',
+        'residence': 'argument',
         'datatype': str(scalar.getDatatype(self._arch)),
         'storage': {
           'shape': [],

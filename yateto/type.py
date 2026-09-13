@@ -173,6 +173,28 @@ class AddressingMode(Enum):
   STRIDED = 1
   INDIRECT = 2
   SCALAR = 3
+  #: The data is part of the generated code.
+  #:
+  #: Not an address at all, and that is the whole of it: there is no
+  #: parameter, no storage and nothing to bind, because the generator writes
+  #: the numbers into the kernel. Only a tensor whose values are known can
+  #: state it, which is what `Tensor` checks.
+  #:
+  #: What it buys is the structure: a zero costs nothing, a one is not a
+  #: multiplication, and the operand needs no layout, no padding and no
+  #: alignment. What it costs is instruction memory, which is not free and
+  #: on a GPU is often the binding resource -- so this is a choice to make
+  #: per occurrence and per target, not a property a tensor is born with.
+  IMMEDIATE = 4
+
+  def __str__(self):
+    # the messages that name a mode are read by whoever wrote the kernel
+    # description, and `AddressingMode.IMMEDIATE` is not how they wrote it
+    return self.name.lower()
+
+  def isPassedAsArgument(self):
+    """Whether the operand appears in the kernel's signature."""
+    return self is not AddressingMode.IMMEDIATE
 
   def hasStorage(self):
     """Whether the operand is read through a memory layout.
@@ -191,6 +213,10 @@ class AddressingMode(Enum):
     return self is AddressingMode.SCALAR
 
   def pointer_type(self):
+    if not self.isPassedAsArgument():
+      raise ValueError(
+        f'{self} operands are not passed, so they have no parameter to spell '
+        f'a type for.')
     return {
       AddressingMode.DIRECT: '*',
       AddressingMode.STRIDED: '*',
@@ -331,6 +357,13 @@ class Tensor(IdentifiedType):
       self._spp = aspp.dense(shape)
     self._groupSpp = self._spp
 
+    if not self.isPassedAsArgument() and not self.is_compute_constant():
+      # Nothing else can supply the data: the mode says the generator writes
+      # it into the kernel, and there is no parameter left to pass it through.
+      raise ValueError(
+        f'{name} is addressed as {self.addressing} but carries no values. '
+        f'Give it values, or address it in memory.')
+
     self.setMemoryLayout(memoryLayoutClass, alignStride)
 
   def isPassedByValue(self):
@@ -345,6 +378,10 @@ class Tensor(IdentifiedType):
     settled without deducing which.
     """
     return self.addressing is None or self.addressing.hasStorage()
+
+  def isPassedAsArgument(self):
+    """Whether this tensor appears in the kernel's signature."""
+    return self.addressing is None or self.addressing.isPassedAsArgument()
 
   def __hash__(self):
     # only over what cannot change: the sparsity pattern and the memory layout

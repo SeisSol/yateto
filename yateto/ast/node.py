@@ -418,6 +418,11 @@ class Assign(Op):
       raise ValueError(
         f'Cannot assign to "{lhs.name()}": it is passed by value. '
         f'Use a rank-0 tensor if you need to compute the value inside a kernel.')
+    if not lhs.tensor.hasStorage():
+      raise ValueError(
+        f'Cannot assign to "{lhs.name()}": it is addressed as '
+        f'{lhs.tensor.addressing}, so its data is part of the generated code '
+        f'and there is nothing for a kernel to write to.')
 
   def leftTerm(self):
     return self._children[0]

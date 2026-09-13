@@ -229,7 +229,13 @@ class OptimizedKernelGenerator(KernelGenerator):
     # because a kernel that uses one both ways would otherwise declare the name
     # twice -- once by value and once as a pointer -- and not compile.
     byValue = [var.tensor for var in variables if var.tensor.isPassedByValue()]
-    variables = [var for var in variables if not var.tensor.isPassedByValue()]
+    # An operand whose data is in the generated code has nothing to pass and
+    # nothing to bind: neither a member nor a scalar. It stays in the
+    # initializer namespace, where it describes a tensor rather than an
+    # argument.
+    variables = [var for var in variables
+                 if not var.tensor.isPassedByValue()
+                 and var.tensor.isPassedAsArgument()]
     for scalar in sorted(set(scalarsP) | set(byValue), key=str):
       self.KernelOutline._addTensor(scalar, scalars)
       datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
@@ -771,6 +777,12 @@ class UnitTestGenerator(KernelGenerator):
        for var in scalars:
          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
        for var in variables:
+         if not var.tensor.isPassedAsArgument():
+           # The kernel has no member for it. The buffer above stays: the
+           # reference implementation reads the tensor from memory, the
+           # kernel spells it out, and the comparison between the two is
+           # exactly what this test is for.
+           continue
          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
 
        if device_test:
@@ -1074,6 +1086,12 @@ class InitializerGenerator(object):
       for group, tensor in tensors.items():
         values = tensor.values()
         if values is None:
+          continue
+        if not tensor.isPassedAsArgument():
+          # Its data is in the kernel, so the pool has nothing to hold and
+          # nobody to hand an address to. `init::X::Values` is still written,
+          # from the same numbers, for whoever computes with the tensor on
+          # the host.
           continue
         memLayout = tensor.memoryLayout()
         hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))

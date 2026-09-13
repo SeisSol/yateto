@@ -23,6 +23,11 @@ class Description(object):
     self.isSparse = [term.memoryLayout.isSparse()
                      for term in list(terms) + [self.result]]
 
+    # an operand whose data is in the code is unrolled for a different
+    # reason: the number differs from entry to entry, and a loop body is
+    # written once
+    self.isImmediate = [isImmediate(term) for term in terms]
+
     rR = loopRanges(self.result, self.result.indices)
 
     # NOTE: operands need not span all of the result's indices -- an operand

@@ -156,3 +156,59 @@ class TestEmittedCode:
         """A filling pattern would put a different operand on each side."""
         assert 'double C[6]  = {0.5, 0.0, 0.0, 0.0, 0.0, -1.0}' \
                in self.files['KernelTest.t.h']
+
+
+class TestMaterialization:
+    """The element-wise generator writes the numbers where it reads them."""
+
+    def emitted(self, tmp_path, statements):
+        return generate(tmp_path, statements)['kernel.cpp']
+
+    def test_the_values_are_written_into_the_kernel(self, tmp_path, immediate):
+        A = Tensor('A', (N, N))
+        out = Tensor('out', (N, N))
+        body = self.emitted(tmp_path, [out['ij'] <= immediate['ij'] * A['ij']])
+        assert '(0.5) * (A[0])' in body
+        assert '(-1.0) * (A[9])' in body
+
+    def test_nothing_is_read_for_it(self, tmp_path, immediate):
+        A = Tensor('A', (N, N))
+        out = Tensor('out', (N, N))
+        body = self.emitted(tmp_path, [out['ij'] <= immediate['ij'] * A['ij']])
+        assert 'C[' not in body
+        assert 'C != nullptr' not in body
+
+    def test_an_entry_the_pattern_excludes_costs_nothing(self, tmp_path,
+                                                         immediate):
+        """Two non-zeros out of sixteen entries, so two statements."""
+        A = Tensor('A', (N, N))
+        out = Tensor('out', (N, N))
+        body = self.emitted(tmp_path, [out['ij'] <= immediate['ij'] * A['ij']])
+        assert body.count('out[') == 2  # one statement per non-zero
+
+
+class TestSlicedOperand:
+    def test_the_value_is_looked_up_in_the_tensor_s_own_index_space(self):
+        """An entry is in the operand's space, the values in the tensor's.
+
+        A slicing operand differs between the two by the shift it imposes,
+        and the view is what knows it.
+        """
+        from yateto.codegen.common import immediateValue
+        from yateto.memory import DenseMemoryLayout, MemoryLayoutView
+
+        tensor = Tensor('S', (N, N), spp=values(),
+                        addressing=AddressingMode.IMMEDIATE)
+        base = DenseMemoryLayout.fromSpp(tensor.spp())
+
+        class Term:
+            addressing = AddressingMode.IMMEDIATE
+            values = tensor.values()
+            memoryLayout = base
+
+        assert immediateValue(Term, (1, 2)) == '-1.0'
+
+        # the same number, now reached through a slice that starts at 2
+        Term.memoryLayout = MemoryLayoutView(base, 1, 2, N)
+        assert immediateValue(Term, (1, 0)) == '-1.0'
+        assert immediateValue(Term, (1, 2)) == 0

@@ -168,6 +168,17 @@ class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target, attrs=None):
     super().__init__(cpp, arch, target, attrs)
 
+  def acceptsImmediate(self, method):
+    """The element-wise generator writes the numbers where it reads them.
+
+    It is the one that already unrolls: a sparse operand has no address
+    expression either, so the entries are written out one statement at a
+    time and each of them can name a number instead of a load. Everything
+    else here reads its operands through an address, or hands them to a
+    routine that does.
+    """
+    return method == 'create_Elementwise'
+
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = log.Description(

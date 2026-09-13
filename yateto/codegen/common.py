@@ -5,6 +5,7 @@ from .. import aspp
 from ..type import AddressingMode, Datatype
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
+from ..memory import MemoryLayoutView
 from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, FloatingType, MemrefType, GroupType, IntImmValue, FloatImmValue, DYNAMIC, SubviewInst, LoadInst
 import hashlib
 
@@ -81,6 +82,26 @@ def hasStorage(term):
   deducing which one.
   """
   return term.addressing is None or term.addressing.hasStorage()
+
+
+def isImmediate(term):
+  """Whether the generated code has to spell this operand's data out."""
+  return term.addressing is not None and not term.addressing.isPassedAsArgument()
+
+
+def immediateValue(term, entry):
+  """The number an immediate operand holds at `entry`.
+
+  The entry is in the operand's own index space, which is the tensor's own
+  only where the operand is not a slice; a view knows the shift it imposes
+  and is asked for it. An entry the values do not mention is one the
+  sparsity pattern excludes, and answers zero.
+  """
+  layout = term.memoryLayout
+  while isinstance(layout, MemoryLayoutView):
+    entry = layout.relidx(entry)
+    layout = layout.base
+  return term.values.get(tuple(entry), 0)
 
 
 def operand(term):

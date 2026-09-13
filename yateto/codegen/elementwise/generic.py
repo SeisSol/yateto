@@ -122,7 +122,13 @@ class Generic(object):
       args = []
       for term, position, pattern in zip(d.terms, positions, patterns):
         termEntry = tuple(entry[position] for position in position)
-        if not hasStorage(term):
+        if isImmediate(term):
+          # The numbers are the operand. Spelling them out is what the mode
+          # was asked for: a zero among them costs nothing, a one is not a
+          # multiplication, and the compiler sees both.
+          value = immediateValue(term, termEntry) if pattern[termEntry] else 0
+          args.append(term.datatype.literal(value))
+        elif not hasStorage(term):
           args.append(term.name)
         elif pattern[termEntry]:
           args.append(f'{term.name}[{term.memoryLayout.address(termEntry)}]')
@@ -137,7 +143,7 @@ class Generic(object):
   def generate(self, cpp, routineCache):
     # a sparse operand or result is addressed entry by entry, so the loops are
     # unrolled; everything dense is looped over
-    if any(self._descr.isSparse):
+    if any(self._descr.isSparse) or any(self._descr.isImmediate):
       return self._generateUnrolled(cpp)
 
     return self._generateDenseDense(cpp)

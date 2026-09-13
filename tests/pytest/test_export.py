@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 
+import numpy as np
 import pytest
 
 from yateto import Generator, GeneratorCollection, Tensor
@@ -302,3 +303,38 @@ class TestTheDescriptionIsData:
         for operation in collector.operations:
             for ref in [operation['result']] + operation['args']:
                 assert ref['name'] in known
+
+
+class TestConstantValues:
+    """A tensor whose data is known states it in the description."""
+
+    @staticmethod
+    def _constant():
+        data = np.zeros((N, N))
+        data[0, 0] = 0.5
+        data[1, 2] = -1.0
+        return Tensor('C', (N, N), spp=data)
+
+    def _exported(self, tensors):
+        C = self._constant()
+        collector = export([tensors['out']['ij'] <= C['ik'] * tensors['B']['kj']])
+        return next(d for d in collector.tensors if d['name'] == 'C')
+
+    def test_the_values_reach_the_exporter(self, tensors):
+        assert self._exported(tensors)['values'] is not None
+
+    def test_a_value_comes_with_the_entry_it_belongs_to(self, tensors):
+        values = self._exported(tensors)['values']
+        assert values['kind'] == 'entries'
+        assert values['data'] == [[[0, 0], 0.5], [[1, 2], -1.0]]
+
+    def test_a_tensor_without_values_states_none(self, tensors):
+        C = self._constant()
+        collector = export([tensors['out']['ij'] <= C['ik'] * tensors['B']['kj']])
+        B = next(d for d in collector.tensors if d['name'] == 'B')
+        assert B['values'] is None
+
+    def test_the_values_survive_a_json_round_trip(self, tensors):
+        C = self._constant()
+        collector = export([tensors['out']['ij'] <= C['ik'] * tensors['B']['kj']])
+        assert json.loads(json.dumps(collector.kernel)) == collector.kernel

@@ -640,8 +640,7 @@ class ExportFactory(KernelFactory):
         f'{tensorIndexed.name} has a {ml.__class__.__name__}, which the '
         f'description has no storage kind for.')
 
-    values = (None if tensorIndexed.values is None
-              else {'kind': 'flat', 'data': [float(v) for v in tensorIndexed.values]})
+    values = self._values(tensorIndexed.values)
 
     tensor = {
       'name': tensorIndexed.name,
@@ -662,6 +661,27 @@ class ExportFactory(KernelFactory):
 
     return self._handleTensor(tensor, tensorIndexed.indices,
                               self._logicalBox(tensorIndexed), offset, sliced)
+
+  @classmethod
+  def _values(cls, values):
+    """The constant data a tensor carries, as coordinate-value pairs.
+
+    A coordinate comes with every number because it is the only thing that
+    says which entry the number belongs to. The description states a
+    logical shape and a storage kind, and the receiving side is free to lay
+    the entries out however it addresses them -- so a bare run of numbers
+    would only be readable by someone who reproduces this side's packing.
+
+    Only the entries the sparsity pattern admits are listed; everything else
+    is zero by the pattern alone. Sorted by coordinate, because a
+    description that is read back, recorded or hashed has to come out the
+    same twice.
+    """
+    if values is None:
+      return None
+    return {'kind': 'entries',
+            'data': [[cls._ints(index), float(value)]
+                     for index, value in sorted(values.items())]}
 
   @staticmethod
   def _ints(values):

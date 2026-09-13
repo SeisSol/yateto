@@ -122,7 +122,7 @@ class Generic(object):
       args = []
       for term, position, pattern in zip(d.terms, positions, patterns):
         termEntry = tuple(entry[position] for position in position)
-        if term.addressing == AddressingMode.SCALAR:
+        if not hasStorage(term):
           args.append(term.name)
         elif pattern[termEntry]:
           args.append(f'{term.name}[{term.memoryLayout.address(termEntry)}]')

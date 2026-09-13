@@ -174,6 +174,22 @@ class AddressingMode(Enum):
   INDIRECT = 2
   SCALAR = 3
 
+  def hasStorage(self):
+    """Whether the operand is read through a memory layout.
+
+    The question almost every generator actually asks. Asking it here rather
+    than naming the modes that answer it at each site is what keeps a further
+    mode from being a dozen comparisons: a mode that is not storage is one
+    that no address arithmetic applies to, whatever the reason.
+    """
+    return self in (AddressingMode.DIRECT,
+                    AddressingMode.STRIDED,
+                    AddressingMode.INDIRECT)
+
+  def isPassedByValue(self):
+    """Whether the operand is handed over as a value rather than a pointer."""
+    return self is AddressingMode.SCALAR
+
   def pointer_type(self):
     return {
       AddressingMode.DIRECT: '*',
@@ -319,7 +335,16 @@ class Tensor(IdentifiedType):
 
   def isPassedByValue(self):
     """Whether this tensor is handed over by value rather than by pointer."""
-    return self.addressing == AddressingMode.SCALAR
+    return self.addressing is not None and self.addressing.isPassedByValue()
+
+  def hasStorage(self):
+    """Whether this tensor is read through its memory layout.
+
+    A tensor that states no mode gets one of the memory modes deduced for
+    it, so the answer is the same for all of them and the question can be
+    settled without deducing which.
+    """
+    return self.addressing is None or self.addressing.hasStorage()
 
   def __hash__(self):
     # only over what cannot change: the sparsity pattern and the memory layout

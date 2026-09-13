@@ -356,3 +356,24 @@ class TestDatatypeLiteral:
 
     def test_double_round_trips(self):
         assert float(Datatype.F64.literal("0.1")) == 0.1
+
+
+class TestAddressingPredicates:
+    """What the codegen asks a mode, rather than which mode it is."""
+
+    def test_the_memory_modes_are_storage(self):
+        for mode in (AddressingMode.DIRECT, AddressingMode.STRIDED,
+                     AddressingMode.INDIRECT):
+            assert mode.hasStorage()
+            assert not mode.isPassedByValue()
+
+    def test_a_by_value_mode_is_not_storage(self):
+        assert not AddressingMode.SCALAR.hasStorage()
+        assert AddressingMode.SCALAR.isPassedByValue()
+
+    def test_a_tensor_that_states_no_mode_has_storage(self):
+        assert Tensor('A', (2, 2)).hasStorage()
+
+    def test_a_scalar_has_no_storage(self):
+        assert not Scalar('a').hasStorage()
+        assert Scalar('a').isPassedByValue()

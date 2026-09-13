@@ -73,6 +73,16 @@ class IndexedTensorDescription(TensorDescription):
         addressing = var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
+def hasStorage(term):
+  """Whether an operand is read through its memory layout.
+
+  An operand that states no mode gets one of the memory modes deduced for
+  it, and all of them are storage, so the question is answerable without
+  deducing which one.
+  """
+  return term.addressing is None or term.addressing.hasStorage()
+
+
 def operand(term):
   """How the generated code reads an operand.
 
@@ -80,7 +90,7 @@ def operand(term):
   signature and no storage to address. Everything else is read through its
   memory layout.
   """
-  if term.addressing == AddressingMode.SCALAR:
+  if not hasStorage(term):
     return term.name
   return f'{term.name}[{term.memoryLayout.addressString(term.indices)}]'
 

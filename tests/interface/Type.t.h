@@ -1,5 +1,10 @@
 #include <cxxtest/TestSuite.h>
+#include <yateto/Marker.h>
 #include <yateto/Type.h>
+
+// Outside CUDA and HIP the markers have to vanish, or every signature that
+// carries one stops being valid C++.
+YATETO_HOSTDEVICE inline int markersAreEmptyOnAHostBuild() { return 0; }
 
 #ifndef YATETO_HAS_F128
 #error "YATETO_HAS_F128 has to be defined on every target, as 0 or as 1"

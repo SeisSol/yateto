@@ -15,6 +15,37 @@ template class yateto::DenseTensorView<0, double, unsigned, true>;
 template class yateto::CSCMatrixView<double, unsigned, true>;
 template class yateto::PatternTensorView<2, double, unsigned, true>;
 
+// A view is a value made of pointers and indices, and every one of its
+// members is a constant expression, so a view over constant data can be
+// walked at compile time. These hold as of C++17, which rules out the parts
+// of the standard library that only became constexpr in C++20.
+namespace constexpr_check {
+constexpr double Values[6] = {1., 2., 3., 4., 5., 6.};
+
+constexpr double at(unsigned i, unsigned j) {
+  const DenseTensorView<2, double, unsigned, true> view(Values, {2, 3});
+  return view(i, j);
+}
+
+constexpr unsigned shapeOf(unsigned dim) {
+  const DenseTensorView<2, double, unsigned, true> view(Values, {2, 3});
+  return view.shape(dim);
+}
+
+constexpr double sum() {
+  const DenseTensorView<2, double, unsigned, true> view(Values, {2, 3});
+  double total = 0.0;
+  view.forall([&total](const unsigned* /*entry*/, const double& value) { total += value; });
+  return total;
+}
+
+static_assert(at(0, 0) == 1.0, "column major: the first index runs fastest");
+static_assert(at(1, 0) == 2.0, "");
+static_assert(at(0, 1) == 3.0, "");
+static_assert(shapeOf(1) == 3, "");
+static_assert(sum() == 21.0, "forall is a constant expression too");
+} // namespace constexpr_check
+
 class DenseTensorViewTestSuite : public CxxTest::TestSuite {
   private:
   double data_[12];

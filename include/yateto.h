@@ -4,6 +4,7 @@
 #include "yateto/CopyPolicy.h"
 #include "yateto/InitTools.h"
 #include "yateto/LinearAllocator.h"
+#include "yateto/Marker.h"
 #include "yateto/Misc.h"
 #include "yateto/TensorView.h"
 #include "yateto/Type.h"

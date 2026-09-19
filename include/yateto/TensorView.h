@@ -32,6 +32,7 @@ template <unsigned Dim, typename real_t, typename uint_t>
 class TensorView {
   public:
   explicit TensorView(std::initializer_list<uint_t> shape) {
+    assert(shape.size() == Dim && "YATETO: the shape does not match the tensor dimension");
     std::copy(shape.begin(), shape.end(), m_shape);
   }
 
@@ -52,13 +53,15 @@ class TensorView {
 template <typename real_t, typename uint_t>
 class TensorView<0, real_t, uint_t> {
   public:
-  explicit TensorView(std::initializer_list<uint_t> shape) {}
+  explicit TensorView(std::initializer_list<uint_t> shape) {
+    assert(shape.size() == 0 && "YATETO: the shape does not match the tensor dimension");
+  }
 
-  explicit TensorView(const uint_t shape[]) {}
+  explicit TensorView(const uint_t /*shape*/[]) {}
 
   static constexpr uint_t dim() { return 0; }
 
-  uint_t shape(uint_t dim) const { return 0; }
+  uint_t shape(uint_t /*dim*/) const { return 0; }
 };
 
 template <unsigned Dim, typename real_t, typename uint_t = unsigned, bool Const = false>
@@ -72,6 +75,8 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
                            std::initializer_list<uint_t> start,
                            std::initializer_list<uint_t> stop)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values) {
+    assert(start.size() == Dim && "YATETO: the start does not match the tensor dimension");
+    assert(stop.size() == Dim && "YATETO: the stop does not match the tensor dimension");
     std::copy(start.begin(), start.end(), m_start);
     std::copy(stop.begin(), stop.end(), m_stop);
     computeStride();
@@ -79,6 +84,7 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
 
   explicit DenseTensorView(data_t values, std::initializer_list<uint_t> shape)
       : TensorView<Dim, real_t, uint_t>(shape), m_values(values), m_start{} {
+    assert(shape.size() == Dim && "YATETO: the shape does not match the tensor dimension");
     std::copy(shape.begin(), shape.end(), m_stop);
     computeStride();
   }

@@ -132,7 +132,10 @@ class CopyManager {
    *  @param last a pointer to the end of tensor data.
    *  @param alignment a size of a vector register (in bytes).
    * */
-  void copyValuesToMem(float_t*& mem, const float_t* first, const float_t* last, std::size_t alignment) {
+  void copyValuesToMem(float_t*& mem,
+                       const float_t* first,
+                       const float_t* last,
+                       std::size_t alignment) {
 
     // copy data
     mem = copier.copy(first, last, mem);

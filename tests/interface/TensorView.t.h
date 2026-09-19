@@ -88,8 +88,7 @@ class DenseTensorViewTestSuite : public CxxTest::TestSuite {
   void testForallOnConstView() {
     const DenseTensorView<3, double, unsigned, true> tensor(data_, {3, 2, 2});
     double sum = 0.0;
-    tensor.forall(
-        [&sum](const unsigned* /*entry*/, const double& value) { sum += value; });
+    tensor.forall([&sum](const unsigned* /*entry*/, const double& value) { sum += value; });
     TS_ASSERT_EQUALS(sum, 78.0);
   }
 
@@ -345,9 +344,8 @@ class InitToolsTestSuite : public CxxTest::TestSuite {
     LinearAllocatorT<char> allocator;
     allocator.initialize(base);
     allocator.allocate(huge);
-    const auto offset =
-        reinterpret_cast<std::uintptr_t>(allocator.allocate(1)) -
-        reinterpret_cast<std::uintptr_t>(base);
+    const auto offset = reinterpret_cast<std::uintptr_t>(allocator.allocate(1)) -
+                        reinterpret_cast<std::uintptr_t>(base);
     TS_ASSERT_EQUALS(offset, huge);
   }
 };

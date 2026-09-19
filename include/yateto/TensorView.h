@@ -361,7 +361,9 @@ class DenseTensorView<0, real_t, uint_t, Const> : public TensorView<0, real_t, u
   uint_t size() const { return 1; }
 
   template <bool Writable = !Const, typename = std::enable_if_t<Writable>>
-  void setZero() { m_values[0] = real_t{}; }
+  void setZero() {
+    m_values[0] = real_t{};
+  }
 
   data_t data() { return m_values; }
 
@@ -400,7 +402,9 @@ class CSCMatrixView : public TensorView<2, real_t, uint_t> {
   uint_t size() const { return m_colPtr[this->shape(1)]; }
 
   template <bool Writable = !Const, typename = std::enable_if_t<Writable>>
-  void setZero() { std::fill(m_values, m_values + size(), real_t{}); }
+  void setZero() {
+    std::fill(m_values, m_values + size(), real_t{});
+  }
 
   const real_t& operator()(uint_t row, uint_t col) const {
     const uint_t addr = address(row, col);
@@ -414,9 +418,7 @@ class CSCMatrixView : public TensorView<2, real_t, uint_t> {
     return m_values[addr];
   }
 
-  bool isInRange(uint_t row, uint_t col) const {
-    return address(row, col) != m_colPtr[col + 1];
-  }
+  bool isInRange(uint_t row, uint_t col) const { return address(row, col) != m_colPtr[col + 1]; }
 
   dataref_t operator[](const uint_t entry[2]) { return operator()(entry[0], entry[1]); }
 

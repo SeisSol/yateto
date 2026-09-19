@@ -399,6 +399,7 @@ class Generator(object):
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
           header.includeSys('cassert')
           header.includeSys('cmath')
+          header.includeSys('cstdint')
           header.includeSys('limits')
           header.include('yateto.h')
           header.include(fTensors.hName)

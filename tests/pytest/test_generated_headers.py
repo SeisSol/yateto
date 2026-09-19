@@ -100,6 +100,16 @@ class TestKernelHeader:
         assert 'assert(' not in kernel_h
 
 
+class TestIncludes:
+    def test_headers_bring_their_own_integer_types(self, tmp_path, arch):
+        """int8_t and friends turn up in the emission whenever a tensor or a
+        GPU scratch buffer asks for them, so the headers cannot rely on the
+        support library having pulled <cstdint> in first."""
+        files = generate(tmp_path, matmul, arch)
+        for name in ('kernel.h', 'init.h'):
+            assert '#include <cstdint>' in files[name], name
+
+
 class TestHeaderGuards:
     def test_guards_follow_the_namespace(self, tmp_path, arch):
         files = generate(tmp_path, matmul, arch, namespace='someproject::variant')

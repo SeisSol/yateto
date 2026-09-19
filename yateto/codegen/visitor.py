@@ -17,11 +17,17 @@ from ..type import Scalar, Tensor, Datatype
 import numpy as np
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
+# Whatever a consumer may call from device code carries the marker from
+# yateto/Marker.h. constexpr alone is not enough: clang treats a constexpr
+# function as callable from both sides, but nvcc only does so with
+# --expt-relaxed-constexpr, and neither covers a function that is not one.
+HOSTDEVICE = 'YATETO_HOSTDEVICE'
 CONSTEXPR = 'constexpr'
 STATIC = 'static'
 INLINE = 'inline'
-MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
-STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
+MODIFIERS = '{} {} {}'.format(HOSTDEVICE, CONSTEXPR, STATIC)
+STATIC_INLINE = '{} {} {}'.format(HOSTDEVICE, STATIC, INLINE)
+HOSTDEVICE_INLINE = '{} {}'.format(HOSTDEVICE, INLINE)
 #: Alignment floor, for the image and for every entry in it.
 #:
 #: For the image, because an entry's place inside it is an offset from its
@@ -1019,9 +1025,9 @@ class InitializerGenerator(object):
               with header.Struct(self.CONTAINER_CLASS_NAME):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                with header.Function('operator()', typedArgs, '{} T&'.format(HOSTDEVICE_INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                with header.Function('operator()', typedArgs, '{} T const&'.format(HOSTDEVICE_INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
     for namespace, scalar_dict in self.iterate_collect_scalar():
       if len(scalar_dict) == 0:
@@ -1043,9 +1049,9 @@ class InitializerGenerator(object):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 with header.Function(self.CONTAINER_CLASS_NAME, '', ''):
                   pass
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                with header.Function('operator()', typedArgs, '{} T&'.format(HOSTDEVICE_INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                with header.Function('operator()', typedArgs, '{} T const&'.format(HOSTDEVICE_INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
 
   def generateTensorsCpp(self, cpp):

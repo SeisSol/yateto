@@ -236,6 +236,7 @@ class Generator(object):
   DOCTEST_FILE_NAME = 'test-kernel'
   HEADER_GUARD_SUFFIX = 'H_'
   SUPPORT_LIBRARY_HEADER = 'yateto.h'
+  MARKER_HEADER = 'yateto/Marker.h'
 
   class FileNames(object):
     HEADER = 'h'
@@ -397,6 +398,7 @@ class Generator(object):
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
+          header.include(self.MARKER_HEADER)
           header.includeSys('cassert')
           header.includeSys('cmath')
           header.includeSys('cstdint')
@@ -480,6 +482,7 @@ class Generator(object):
     poolMap = initGen.collectPool(dataCache)
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
+        header.include(self.MARKER_HEADER)
         header.includeSys('cassert')
         with header.Namespace(namespace):
           initGen.generateTensorsH(header)

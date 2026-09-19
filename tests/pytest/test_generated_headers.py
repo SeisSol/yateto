@@ -138,6 +138,50 @@ class TestIncludes:
             assert '#include <cstdint>' in files[name], name
 
 
+class TestDeviceMarkers:
+    """CUDA and HIP compile a translation unit once per side and reject a
+    call into a function the other side owns, so anything a kernel may reach
+    from device code has to carry the marker."""
+
+    def test_headers_include_the_marker(self, tmp_path, arch):
+        files = generate(tmp_path, matmul, arch)
+        for name in ('tensor.h', 'kernel.h'):
+            assert '#include "yateto/Marker.h"' in files[name], name
+
+    def test_tensor_accessors_are_marked(self, tmp_path, arch):
+        def build(g):
+            dq = [Tensor('dQ({})'.format(i), (5, 5)) for i in range(3)]
+            a = Tensor('a', (5, 5))
+            g.add('k', dq[0]['ij'] <= dq[1]['ik'] * a['kj'] + dq[2]['ij'])
+
+        tensor_h = generate(tmp_path, build, arch)['tensor.h']
+        for accessor in ('unsigned index(unsigned i0)', 'unsigned size(unsigned i0)',
+                         'T& operator()(unsigned i0)'):
+            line = next(l for l in tensor_h.splitlines() if accessor in l)
+            assert 'YATETO_HOSTDEVICE' in line, accessor
+
+    def test_view_factories_are_marked(self, tmp_path, arch):
+        init_h = generate(tmp_path, matmul, arch)['init.h']
+        for line in init_h.splitlines():
+            if ' create(' in line:
+                assert 'YATETO_HOSTDEVICE' in line, line
+
+    def test_host_side_dispatch_stays_on_the_host(self, tmp_path, arch):
+        """execute() goes through a member function pointer into code an
+        external generator emitted for the host; marking it would be a
+        promise the kernel bodies cannot keep."""
+        def build(g):
+            a = Tensor('a', (5, 5))
+            b = Tensor('b', (5, 5))
+            c = Tensor('c', (5, 5))
+            for i in range(1, 3):
+                g.add('fam({})'.format(i), c['ij'] <= a['ik'] * b['kj'])
+
+        kernel_h = generate(tmp_path, build, arch)['kernel.h']
+        line = next(l for l in kernel_h.splitlines() if 'void execute(unsigned i0)' in l)
+        assert 'YATETO_HOSTDEVICE' not in line
+
+
 class TestHeaderGuards:
     def test_guards_follow_the_namespace(self, tmp_path, arch):
         files = generate(tmp_path, matmul, arch, namespace='someproject::variant')

@@ -22,6 +22,20 @@ STATIC = 'static'
 INLINE = 'inline'
 MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
 STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
+#: Alignment floor, for the image and for every entry in it.
+#:
+#: For the image, because an entry's place inside it is an offset from its
+#: base: the alignment an entry was given only survives a copy if the
+#: destination is aligned at least this far.
+#:
+#: For each entry, because entries are not only read one at a time. Constant
+#: operands that a merged kernel picks between at runtime have to be reachable
+#: with one stride, and a floor every entry meets is what makes the stride the
+#: same for all of them regardless of how large each one happens to be. An
+#: entry whose layout asks for more than the floor gets more; nothing gets
+#: less, so consumers are told the number by poolAlignment() rather than being
+#: expected to know it.
+POOL_ALIGNMENT = 128
 
 def groupSizeToStride(groupSize):
   if len(groupSize) == 0:
@@ -130,12 +144,16 @@ class OptimizedKernelGenerator(KernelGenerator):
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
+  BIND_GLOBALS_NAME = 'bindGlobals'
+  BIND_GLOBALS_ARGUMENT = 'pool'
 
 
-  def __init__(self, arch, routineCache, routine_exporters):
+  def __init__(self, arch, routineCache, routine_exporters, namespace=''):
     super().__init__(arch)
     self._routineCache = routineCache
     self._routine_exporters = routine_exporters
+    self._poolType = '::{}{}'.format('{}::'.format(namespace) if namespace else '',
+                                     PoolGenerator.POOL_STRUCT_NAME)
 
     self._routine_factories = {
       'cpu': OptimizedKernelFactory,
@@ -405,6 +423,30 @@ class OptimizedKernelGenerator(KernelGenerator):
                      is_compute_constant_tensors[baseName],
                      datatype[baseName],
                      target)
+        header.emptyline()
+
+        # Which of the members the caller does not have to fill in itself.
+        # Writable ones are excluded even when they carry values: the member
+        # is a pointer to mutable memory and the pool hands out const.
+        constants = [baseName for baseName in tensors
+                     if is_compute_constant_tensors[baseName] and not writable[baseName]]
+        # Emitted even when there is nothing to bind, so that "bind the globals
+        # of every kernel" is a rule a caller can follow without knowing which
+        # operands a kernel happens to have. The failure modes are not
+        # symmetric: a missing call is a null pointer at run time, a redundant
+        # one is nothing. It also keeps the interface stable when a kernel
+        # gains or loses its last constant operand.
+        header('//! Points every constant operand at its entry in `{}`.'.format(
+          self.BIND_GLOBALS_ARGUMENT))
+        with header.Function(self.BIND_GLOBALS_NAME,
+                             '{} const& {}'.format(self._poolType, self.BIND_GLOBALS_ARGUMENT)):
+          if not constants:
+            header('static_cast<void>({});'.format(self.BIND_GLOBALS_ARGUMENT))
+          for baseName in constants:
+            _, memberName = Tensor.splitBasename(baseName)
+            header('{} = {}.{};'.format(memberName,
+                                        self.BIND_GLOBALS_ARGUMENT,
+                                        PoolGenerator.memberName(baseName)))
         header.emptyline()
 
         # containers with extra offsets for GPU-like computations
@@ -862,9 +904,15 @@ class InitializerGenerator(object):
     def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
       cpp(self.formatArray(numberType, namespace + self.PATTERN_NAME + index, memLayout.pattern(), declarationOnly))
 
+  #: What the pool needs to know about one tensor group: how large the group
+  #: is, which element type its entries were stored as, and where each member
+  #: of it ended up.
+  PoolEntry = collections.namedtuple('PoolEntry', ['groupSize', 'datatype', 'symbols'])
+
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
     self._numberType = f'{self._arch.uintTypename} const'
+    self._pool = dict()
     self._realType = lambda datatype: f'{datatype.ctype()} const'
     self._realPtrType = lambda datatype: self._realType(datatype) + '*'
     self._scalarCollect = collections.OrderedDict()
@@ -1000,6 +1048,70 @@ class InitializerGenerator(object):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
 
+  def collectPool(self, dataCache):
+    """Registers every constant tensor in `dataCache` and reports the symbols.
+
+    The result maps a tensor's base name (namespace included) to its group
+    size, its element type and the pool symbol each group ended up under.
+    Groups without values are absent: they have nothing to store, and the
+    pool leaves the corresponding pointer null.
+
+    The element type is the tensor's own, not the architecture's. A tensor
+    may carry a datatype of its own, and an entry stored under the wrong one
+    is not a matter of spelling: init binds a reference of the tensor's type
+    to it, and that reference does not bind.
+
+    Registration happens here rather than while writing init.cpp so that the
+    two stay independent -- the pool is built from the tensors, not from the
+    text that was printed for them.
+    """
+    pool = collections.OrderedDict()
+    for baseName, tensors in self._collect.items():
+      groupSize = self._groupSize[baseName]
+      stride = groupSizeToStride(groupSize)
+      symbols = collections.OrderedDict()
+      datatype = None
+      for group, tensor in tensors.items():
+        values = tensor.values()
+        if values is None:
+          continue
+        memLayout = tensor.memoryLayout()
+        hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
+        groupDatatype = tensor.getDatatype(self._arch)
+        if datatype is None:
+          datatype = groupDatatype
+        elif datatype != groupDatatype:
+          # One member of a group, one element type: the group is handed out
+          # as a Container<T>, and there is no T that fits both.
+          raise ValueError('Mixed datatypes are not allowed within a tensor group. '
+                           '({} and {} for {}.)'.format(datatype, groupDatatype, baseName))
+        # The floor is what keeps entries at a common stride; the layout is
+        # asked on top of it, because a target whose cache line is wider than
+        # the floor -- a64fx -- would otherwise get less than its aligned
+        # loads need.
+        layoutAlignment = self._arch.cacheline if memLayout.alignedStride() else 1
+        alignment = max(POOL_ALIGNMENT, layoutAlignment)
+        symbols[group] = dataCache.add(hint,
+                                       [groupDatatype.literal(value) for value in memLayout.pack(values)],
+                                       groupDatatype.ctype(),
+                                       alignment)
+      if symbols:
+        pool[baseName] = self.PoolEntry(groupSize, datatype, symbols)
+    self._pool = pool
+    return pool
+
+  def poolSymbol(self, baseName, group):
+    """Pool entry holding exactly what init would otherwise print, if there is one.
+
+    There is one as long as a tensor has a single realisation, which is why
+    the initialiser can bind a reference instead of materialising the values a
+    second time. Once a tensor is realised in more than one layout, only the
+    one that matches what init promises can be bound this way, and the rest of
+    them answer None here and get their own array.
+    """
+    entry = self._pool.get(baseName)
+    return entry.symbols.get(group) if entry is not None else None
+
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
@@ -1044,12 +1156,13 @@ class InitializerGenerator(object):
         memLayout = tensor.memoryLayout()
         datatype = tensor.getDatatype(self._arch)
         if values is not None:
-          memory = [datatype.literal(0)]*memLayout.requiredReals()
-          for idx,x in values.items():
-            memory[memLayout.address(idx)] = datatype.literal(x)
           valuesName = f'{name}{self.VALUES_BASENAME}{index(group)}'
           valueNames[group] = [f'&{valuesName}[0]']
-          cpp('{} {}[] = {{{}}};'.format(self._realType(datatype), valuesName, ', '.join(memory)))
+          if self.poolSymbol(baseName, group) is None:
+            memory = [datatype.literal(value) for value in memLayout.pack(values)]
+            cpp('{} {}[] = {{{}}};'.format(self._realType(datatype), valuesName, ', '.join(memory)))
+          # Otherwise the header has already bound it, and a constexpr
+          # reference needs no definition outside the class.
       if len(valueNames) > 1:
         _,prototensor = next(iter(tensors.items()))
         datatype = prototensor.getDatatype(self._arch)
@@ -1067,10 +1180,32 @@ class InitializerGenerator(object):
           datatype = tensor.getDatatype(self._arch)
           if values is not None:
             name = f'{self.VALUES_BASENAME}{index(group)}'
-            aligned = ''
-            if tensor.memoryLayout().alignedStride():
-              aligned = f' __attribute__((aligned({self._arch.cacheline})))'
-            cpp(f'{STATIC} {self._realType(datatype)} {name}[]{aligned};')
+            symbol = self.poolSymbol(baseName, group)
+            if symbol is None:
+              aligned = ''
+              if tensor.memoryLayout().alignedStride():
+                aligned = f' __attribute__((aligned({self._arch.cacheline})))'
+              cpp('{} {} {}[]{};'.format(STATIC, self._realType(datatype), name, aligned))
+            else:
+              # Bound here and as a constant expression, for two reasons. A
+              # reference whose initialiser lives in another translation unit
+              # has to be read before it can be followed, which costs a load
+              # and a dynamic relocation at every use; one that is a constant
+              # expression is folded to the address instead. And the entry's
+              # alignment comes along with the address, where an out-of-line
+              # reference would have hidden it.
+              #
+              # No alignment attribute either: the pool aligns the entry to
+              # at least POOL_ALIGNMENT, which is not less than this would
+              # have asked for.
+              cpp('{} {} {} (&{})[{}] = {}::{}.{};'.format(CONSTEXPR,
+                                                           STATIC,
+                                                           self._realType(datatype),
+                                                           name,
+                                                           tensor.memoryLayout().requiredReals(),
+                                                           PoolGenerator.STORAGE_NAMESPACE,
+                                                           PoolGenerator.STORAGE_VAR_NAME,
+                                                           symbol))
             nValueArrays += 1
         if nValueArrays > 1:
           cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')
@@ -1145,3 +1280,182 @@ class InitializerGenerator(object):
         initStr = '{{{}}}'.format(initStr)
 
       cpp('{}{}{} {}{}{} = {};'.format(cexpr, stat, typ, name, groupIndices, arrayIndices, initStr))
+
+class PoolGenerator(object):
+  """Emits the constant pool: one image, one allocation, one copy.
+
+  The image is a struct of named arrays rather than a flat byte blob, so that
+  every entry keeps a real array type -- sizeof works, a debugger shows
+  something useful, and the offsets come out of offsetof instead of being
+  computed here and written down a second time.
+
+  What a consumer binds against is not the image but `Pool`, a table of
+  pointers derived from a base address. Pointing it at the image gives the
+  host view with no allocation and no copy; pointing it at a device
+  allocation gives the device view. Entries that the cache merged are one
+  member of the image and two pointers in the table.
+
+  This makes every entry position-independent, which is the condition for
+  copying the image in one piece: an entry may not contain an address into
+  another one.
+  """
+
+  STORAGE_NAMESPACE = 'poolstorage'
+  STORAGE_STRUCT_NAME = 'Storage'
+  STORAGE_VAR_NAME = 'image'
+  POOL_STRUCT_NAME = 'Pool'
+  CREATE_FUN_NAME = 'create'
+  HOST_FUN_NAME = 'host'
+  BYTES_FUN_NAME = 'poolBytes'
+  DATA_FUN_NAME = 'poolData'
+  ALIGN_FUN_NAME = 'poolAlignment'
+  SIZE_TYPE = 'std::size_t'
+
+  def __init__(self, arch, dataCache, pool):
+    self._arch = arch
+    self._dataCache = dataCache
+    self._pool = pool
+    self._members = self.assignMembers(pool)
+
+  @classmethod
+  def memberName(cls, baseNameWithNamespace):
+    """Name a tensor goes by inside `Pool`.
+
+    Flattened rather than nested by namespace: a kernel may read constants
+    from several namespaces at once, so one flat table is the only shape that
+    lets it bind all of them against a single object.
+    """
+    return baseNameWithNamespace.replace('::', '_')
+
+  def imageAlignment(self):
+    """Alignment the image is declared with.
+
+    The floor, or the strictest entry where that asks for more. alignas on a
+    class states a minimum and a member asking for more raises the class past
+    it, so declaring the floor alone would leave pool.h saying 128 for a type
+    that is actually aligned to 256 -- and would have the declaration weaken
+    an alignment that alignas is not meant to weaken. Naming the maximum
+    keeps the declared number, alignof() and poolAlignment() one number
+    instead of two.
+    """
+    return max([POOL_ALIGNMENT] + [entry.alignment() for entry in self._dataCache.entries()])
+
+  @classmethod
+  def assignMembers(cls, pool):
+    """Member name per tensor, with the collisions flattening can cause refused.
+
+    Two tensors that differ only in where the namespace separator sat --
+    `a::b` and `a_b` -- flatten to the same identifier. Declaring the member
+    twice would not compile, and were the name to come from a hint instead
+    one of them would quietly write into the other's slot. Say which two, and
+    let the caller rename one.
+    """
+    members = collections.OrderedDict()
+    taken = dict()
+    for baseName in pool:
+      member = cls.memberName(baseName)
+      if member in taken:
+        raise ValueError('The tensors {} and {} share the pool member {}. '
+                         'Rename one of them.'.format(taken[member], baseName, member))
+      taken[member] = baseName
+      members[baseName] = member
+    return members
+
+  @staticmethod
+  def _elementPtrType(datatype):
+    return '{} const*'.format(datatype.ctype())
+
+  def _memberType(self, baseName, entry):
+    elementPtr = self._elementPtrType(entry.datatype)
+    if len(entry.groupSize) == 0:
+      return elementPtr
+    prefix, name = Tensor.splitBasename(baseName)
+    return '{}{}::{}::{}<{}>'.format(prefix,
+                                     InitializerGenerator.TENSOR_NAMESPACE,
+                                     name,
+                                     InitializerGenerator.CONTAINER_CLASS_NAME,
+                                     elementPtr)
+
+  def _storageType(self):
+    return '{}::{}'.format(self.STORAGE_NAMESPACE, self.STORAGE_STRUCT_NAME)
+
+  def generateH(self, header):
+    with header.Namespace(self.STORAGE_NAMESPACE):
+      with header.Struct('alignas({}) {}'.format(self.imageAlignment(), self.STORAGE_STRUCT_NAME)):
+        for entry in self._dataCache.entries():
+          alignment = 'alignas({}) '.format(entry.alignment()) if entry.alignment() > 1 else ''
+          header('{}{} const {}[{}];'.format(alignment,
+                                             entry.typename(),
+                                             entry.name(),
+                                             entry.elements()))
+      header.emptyline()
+      header('//! The image itself, so that init can bind references into it.')
+      header('extern {} const {};'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
+    header.emptyline()
+
+    with header.Struct(self.POOL_STRUCT_NAME):
+      for baseName, entry in self._pool.items():
+        header('{} {}{{}};'.format(self._memberType(baseName, entry),
+                                   self._members[baseName]))
+      header.emptyline()
+      header('//! Table for an image that lives at `base`, host or device.')
+      header.functionDeclaration(self.CREATE_FUN_NAME,
+                                 'void const* base',
+                                 '{} {}'.format(STATIC, self.POOL_STRUCT_NAME))
+      header('//! Table for the image in this binary. No allocation, no copy.')
+      header.functionDeclaration(self.HOST_FUN_NAME,
+                                 '',
+                                 '{} {}'.format(STATIC, self.POOL_STRUCT_NAME))
+    header.emptyline()
+
+    header('//! Size of the image, for one allocation of one block.')
+    header.functionDeclaration(self.BYTES_FUN_NAME, '', self.SIZE_TYPE)
+    header('//! Alignment the allocation has to meet for create() to hold.')
+    header.functionDeclaration(self.ALIGN_FUN_NAME, '', self.SIZE_TYPE)
+    header('//! Address of the image, for one copy of one block.')
+    header.functionDeclaration(self.DATA_FUN_NAME, '', 'void const*')
+
+  def generateCpp(self, cpp):
+    with cpp.Namespace(self.STORAGE_NAMESPACE):
+      entries = self._dataCache.entries()
+      cpp('extern {} const {} = {{'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
+      for i, entry in enumerate(entries):
+        separator = ',' if i + 1 < len(entries) else ''
+        cpp('  {{{}}}{}'.format(', '.join(str(value) for value in entry.values()), separator))
+      cpp('};')
+    cpp.emptyline()
+
+    returnType = self.POOL_STRUCT_NAME
+    with cpp.Function('{}::{}'.format(self.POOL_STRUCT_NAME, self.CREATE_FUN_NAME),
+                      'void const* base',
+                      returnType):
+      cpp('auto const* origin = static_cast<char const*>(base);')
+      cpp('{} result;'.format(self.POOL_STRUCT_NAME))
+      for baseName, entry in self._pool.items():
+        member = self._members[baseName]
+        stride = groupSizeToStride(entry.groupSize)
+        for group, symbol in entry.symbols.items():
+          target = member if len(group) == 0 else '{}.{}[{}]'.format(
+            member, InitializerGenerator.CONTAINER_DATA_NAME, address(group, stride))
+          cpp('result.{} = reinterpret_cast<{}>(origin + offsetof({}, {}));'.format(
+            target, self._elementPtrType(entry.datatype), self._storageType(), symbol))
+      cpp('return result;')
+    cpp.emptyline()
+
+    with cpp.Function('{}::{}'.format(self.POOL_STRUCT_NAME, self.HOST_FUN_NAME), '', returnType):
+      cpp('return {}({}());'.format(self.CREATE_FUN_NAME, self.DATA_FUN_NAME))
+    cpp.emptyline()
+
+    with cpp.Function(self.BYTES_FUN_NAME, '', self.SIZE_TYPE):
+      cpp('return sizeof({});'.format(self._storageType()))
+    cpp.emptyline()
+
+    with cpp.Function(self.ALIGN_FUN_NAME, '', self.SIZE_TYPE):
+      # Read off the image rather than repeated from the number the struct was
+      # declared with, so that the two cannot drift apart -- a consumer that
+      # allocated for less than the image wants would be one entry short.
+      cpp('return alignof({});'.format(self._storageType()))
+    cpp.emptyline()
+
+    with cpp.Function(self.DATA_FUN_NAME, '', 'void const*'):
+      cpp('return &{}::{};'.format(self.STORAGE_NAMESPACE, self.STORAGE_VAR_NAME))

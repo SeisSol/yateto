@@ -245,3 +245,30 @@ class TestRankZeroLayout:
         with tempfile.TemporaryDirectory() as out:
             with contextlib.redirect_stdout(io.StringIO()):
                 generator.generate(out, gemm_cfg=GeneratorCollection([]))
+
+
+class TestPack:
+    """``pack`` turns a value dictionary into the flat array the layout describes."""
+
+    def test_values_land_at_their_addresses(self):
+        layout = DenseMemoryLayout((2, 2))
+        packed = layout.pack({(0, 0): 1.0, (1, 1): 2.0})
+
+        assert packed == [1.0, 0, 0, 2.0]
+
+    def test_length_is_the_storage_requirement(self):
+        layout = DenseMemoryLayout((3, 4))
+
+        assert len(layout.pack({})) == layout.requiredReals()
+
+    def test_unmapped_slots_hold_the_fill(self):
+        layout = DenseMemoryLayout((2, 2))
+
+        assert layout.pack({}, fill=7) == [7, 7, 7, 7]
+
+    def test_entries_are_not_rendered(self):
+        """Whatever went in comes back; spelling it is the emitter's business."""
+        layout = DenseMemoryLayout((2, 2))
+        packed = layout.pack({(0, 0): 'nan'})
+
+        assert packed[0] == 'nan'

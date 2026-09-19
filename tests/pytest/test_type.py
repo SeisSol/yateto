@@ -13,7 +13,7 @@ import pytest
 
 from yateto import Tensor, Scalar
 from yateto.memory import DenseMemoryLayout
-from yateto.type import AddressingMode, Collection, IdentifiedType
+from yateto.type import AddressingMode, Collection, Datatype, IdentifiedType
 
 
 # ---------------------------------------------------------------------------
@@ -311,3 +311,48 @@ class TestCollection:
         b["B"] = Tensor("B", (3, 3))
         a.update(b)
         assert "A" in a and "B" in a
+
+
+# ---------------------------------------------------------------------------
+# Literal spelling
+# ---------------------------------------------------------------------------
+
+
+class TestDatatypeLiteral:
+    """``Datatype.literal`` turns a stored value into C++ source text.
+
+    Its input is whatever ``Tensor.values()`` holds, and that is a string, so
+    every case below has to survive the string spelling as well as the number.
+    """
+
+    @pytest.mark.parametrize("value", ["nan", float("nan")])
+    def test_nan_is_routed_through_limits(self, value):
+        assert Datatype.F64.literal(value) == "std::numeric_limits<double>::quiet_NaN()"
+
+    @pytest.mark.parametrize("value", ["inf", float("inf")])
+    def test_infinity_is_routed_through_limits(self, value):
+        assert Datatype.F64.literal(value) == "std::numeric_limits<double>::infinity()"
+
+    @pytest.mark.parametrize("value", ["-inf", float("-inf")])
+    def test_negative_infinity_keeps_its_sign(self, value):
+        assert Datatype.F64.literal(value) == "-std::numeric_limits<double>::infinity()"
+
+    def test_single_precision_keeps_its_suffix(self):
+        assert Datatype.F32.literal("0.25") == "0.25f"
+
+    def test_integers_are_spelled_as_integers(self):
+        """A float spelling in an integer array would be a narrowing error."""
+        assert Datatype.I32.literal("3.0") == "static_cast<int32_t>(3LL)"
+
+    def test_integers_saturate_at_infinity(self):
+        assert Datatype.I32.literal("inf") == "std::numeric_limits<int32_t>::max()"
+
+    @pytest.mark.parametrize(
+        "value,expected", [("0.0", "false"), ("1.0", "true"), ("nan", "false")]
+    )
+    def test_bool_reads_the_number_not_the_string(self, value, expected):
+        """Every non-empty string is truthy, so the number has to be looked at."""
+        assert Datatype.BOOL.literal(value) == expected
+
+    def test_double_round_trips(self):
+        assert float(Datatype.F64.literal("0.1")) == 0.1

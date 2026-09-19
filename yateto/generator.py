@@ -9,6 +9,7 @@ from .ast.node import Node
 from .ast.visitor import ComputeOptimalFlopCount, FindIndexPermutations, FindTensors, FindPrefetchCapabilities
 from .ast.transformer import *
 from .codegen.cache import *
+from .codegen.datacache import DataCache
 from .codegen.common import KernelAttributes
 from .codegen.code import Cpp
 from .codegen.test_framework import *
@@ -226,6 +227,7 @@ class GlobalRoutineCache:
 
 class Generator(object):
   INIT_FILE_NAME = 'init'
+  POOL_FILE_NAME = 'pool'
   TENSORS_FILE_NAME = 'tensor'
   KERNELS_FILE_NAME = 'kernel'
   ROUTINES_FILE_NAME = 'subroutine'
@@ -334,6 +336,7 @@ class Generator(object):
     fKernels = self.FileNames(outputDir, self.KERNELS_FILE_NAME)
     fTensors = self.FileNames(outputDir, self.TENSORS_FILE_NAME)
     fInit = self.FileNames(outputDir, self.INIT_FILE_NAME)
+    fPool = self.FileNames(outputDir, self.POOL_FILE_NAME)
     fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
     fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
 
@@ -379,7 +382,8 @@ class Generator(object):
       cache = RoutineCache()
     else:
       cache = routine_cache.cache
-    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters)
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters,
+                                                 namespace)
 
     kernelSource = StringIO()
     kernelSourceContent = ''
@@ -397,6 +401,7 @@ class Generator(object):
           header.includeSys('limits')
           header.include('yateto.h')
           header.include(fTensors.hName)
+          header.include(fPool.hName)
           cpp.include(fKernels.hName)
           with cpp.Namespace(namespace), header.Namespace(namespace):
               # Group kernels by namespace
@@ -465,6 +470,12 @@ class Generator(object):
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
     initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key))
+
+    # Before the initialisation code, not after: init binds references into the
+    # pool where it can, so it has to know which entries exist.
+    print('Generating constant pool...')
+    dataCache = DataCache()
+    poolMap = initGen.collectPool(dataCache)
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         with header.Namespace(namespace):
@@ -475,14 +486,34 @@ class Generator(object):
         initGen.generateTensorsCpp(cpp)
     with Cpp(fInit.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.INIT_FILE_NAME)):
+        header.includeSys('cstdint')
+        header.includeSys('limits')
         header.include(fTensors.hName)
+        header.include(fPool.hName)
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):
           initGen.generateInitH(header)
     with Cpp(fInit.cpp) as cpp:
+      cpp.includeSys('limits')
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
+
+    poolGen = PoolGenerator(self._arch, dataCache, poolMap)
+    with Cpp(fPool.h) as header:
+      with header.HeaderGuard(self._headerGuardName(namespace, self.POOL_FILE_NAME)):
+        header.includeSys('cstddef')
+        header.includeSys('cstdint')
+        header.includeSys('limits')
+        header.include(fTensors.hName)
+        with header.Namespace(namespace):
+          poolGen.generateH(header)
+    with Cpp(fPool.cpp) as cpp:
+      cpp.include(fPool.hName)
+      cpp.includeSys('cstddef')
+      cpp.includeSys('limits')
+      with cpp.Namespace(namespace):
+        poolGen.generateCpp(cpp)
 
     prefixnsp = lambda a: a.name if a.namespace == '' else f'{a.namespace}::{a.name}'
     return {

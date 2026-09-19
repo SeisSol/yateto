@@ -1,5 +1,5 @@
-#ifndef YATETO_LINEAR_ALLOCATED_H_
-#define YATETO_LINEAR_ALLOCATED_H_
+#ifndef YATETO_LINEARALLOCATOR_H_
+#define YATETO_LINEARALLOCATOR_H_
 
 #include <cassert>
 #include <cstddef>
@@ -19,11 +19,11 @@ struct LinearAllocatorT {
     userSpaceMem = reinterpret_cast<T*>(ptr);
   }
 
-  T* allocate(size_t size) {
+  T* allocate(std::size_t size) {
     assert(isInit && "YATETO: Temporary-Memory manager hasn't been initialized");
-    int currentByteCount = byteCount;
+    const std::size_t offset = byteCount;
     byteCount += size;
-    return &userSpaceMem[currentByteCount];
+    return userSpaceMem + offset;
   }
 
   void free() {
@@ -33,9 +33,9 @@ struct LinearAllocatorT {
   }
 
   private:
-  size_t byteCount{0};
+  std::size_t byteCount{0};
   bool isInit{false};
   T* userSpaceMem{nullptr};
 };
 } // namespace yateto
-#endif // YATETO_LINEAR_ALLOCATED_H_
+#endif // YATETO_LINEARALLOCATOR_H_

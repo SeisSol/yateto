@@ -541,14 +541,6 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
     computeSize();
   }
 
-  void computeSize() {
-    m_pattern.forall([&](const auto& /*index*/, const auto& idxval) {
-      if (idxval > 0) {
-        ++m_size;
-      }
-    });
-  }
-
   uint_t size() const { return m_size; }
 
   void setZero() {
@@ -563,6 +555,7 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
   const real_t& operator()(Args... index) const {
     static_assert((std::is_integral_v<Args> && ...));
     const auto idx = m_pattern(index...);
+    assert(idx > 0 && "YATETO: the requested entry is not part of the tensor pattern");
     return m_values[idx - 1];
   }
 
@@ -570,6 +563,7 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
   dataref_t operator()(Args... index) {
     static_assert((std::is_integral_v<Args> && ...));
     const auto idx = m_pattern(index...);
+    assert(idx > 0 && "YATETO: the requested entry is not part of the tensor pattern");
     return m_values[idx - 1];
   }
 
@@ -582,11 +576,13 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
 
   dataref_t operator[](const uint_t entry[Dim]) {
     const auto idx = m_pattern[entry];
+    assert(idx > 0 && "YATETO: the requested entry is not part of the tensor pattern");
     return m_values[idx - 1];
   }
 
   const real_t& operator[](const uint_t entry[Dim]) const {
     const auto idx = m_pattern[entry];
+    assert(idx > 0 && "YATETO: the requested entry is not part of the tensor pattern");
     return m_values[idx - 1];
   }
 
@@ -648,9 +644,18 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
   }
 
   protected:
+  void computeSize() {
+    m_size = 0;
+    m_pattern.forall([&](const auto& /*index*/, const auto& idxval) {
+      if (idxval > 0) {
+        ++m_size;
+      }
+    });
+  }
+
   data_t m_values{nullptr};
   DenseTensorView<Dim, uint_t, uint_t, true> m_pattern;
-  std::size_t m_size{0};
+  uint_t m_size{0};
 };
 } // namespace yateto
 

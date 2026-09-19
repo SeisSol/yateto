@@ -11,6 +11,18 @@
 #error "YATETO_HAS_BF16 has to be defined on every target, as 0 or as 1"
 #endif
 
+// A format that reports itself as present has to have a spelling behind it,
+// including when a build set the answer rather than the detection.
+#if YATETO_HAS_F128 && !defined(YATETO_F128_TY)
+#error "YATETO_HAS_F128 without YATETO_F128_TY"
+#endif
+#if YATETO_HAS_F16 && !defined(YATETO_F16_TY)
+#error "YATETO_HAS_F16 without YATETO_F16_TY"
+#endif
+#if YATETO_HAS_BF16 && !defined(YATETO_BF16_TY)
+#error "YATETO_HAS_BF16 without YATETO_BF16_TY"
+#endif
+
 class TypeTestSuite : public CxxTest::TestSuite {
   public:
   void testFloat128() {

@@ -27,7 +27,8 @@ def tensor_from_constant_expression(name: str,
                                     expression,
                                     target_indices: Indices = None,
                                     dtype: dtype = np.longdouble,
-                                    tensor_args: dict = dict()):
+                                    tensor_args: dict = dict(),
+                                    zero_tolerance: float = None):
   """
   Computes the result of an expression and returns
   an appropriately sized tensor. Works only for expressions
@@ -42,12 +43,19 @@ def tensor_from_constant_expression(name: str,
     target_indices: The index permutation of the resulting tensor
     dtype: Precision used in computation
     tensor_args: Additional arguments to Tensor constructor
+    zero_tolerance: If given, entries with |value| <= zero_tolerance * max(|values|) are set to
+                    exactly zero. The sparsity pattern of the result is read off the computed
+                    values, so cancellation that does not land exactly on zero would otherwise
+                    enter the pattern as a structural non-zero.
 
   Returns:
     A new Tensor object
   """
   expression = DeduceIndices(target_indices).visit(expression)
   values = ComputeConstantExpression(dtype).visit(expression)
+  if zero_tolerance is not None:
+    scale = np.max(np.abs(values))
+    values = np.where(np.abs(values) <= zero_tolerance * scale, dtype(0), values)
   return Tensor(name, values.shape, spp=values, **tensor_args)
 
 def tensor_collection_from_constant_expression(base_name: str,
@@ -55,7 +63,8 @@ def tensor_collection_from_constant_expression(base_name: str,
                                                group_indices,
                                                target_indices: Indices = None,
                                                dtype=np.longdouble,
-                                               tensor_args: dict = {}):
+                                               tensor_args: dict = {},
+                                               zero_tolerance: float = None):
   """
   Computes the result of an expression group and returns
   a group of appropriately sized tensors. Works only for expressions
@@ -71,6 +80,7 @@ def tensor_collection_from_constant_expression(base_name: str,
     target_indices: The index permutation of the resulting tensor
     dtype: Precision used in computation
     tensor_args: Additional arguments to Tensor constructor
+    zero_tolerance: Relative magnitude below which computed entries are set to exactly zero
 
   Returns:
     A new Tensor collection
@@ -83,7 +93,8 @@ def tensor_collection_from_constant_expression(base_name: str,
                                              expression=expression,
                                              target_indices=target_indices,
                                              dtype=dtype,
-                                             tensor_args=tensor_args)
+                                             tensor_args=tensor_args,
+                                             zero_tolerance=zero_tolerance)
     tensors[name] = tensor
 
   return create_collection(tensors)

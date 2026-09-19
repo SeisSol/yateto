@@ -525,14 +525,6 @@ class OptimizedKernelGenerator(KernelGenerator):
               header(boundsCheck)
             header(f'return {function}{indexer};')
 
-    if familyStride is not None:
-      cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
-        CONSTEXPR,
-        self.NAMESPACE,
-        name,
-        self.MEMBER_FUNCTION_PTR_NAME,
-        self.EXECUTE_ARRAY_NAME
-      ))
     for index, kernelOutline in enumerate(kernelOutlines):
       if kernelOutline is None:
         continue
@@ -1032,6 +1024,8 @@ class InitializerGenerator(object):
                 with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
     for namespace, scalar_dict in self.iterate_collect_scalar():
+      if len(scalar_dict) == 0:
+        continue
       with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
         for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
           with header.Struct(baseNameWithoutNamespace):
@@ -1055,10 +1049,10 @@ class InitializerGenerator(object):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
 
   def generateTensorsCpp(self, cpp):
-    for namespace, tensor_dict in self.iterate_collect():
-      with cpp.Namespace(namespace):
-        for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-          self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
+    # Shape and Size are constexpr static members, and a constexpr static
+    # member is implicitly inline, so it needs no definition outside the
+    # class. Writing one anyway is deprecated and both GCC and clang say so.
+    pass
 
   def collectPool(self, dataCache):
     """Registers every constant tensor in `dataCache` and reports the symbols.
@@ -1130,6 +1124,8 @@ class InitializerGenerator(object):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._init(header, base_name, base_name_without_namespace, '', tensors, False)
     for namespace, scalar_dict in self.iterate_collect_scalar():
+      if len(scalar_dict) == 0:
+        continue
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
         for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
           with header.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):

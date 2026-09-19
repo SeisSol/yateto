@@ -100,6 +100,34 @@ class TestKernelHeader:
         assert 'assert(' not in kernel_h
 
 
+class TestEmission:
+    def test_no_redundant_out_of_line_definitions(self, tmp_path, arch):
+        """A constexpr static member is implicitly inline since C++17, and a
+        definition outside the class is deprecated -- both GCC and clang say
+        so, once per member."""
+        def build(g):
+            dq = [Tensor('dQ({})'.format(i), (5, 5)) for i in range(3)]
+            a = Tensor('a', (5, 5))
+            g.add('k', dq[0]['ij'] <= dq[1]['ik'] * a['kj'] + dq[2]['ij'])
+            for i in range(1, 3):
+                g.add('fam({})'.format(i), dq[0]['ij'] <= dq[1]['ik'] * a['kj'])
+
+        files = generate(tmp_path, build, arch)
+        for name in ('Shape', 'Size', 'ExecutePtrs'):
+            assert name not in files['tensor.cpp'], name
+            assert name not in files['kernel.cpp'], name
+
+    def test_no_empty_namespace_blocks(self, tmp_path, arch):
+        """A group with no members used to open and close a namespace anyway.
+        The outermost namespace of a source file is not in scope here: it is
+        the file's own, and it stays even when there is nothing to put in it."""
+        files = generate(tmp_path, matmul, arch)
+        for name, text in files.items():
+            if not name.endswith('.h'):
+                continue
+            assert re.search(r'namespace \w+ \{\s*\n\s*\} // namespace', text) is None, name
+
+
 class TestIncludes:
     def test_headers_bring_their_own_integer_types(self, tmp_path, arch):
         """int8_t and friends turn up in the emission whenever a tensor or a

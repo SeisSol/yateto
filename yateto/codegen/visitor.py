@@ -495,15 +495,21 @@ class OptimizedKernelGenerator(KernelGenerator):
           ))
           args = typedNdArgs(len(familyStride), self._arch.uintTypename)
           indexF = indexFun(familyStride)
+          familySize = len(kernelOutlines)
+          boundsCheck = 'assert({} < {});'.format(indexF, familySize)
           with header.Function(self.FIND_EXECUTE_NAME, args, '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
+            header(boundsCheck)
             header('return {}[{}];'.format(self.EXECUTE_ARRAY_NAME, indexF))
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
-            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
+            ndArgList = ', '.join(ndargs(len(familyStride)))
+            header('assert({}({}) != nullptr);'.format(self.FIND_EXECUTE_NAME, ndArgList))
+            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ndArgList))
 
           indexer = f'[{indexF}]'
         else:
           args = ''
           indexer = ''
+          boundsCheck = None
 
         aux_functions = [self.NONZEROFLOPS_NAME,
                           self.HARDWAREFLOPS_NAME,
@@ -515,6 +521,8 @@ class OptimizedKernelGenerator(KernelGenerator):
         for function in aux_functions:
           funName = function[:1].lower() + function[1:]
           with header.Function(funName, args, f'{MODIFIERS} {self._arch.ulongTypename}'):
+            if boundsCheck is not None:
+              header(boundsCheck)
             header(f'return {function}{indexer};')
 
     if familyStride is not None:
@@ -1006,6 +1014,8 @@ class InitializerGenerator(object):
             returnType = '{} {}'.format(MODIFIERS, self._arch.uintTypename)
             if len(groupSize) > 0:
               with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                header('assert({} < {});'.format(indexFun(groupSizeToStride(groupSize)),
+                                                 reduce(operator.mul, groupSize)))
                 header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
             with header.Function(self.SIZE_FUN_NAME, typedArgs, returnType):
               if len(groupSize) == 0:
@@ -1030,6 +1040,8 @@ class InitializerGenerator(object):
             typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
             if len(groupSize) > 0:
               with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                header('assert({} < {});'.format(indexFun(groupSizeToStride(groupSize)),
+                                                 reduce(operator.mul, groupSize)))
                 header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
             if len(groupSize) > 0:
               header('template<typename T>')

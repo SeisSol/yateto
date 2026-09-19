@@ -397,6 +397,7 @@ class Generator(object):
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:
         with header.HeaderGuard(self._headerGuardName(namespace, self.KERNELS_FILE_NAME)):
+          header.includeSys('cassert')
           header.includeSys('cmath')
           header.includeSys('limits')
           header.include('yateto.h')
@@ -478,6 +479,7 @@ class Generator(object):
     poolMap = initGen.collectPool(dataCache)
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
+        header.includeSys('cassert')
         with header.Namespace(namespace):
           initGen.generateTensorsH(header)
     with Cpp(fTensors.cpp) as cpp:

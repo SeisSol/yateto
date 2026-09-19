@@ -8,7 +8,7 @@ def add(g):
   B = Tensor("B", (N, N))
   C = Tensor("C", (N, N))
 
-  def build(i):
+  def build(*args):
       return C["ij"] <= A["ik"] * B["kj"]
 
   g.addFamily("family0p", simpleParameterSpace(), build)

@@ -36,12 +36,12 @@ class GBSpec:
       cls.gb_spec = importlib.util.find_spec('chainforge')
     return cls.gb_spec
 
-def generator(arch, descr, gemm_cfg, target):
+def generator(arch, descr, gemm_cfg, target, attrs=None):
   if target == 'gpu':
       hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
       if hasTinytc:
           return FusedGemmsTinytc(arch, descr)
       elif GBSpec.load():
           from .external_generator import FusedGemms
-          return FusedGemms(arch, descr)
+          return FusedGemms(arch, descr, attrs)
   raise NotImplementedError(f'no implementation found for {target} target')

@@ -1,18 +1,23 @@
+import inspect
 import string
 from ..ast.indices import Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout
-from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux
+from .common import forLoops, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
 from . import copyscaleadd, indexsum, log, product, fused_gemms
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
 
-  def __init__(self, cpp, arch, target):
+  def __init__(self, cpp, arch, target, attrs=None):
     self._cpp = cpp
     self._arch = arch
     self._freeList = list()
     self._target = target
+    #: The attributes of the kernel being generated. Every generator that
+    #: emits a call into an external kernel needs them, because the flags
+    #: member such a call would name only exists when the kernel declares it.
+    self._attrs = attrs if attrs is not None else KernelAttributes()
 
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
@@ -86,7 +91,9 @@ class KernelFactory(object):
     if self._target == 'cpu':
       pass
     elif self._target == 'gpu':
-      self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+      # Nothing to reset where the kernel has no flags member.
+      if self._attrs.flags:
+        self._cpp(f'{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
     else:
       raise RuntimeError('unknown compute target')
 
@@ -95,8 +102,8 @@ class KernelFactory(object):
     return Indices(string.ascii_lowercase[:len(shape)], shape)
 
 class OptimizedKernelFactory(KernelFactory):
-  def __init__(self, cpp, arch, target):
-    super().__init__(cpp, arch, target)
+  def __init__(self, cpp, arch, target, attrs=None):
+    super().__init__(cpp, arch, target, attrs)
 
   def create_LoopOverGEMM(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
@@ -111,12 +118,13 @@ class OptimizedKernelFactory(KernelFactory):
       transB = node.transB(),
       prefetchName = prefetchName
     )
-    generator = log.generator(self._arch, description, self._target)
+    generator = log.generator(self._arch, description, self._target, self._attrs)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
 
   def create_FusedGEMMs(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
     description = fused_gemms.Description(node, result, arguments, add, scalar)
-    generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target)
+    generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target,
+                                      self._attrs)
     return generator.generate(self._cpp, routineCache, gemm_cfg)
 
   def create_IndexSum(self, node, result, arguments, add, scalar, prefetchName, routineCache, gemm_cfg):
@@ -164,7 +172,8 @@ class OptimizedKernelFactory(KernelFactory):
       result = result,
       term = term
     )
-    generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target)
+    generator = copyscaleadd.generator(self._arch, description, gemm_cfg, self._target,
+                                       self._attrs)
     return generator.generate(self._cpp, routineCache)
 
 class UnitTestFactory(KernelFactory):
@@ -292,10 +301,33 @@ class ExportGenerator:
 class ExportFactory(KernelFactory):
   @classmethod
   def makeFactory(cls, generator):
-    return lambda cpp, arch, target: cls(generator(arch), cpp, arch, target)
+    return lambda cpp, arch, target, attrs=None: cls(
+      cls._makeExporter(generator, arch, attrs), cpp, arch, target, attrs)
 
-  def __init__(self, generator, cpp, arch, target):
-    super().__init__(cpp, arch, target)
+  @staticmethod
+  def _makeExporter(generator, arch, attrs):
+    """The exporter, told which kernel it is about to generate.
+
+    Its own interface decides what it gets. An exporter that takes ``attrs``
+    generates the kernel those attributes describe. One that does not
+    predates the channel and can only generate the interface that existed
+    before it, which has a flags parameter on every kernel -- and since this
+    side then emits no flags member for that call to name, saying so here is
+    better than a compile error two repositories away.
+    """
+    params = inspect.signature(generator).parameters
+    takesAttrs = ('attrs' in params
+                  or any(p.kind is p.VAR_KEYWORD for p in params.values()))
+    if not takesAttrs:
+      raise RuntimeError(
+        f'routine exporter {getattr(generator, "__name__", generator)} does not '
+        f'accept kernel attributes: it cannot be told whether a kernel takes '
+        f'batch flags, and this yateto no longer generates them unconditionally. '
+        f'Update the exporter.')
+    return generator(arch, attrs=(attrs.as_dict() if attrs is not None else {}))
+
+  def __init__(self, generator, cpp, arch, target, attrs=None):
+    super().__init__(cpp, arch, target, attrs)
     self.generator = generator
 
   def post_generate(self, routine_cache):

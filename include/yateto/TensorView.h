@@ -1,9 +1,8 @@
-#ifndef YATETO_MATRIXVIEW_H_
-#define YATETO_MATRIXVIEW_H_
+#ifndef YATETO_TENSORVIEW_H_
+#define YATETO_TENSORVIEW_H_
 
 #include <algorithm>
 #include <cassert>
-#include <cstring>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -121,74 +120,19 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
 
   template <typename F>
   void forall(F&& function) {
-    uint_t entry[Dim]{};
-    std::copy(m_start, m_start + Dim, entry);
-    while (entry[Dim - 1] != m_stop[Dim - 1]) {
-      auto values = &operator[](entry);
-      for (uint_t i = 0; i < m_stop[0] - m_start[0]; ++i) {
-        entry[0] = i + m_start[0];
-        std::invoke(std::forward<F>(function), entry, values[i * m_stride[0]]);
-      }
-      if constexpr (Dim == 1) {
-        break;
-      } else {
-
-        uint_t d = 0;
-        do {
-          entry[d] = m_start[d];
-          d++;
-          ++entry[d];
-        } while (entry[d] == m_stop[d] && d < Dim - 1);
-      }
-    }
+    forallImpl(*this, std::forward<F>(function));
   }
 
   template <typename F>
   void forall(F&& function) const {
-    uint_t entry[Dim]{};
-    std::copy(m_start, m_start + Dim, entry);
-    while (entry[Dim - 1] != m_stop[Dim - 1]) {
-      auto values = &operator[](entry);
-      for (uint_t i = 0; i < m_stop[0] - m_start[0]; ++i) {
-        entry[0] = i + m_start[0];
-        std::invoke(std::forward<F>(function), entry, values[i * m_stride[0]]);
-      }
-      if constexpr (Dim == 1) {
-        break;
-      } else {
-
-        uint_t d = 0;
-        do {
-          entry[d] = m_start[d];
-          d++;
-          ++entry[d];
-        } while (entry[d] == m_stop[d] && d < Dim - 1);
-      }
-    }
+    forallImpl(*this, std::forward<F>(function));
   }
 
   void setZero() {
-    uint_t entry[Dim];
-    std::copy(m_start, m_start + Dim, entry);
-    while (entry[Dim - 1] != m_stop[Dim - 1]) {
-      auto values = &operator[](entry);
-      for (uint_t i = 0.0; i < m_stop[0] - m_start[0]; ++i) {
-        values[i * m_stride[0]] = 0.0;
-      }
-      if constexpr (Dim == 1) {
-        break;
-      } else {
-
-        uint_t d = 0;
-        do {
-          entry[d] = m_start[d];
-          d++;
-          ++entry[d];
-        } while (entry[d] == m_stop[d] && d < Dim - 1);
-      }
-    }
+    forall([](const uint_t* /*entry*/, real_t& value) { value = real_t{}; });
   }
 
+  protected:
   template <typename Head>
   bool isInRange(const uint_t start[Dim], const uint_t stop[Dim], int dim, Head head) const {
     return static_cast<uint_t>(head) >= start[dim] && static_cast<uint_t>(head) < stop[dim];
@@ -201,6 +145,7 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
            isInRange(start, stop, dim + 1, tail...);
   }
 
+  public:
   template <typename... Entry>
   bool isInRange(Entry... entry) const {
     static_assert(sizeof...(entry) == Dim,
@@ -249,7 +194,7 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
   void copyToView(view_t& other) const {
     assert(Dim == other.dim());
 
-    uint_t entry[Dim];
+    uint_t entry[Dim]{};
     for (uint_t d = 0; d < Dim; ++d) {
       assert(this->shape(d) == other.shape(d));
       entry[d] = m_start[d];
@@ -298,9 +243,9 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
     static_assert(sizeof...(entry) == Dim,
                   "Number of arguments to subtensor() does not match tensor dimension.");
     constexpr auto nSlices = count_slices<uint_t, Entry...>::value;
-    uint_t begin[Dim];
-    uint_t size[nSlices];
-    uint_t stride[nSlices];
+    uint_t begin[Dim]{};
+    uint_t size[nSlices]{};
+    uint_t stride[nSlices]{};
     extractSubtensor(begin, size, stride, entry...);
     DenseTensorView<nSlices, real_t, uint_t, true> subtensor(&operator[](begin), size, stride);
     return subtensor;
@@ -311,6 +256,34 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
   const real_t* data() const { return m_values; }
 
   protected:
+  /** Visits every entry of the view, innermost dimension first.
+   *
+   *  @param self the view to walk over; const or non-const.
+   *  @param function called with the current index tuple and the entry.
+   * */
+  template <typename Self, typename F>
+  static void forallImpl(Self& self, F&& function) {
+    uint_t entry[Dim]{};
+    std::copy(self.m_start, self.m_start + Dim, entry);
+    while (entry[Dim - 1] != self.m_stop[Dim - 1]) {
+      auto* values = &self[entry];
+      for (uint_t i = 0; i < self.m_stop[0] - self.m_start[0]; ++i) {
+        entry[0] = i + self.m_start[0];
+        std::invoke(function, entry, values[i * self.m_stride[0]]);
+      }
+      if constexpr (Dim == 1) {
+        break;
+      } else {
+        uint_t d = 0;
+        do {
+          entry[d] = self.m_start[d];
+          d++;
+          ++entry[d];
+        } while (entry[d] == self.m_stop[d] && d < Dim - 1);
+      }
+    }
+  }
+
   void computeStride() {
     m_stride[0] = 1;
     for (uint_t d = 0; d < Dim - 1; ++d) {
@@ -421,50 +394,22 @@ class CSCMatrixView : public TensorView<2, real_t, uint_t> {
 
   uint_t size() const { return m_colPtr[this->shape(1)]; }
 
-  void setZero() { memset(m_values, 0, size() * sizeof(real_t)); }
+  void setZero() { std::fill(m_values, m_values + size(), real_t{}); }
 
   const real_t& operator()(uint_t row, uint_t col) const {
-    assert(col >= 0 && col < this->shape(1));
-    uint_t addr = m_colPtr[col];
-    uint_t stop = m_colPtr[col + 1];
-    while (addr < stop) {
-      if (m_rowInd[addr] == row) {
-        break;
-      }
-      ++addr;
-    }
-    assert(addr != stop);
-
+    const uint_t addr = address(row, col);
+    assert(addr != m_colPtr[col + 1]);
     return m_values[addr];
   }
 
   dataref_t operator()(uint_t row, uint_t col) {
-    assert(col >= 0 && col < this->shape(1));
-    uint_t addr = m_colPtr[col];
-    uint_t stop = m_colPtr[col + 1];
-    while (addr < stop) {
-      if (m_rowInd[addr] == row) {
-        break;
-      }
-      ++addr;
-    }
-    assert(addr != stop);
-
+    const uint_t addr = address(row, col);
+    assert(addr != m_colPtr[col + 1]);
     return m_values[addr];
   }
 
   bool isInRange(uint_t row, uint_t col) const {
-    assert(col >= 0 && col < this->shape(1));
-    uint_t addr = m_colPtr[col];
-    uint_t stop = m_colPtr[col + 1];
-    while (addr < stop) {
-      if (m_rowInd[addr] == row) {
-        return true;
-      }
-      ++addr;
-    }
-
-    return false;
+    return address(row, col) != m_colPtr[col + 1];
   }
 
   dataref_t operator[](const uint_t entry[2]) { return operator()(entry[0], entry[1]); }
@@ -514,6 +459,23 @@ class CSCMatrixView : public TensorView<2, real_t, uint_t> {
   }
 
   protected:
+  /** Looks up where an entry is stored.
+   *
+   *  @param row the row of the entry.
+   *  @param col the column of the entry.
+   *  @return the offset into the value array, or the end of the column if the
+   *          entry is not stored.
+   * */
+  uint_t address(uint_t row, uint_t col) const {
+    assert(col < this->shape(1));
+    uint_t addr = m_colPtr[col];
+    const uint_t stop = m_colPtr[col + 1];
+    while (addr < stop && m_rowInd[addr] != row) {
+      ++addr;
+    }
+    return addr;
+  }
+
   data_t m_values;
   const uint_t* m_rowInd;
   const uint_t* m_colPtr;
@@ -673,4 +635,4 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
 };
 } // namespace yateto
 
-#endif
+#endif // YATETO_TENSORVIEW_H_

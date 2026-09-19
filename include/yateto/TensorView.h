@@ -376,15 +376,23 @@ class DenseTensorView<0, real_t, uint_t, Const> : public TensorView<0, real_t, u
                            std::initializer_list<uint_t> shape,
                            std::initializer_list<uint_t> start,
                            std::initializer_list<uint_t> stop)
-      : TensorView<0, real_t, uint_t>(shape), m_values(values) {}
+      : TensorView<0, real_t, uint_t>(shape), m_values(values) {
+    assert(start.size() == 0 && "YATETO: the start does not match the tensor dimension");
+    assert(stop.size() == 0 && "YATETO: the stop does not match the tensor dimension");
+  }
 
   uint_t size() const { return 1; }
 
-  void setZero() { m_values[0] = 0.0; }
+  void setZero() { m_values[0] = real_t{}; }
+
+  data_t data() { return m_values; }
+
+  const real_t* data() const { return m_values; }
 
   template <class view_t>
-  void copyToView(view_t& other) {
-    other.m_values[0] = m_values[0];
+  void copyToView(view_t& other) const {
+    assert(0 == other.dim());
+    other.data()[0] = m_values[0];
   }
 
   protected:

@@ -43,7 +43,10 @@ class TensorView {
 
   static constexpr uint_t dim() { return Dim; }
 
-  uint_t shape(uint_t dim) const { return m_shape[dim]; }
+  uint_t shape(uint_t dim) const {
+    assert(dim < Dim && "YATETO: the requested dimension is not part of the tensor");
+    return m_shape[dim];
+  }
 
   protected:
   uint_t m_shape[Dim]{};
@@ -128,6 +131,7 @@ class DenseTensorView : public TensorView<Dim, real_t, uint_t> {
     forallImpl(*this, std::forward<F>(function));
   }
 
+  template <bool Writable = !Const, typename = std::enable_if_t<Writable>>
   void setZero() {
     forall([](const uint_t* /*entry*/, real_t& value) { value = real_t{}; });
   }
@@ -356,6 +360,7 @@ class DenseTensorView<0, real_t, uint_t, Const> : public TensorView<0, real_t, u
 
   uint_t size() const { return 1; }
 
+  template <bool Writable = !Const, typename = std::enable_if_t<Writable>>
   void setZero() { m_values[0] = real_t{}; }
 
   data_t data() { return m_values; }
@@ -394,6 +399,7 @@ class CSCMatrixView : public TensorView<2, real_t, uint_t> {
 
   uint_t size() const { return m_colPtr[this->shape(1)]; }
 
+  template <bool Writable = !Const, typename = std::enable_if_t<Writable>>
   void setZero() { std::fill(m_values, m_values + size(), real_t{}); }
 
   const real_t& operator()(uint_t row, uint_t col) const {
@@ -519,6 +525,7 @@ class PatternTensorView : public TensorView<Dim, real_t, uint_t> {
 
   uint_t size() const { return m_size; }
 
+  template <bool Writable = !Const, typename = std::enable_if_t<Writable>>
   void setZero() {
     m_pattern.forall([&](const auto& /*index*/, const auto& idxval) {
       if (idxval > 0) {

@@ -8,6 +8,13 @@
 
 using namespace yateto;
 
+// Instantiating a read-only view has to name every member of it, so this is
+// where a member that only makes sense on a writable view shows up.
+template class yateto::DenseTensorView<3, double, unsigned, true>;
+template class yateto::DenseTensorView<0, double, unsigned, true>;
+template class yateto::CSCMatrixView<double, unsigned, true>;
+template class yateto::PatternTensorView<2, double, unsigned, true>;
+
 class DenseTensorViewTestSuite : public CxxTest::TestSuite {
   private:
   double data_[12];
@@ -68,6 +75,14 @@ class DenseTensorViewTestSuite : public CxxTest::TestSuite {
     });
     TS_ASSERT_EQUALS(visited, 12);
     TS_ASSERT_EQUALS(sum, 78.0);
+  }
+
+  void testShape() {
+    const DenseTensorView<3, double> tensor(data_, {3, 2, 2});
+    TS_ASSERT_EQUALS(tensor.dim(), 3);
+    TS_ASSERT_EQUALS(tensor.shape(0), 3);
+    TS_ASSERT_EQUALS(tensor.shape(1), 2);
+    TS_ASSERT_EQUALS(tensor.shape(2), 2);
   }
 
   void testForallOnConstView() {
@@ -309,6 +324,17 @@ class InitToolsTestSuite : public CxxTest::TestSuite {
     TS_ASSERT_EQUALS(second - first, 16);
     allocator.free();
     allocator.initialize(memory.data());
+    TS_ASSERT_EQUALS(allocator.allocate(1), memory.data());
+  }
+
+  void testLinearAllocatorWithCapacity() {
+    std::vector<char> memory(64);
+    LinearAllocatorT<char> allocator;
+    allocator.initialize(memory.data(), memory.size());
+    TS_ASSERT_EQUALS(allocator.allocate(64), memory.data());
+    // a block handed out in full can be handed out again after free()
+    allocator.free();
+    allocator.initialize(memory.data(), memory.size());
     TS_ASSERT_EQUALS(allocator.allocate(1), memory.data());
   }
 

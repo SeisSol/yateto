@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace yateto {
 /** Computes a number of tensors inside of a tensor family.
@@ -13,7 +15,7 @@ namespace yateto {
  * @return a number of tensors.
  * */
 template <class T>
-constexpr size_t numFamilyMembers() {
+constexpr std::size_t numFamilyMembers() {
   return sizeof(T::Size) / sizeof(T::Size[0]);
 }
 
@@ -21,12 +23,20 @@ constexpr size_t numFamilyMembers() {
  * address.
  *
  * @param size a pointer address as integer.
- * @param alignment a size of a vector register.
+ * @param alignment a size of a vector register. An alignment of zero leaves
+ *        the address untouched.
  * @return the next closest aligned relative address.
  * */
 template <typename int_t>
-constexpr size_t alignedUpper(int_t size, size_t alignment) {
-  return size + (alignment - size % alignment) % alignment;
+constexpr std::size_t alignedUpper(int_t size, std::size_t alignment) {
+  if constexpr (std::is_signed_v<int_t>) {
+    assert(size >= 0 && "YATETO: cannot align a negative address");
+  }
+  const auto address = static_cast<std::size_t>(size);
+  if (alignment == 0) {
+    return address;
+  }
+  return address + (alignment - address % alignment) % alignment;
 }
 
 /** Computes a number of real number which fits into a vector register.
@@ -38,7 +48,9 @@ constexpr size_t alignedUpper(int_t size, size_t alignment) {
  *  @return number of real numbers inside of a vector register
  * */
 template <typename float_t>
-constexpr size_t alignedReals(size_t alignment) {
+constexpr std::size_t alignedReals(std::size_t alignment) {
+  assert(alignment % sizeof(float_t) == 0 &&
+         "YATETO: the alignment has to be a multiple of the value size");
   return alignment / sizeof(float_t);
 }
 
@@ -52,7 +64,8 @@ constexpr size_t alignedReals(size_t alignment) {
  * @return a size of a tensor family
  * */
 template <class T>
-constexpr size_t computeFamilySize(size_t alignedReals = 1, size_t n = numFamilyMembers<T>()) {
+constexpr std::size_t computeFamilySize(std::size_t alignedReals = 1,
+                                        std::size_t n = numFamilyMembers<T>()) {
   return n == 0 ? 0
                 : alignedUpper(T::Size[n - 1], alignedReals) +
                       computeFamilySize<T>(alignedReals, n - 1);
@@ -69,12 +82,13 @@ class CopyManager {
    *  @param mem an address to a chunk of memory.
    *         NOTE: the address is going to be incremented every time
    *         when new information is written.
+   *  @param ptr set to the address the tensor data ends up at.
    *  @param alignment a size of a vector register (in bytes).
-   *  @param ptr.
-   *  @param alignment.
    * */
-  template <class T>
-  void copyTensorToMemAndSetPtr(float_t*& mem, float_t*& ptr, size_t alignment = 1) {
+  template <class T, typename ptr_t>
+  void copyTensorToMemAndSetPtr(float_t*& mem, ptr_t*& ptr, std::size_t alignment = 1) {
+    static_assert(std::is_same_v<std::remove_const_t<ptr_t>, float_t>,
+                  "YATETO: the target pointer has to point to the manager's value type");
     ptr = mem;
     copyValuesToMem(mem, T::Values, T::Values + T::Size, alignment);
   }
@@ -84,23 +98,20 @@ class CopyManager {
    * NOTE: The function writes the actual address (where aligned tensor data
    * stored) back to a tensor family
    *
-   *  @param container a reference to a container which contains tensor family
-   * data.
    *  @param mem an address to an allocated chunk of memory.
    *         NOTE: the address is going to be incremented every time
    *         when new information is written.
+   *  @param container a reference to a container which contains tensor family
+   * data.
    *  @param alignment a size of a vector register (in bytes).
    * */
   template <class T>
   void copyFamilyToMemAndSetPtr(float_t*& mem,
                                 typename T::template Container<const float_t*>& container,
-                                size_t alignment = 1) {
+                                std::size_t alignment = 1) {
 
-    // determine a size of the container i.e a number of tensor that it holds
-    size_t n = sizeof(T::Size) / sizeof(T::Size[0]);
-
-    for (size_t i = 0; i < n; ++i) {
-      // init pointer of each tensor to the allocated memeory
+    for (std::size_t i = 0; i < numFamilyMembers<T>(); ++i) {
+      // init pointer of each tensor to the allocated memory
       container.data[i] = mem;
 
       // copy values and shift pointer
@@ -121,17 +132,16 @@ class CopyManager {
    *  @param last a pointer to the end of tensor data.
    *  @param alignment a size of a vector register (in bytes).
    * */
-  virtual void
-      copyValuesToMem(float_t*& mem, const float_t* first, const float_t* last, size_t alignment) {
+  void copyValuesToMem(float_t*& mem, const float_t* first, const float_t* last, std::size_t alignment) {
 
     // copy data
     mem = copier.copy(first, last, mem);
 
     // shift pointer
-    mem += (alignedUpper(reinterpret_cast<uintptr_t>(mem), alignment) -
-            reinterpret_cast<uintptr_t>(mem)) /
+    mem += (alignedUpper(reinterpret_cast<std::uintptr_t>(mem), alignment) -
+            reinterpret_cast<std::uintptr_t>(mem)) /
            sizeof(float_t);
-    assert(reinterpret_cast<uintptr_t>(mem) % alignment == 0);
+    assert(reinterpret_cast<std::uintptr_t>(mem) % alignment == 0);
   }
 
   private:
@@ -142,4 +152,4 @@ template <class float_t>
 using DefaultCopyManager = CopyManager<float_t, SimpleCopyPolicy<float_t>>;
 } // namespace yateto
 
-#endif
+#endif // YATETO_INITTOOLS_H_

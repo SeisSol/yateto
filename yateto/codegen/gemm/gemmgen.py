@@ -1,4 +1,3 @@
-import hashlib
 import subprocess
 import tempfile
 from abc import ABC
@@ -6,6 +5,7 @@ import numpy as np
 from collections import namedtuple
 
 from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
+from .descriptor import GemmDescriptor
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
 from ..common import BatchedOperationsAux, KernelAttributes, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, toTinyTCType, toTinyTCImmediate
 from ..tiny_tensor_language import *
@@ -44,31 +44,10 @@ class GemmGen(object):
   def _beta(self, beta):
     return self._is_special(beta, {0,1})
 
-  def generateRoutineName(self, gemm, sppA, sppB):
-    name = self._gemm_cfg.operation_name
-    name += '_' + {
-      (True, True): 'dense',
-      (True, False): 'bsparse',
-      (False, True): 'asparse',
-      (False, False): 'absparse'
-    }[(sppA is None, sppB is None)]
-
-    if sppA is not None:
-      # cf. https://stackoverflow.com/a/65766676
-      sha = hashlib.new('md5', usedforsecurity=False)
-      sha.update(str(sppA).encode())
-      name += '_' + sha.hexdigest()
-    if sppB is not None:
-      sha = hashlib.new('md5', usedforsecurity=False)
-      sha.update(str(sppB).encode())
-      name += '_' + sha.hexdigest()
-    return '{name}_{datatypeA}_{datatypeB}_{datatypeC}_{arch}_m{M}_n{N}_k{K}_ldA{LDA}_ldB{LDB}_ldC{LDC}_alpha{alphaSubs}_beta{betaSubs}_alignedA{alignedA}_alignedC{alignedC}_transA{transA}_transB{transB}_{prefetch}'.format(
-      name=name,
-      arch=self._arch.name.replace('-', '_'),
-      alphaSubs=self._alpha(gemm['alpha']),
-      betaSubs=self._beta(gemm['beta']),
-      **gemm
-    )
+  def describe(self, gemm, sppA, sppB):
+    """The identity of the routine this GEMM needs, as data."""
+    return GemmDescriptor.create(self._gemm_cfg.operation_name, self._arch.name,
+                                 gemm, sppA, sppB)
 
   def _offset(self, term, offset2, transpose):
     if transpose:
@@ -255,7 +234,7 @@ class GemmGen(object):
         'datatypeC': d.result.datatype,
       }
 
-      routineName = self.generateRoutineName(gemm, sppA, sppB)
+      routineName = self.describe(gemm, sppA, sppB).routineName()
 
       if self._mode == 'pspamm':
         cpp( '{}({}, {}, {}, {}, {}, {});'.format(

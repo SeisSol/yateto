@@ -16,6 +16,7 @@ import pytest
 from yateto import Tensor, useArchitectureIdentifiedBy
 from yateto.codegen.code import Cpp
 from yateto.codegen.datacache import DataCache
+from yateto.memory import CSCMemoryLayout
 from yateto.codegen.visitor import POOL_ALIGNMENT, InitializerGenerator, PoolGenerator
 from yateto.type import Datatype
 
@@ -409,3 +410,74 @@ class TestReservingWhileKernelsAreWritten:
         assert 'double const* chosenLayout{};' in pool_h
         assert 'result.chosenLayout = reinterpret_cast<double const*>(' in pool_cpp
         assert '1.0, 2.0, 3.0, 4.0' in pool_cpp
+
+
+class TestViewArrayPool:
+    """The index arrays the views need are spelled once and referred to.
+
+    They have to stay constant expressions: a lookup with constant indices
+    folds to a single address only while the compiler can see the pattern.
+    """
+
+    @staticmethod
+    def _initH(tensors):
+        arch = useArchitectureIdentifiedBy('dhsw')
+        gen = InitializerGenerator(arch, tensors, [])
+        out = StringIO()
+        with Cpp(out) as header:
+            gen.generateInitH(header)
+            return out.getvalue()
+
+    def test_a_shared_pattern_is_spelled_once(self):
+        spp = np.zeros((4, 4))
+        spp[0, 0] = spp[1, 1] = spp[3, 2] = 1.0
+        a = Tensor('a', (4, 4), spp, CSCMemoryLayout)
+        b = Tensor('b', (4, 4), spp, CSCMemoryLayout)
+
+        header = self._initH([a, b])
+
+        rows = [line for line in header.splitlines() if 'RowInd_' in line and '= {' in line]
+        assert len(rows) == 1
+        assert header.count('(&RowInd)[3] = viewdata::') == 2
+
+    def test_differing_patterns_stay_apart(self):
+        first = np.zeros((4, 4))
+        first[0, 0] = first[1, 1] = 1.0
+        second = np.zeros((4, 4))
+        second[0, 0] = second[2, 1] = 1.0
+
+        header = self._initH([Tensor('a', (4, 4), first, CSCMemoryLayout),
+                              Tensor('b', (4, 4), second, CSCMemoryLayout)])
+
+        rows = [line for line in header.splitlines() if 'RowInd_' in line and '= {' in line]
+        assert len(rows) == 2
+
+    def test_the_arrays_stand_before_the_structs_that_name_them(self):
+        spp = np.zeros((4, 4))
+        spp[0, 0] = spp[1, 1] = 1.0
+
+        header = self._initH([Tensor('a', (4, 4), spp, CSCMemoryLayout)])
+
+        assert header.index('struct viewdata') < header.index('(&RowInd)')
+
+    def test_the_references_are_constant_expressions(self):
+        spp = np.zeros((4, 4))
+        spp[0, 0] = spp[1, 1] = 1.0
+
+        header = self._initH([Tensor('a', (4, 4), spp, CSCMemoryLayout)])
+
+        for line in header.splitlines():
+            if '(&RowInd)' in line or 'RowInd_' in line:
+                assert line.strip().startswith('constexpr static')
+
+    def test_dense_bounds_are_shared_too(self):
+        header = self._initH([Tensor('a', (4, 4)), Tensor('b', (4, 4))])
+
+        starts = [line for line in header.splitlines() if 'Start_' in line and '= {' in line]
+        assert len(starts) == 1
+        assert header.count('(&Start)[2] = viewdata::') == 2
+
+    def test_a_pool_with_nothing_in_it_emits_nothing(self):
+        header = self._initH([])
+
+        assert 'viewdata' not in header

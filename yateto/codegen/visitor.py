@@ -1,6 +1,8 @@
 import collections
 import contextlib
+import hashlib
 import operator
+import re
 from functools import reduce
 from io import StringIO
 from ..memory import DenseMemoryLayout
@@ -917,6 +919,74 @@ class UnitTestGenerator(KernelGenerator):
 
        factory.freeTmp()
 
+class ViewArrayPool(object):
+  """The index arrays the views need, each spelled once.
+
+  Tensors that share a sparsity pattern need the same row indices, and
+  tensors of the same shape the same bounds. One array per tensor repeats
+  them; naming them by content spells each once and lets the tensors refer to
+  it. They stay constant expressions on both sides of that, which is what
+  lets a lookup with constant indices fold to a single address instead of a
+  search through the pattern.
+
+  Named after the text that gets emitted, the way the constant pool is: two
+  arrays are the same array exactly when the generated source cannot tell
+  them apart.
+  """
+
+  STRUCT_NAME = 'viewdata'
+  NAME_SUFFIX_LENGTH = 8
+
+  def __init__(self):
+    self._arrays = collections.OrderedDict()
+    self._names = dict()
+
+  def intern(self, numberType, values, hint='array'):
+    """Registers one array; reports the symbol it is spelled under and its length."""
+    text = ViewArrayPool._text(values)
+    key = hashlib.sha256('{}|{}'.format(numberType, text).encode('utf-8')).hexdigest()
+    known = self._arrays.get(key)
+    if known is None:
+      known = (self._takeName(hint, key), numberType, text, ViewArrayPool._length(values))
+      self._arrays[key] = known
+    return known[0], known[3]
+
+  def generate(self, cpp):
+    if not self._arrays:
+      return
+    with cpp.Struct(self.STRUCT_NAME):
+      for name, numberType, text, length in self._arrays.values():
+        cpp('{} {} {}[{}] = {};'.format(DATA_MODIFIERS, numberType, name, length, text))
+    cpp.emptyline()
+
+  def __len__(self):
+    return len(self._arrays)
+
+  @staticmethod
+  def _text(values):
+    if isinstance(values, np.ndarray):
+      values = values.flatten(order='K')
+    return '{{{}}}'.format(', '.join([str(v) for v in values]))
+
+  @staticmethod
+  def _length(values):
+    if isinstance(values, np.ndarray):
+      return values.size
+    return len(values)
+
+  def _takeName(self, hint, key):
+    stem = re.sub(r'\W', '_', hint)
+    length = self.NAME_SUFFIX_LENGTH
+    while True:
+      name = '{}_{}'.format(stem, key[:length])
+      if self._names.get(name, key) == key:
+        self._names[name] = key
+        return name
+      length += self.NAME_SUFFIX_LENGTH
+      if length > len(key):
+        raise RuntimeError('Could not find a unique symbol for the view array {}.'.format(hint))
+
+
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'
   SIZE_NAME = 'Size'
@@ -941,8 +1011,9 @@ class InitializerGenerator(object):
     #: CUDA translation unit including init.h, called or not.
     DEVICE_CALLABLE = True
 
-    def __init__(self, datatype):
+    def __init__(self, datatype, arrayPool=None):
       self._datatype = datatype
+      self._arrayPool = arrayPool
 
     def factoryModifiers(self):
       return STATIC_INLINE if self.DEVICE_CALLABLE else f'{STATIC} {INLINE}'
@@ -963,11 +1034,32 @@ class InitializerGenerator(object):
         lst = lst.flatten(order='K')
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
 
-    def formatArray(self, numberType, name, values, declarationOnly):
-      lhs = f'{numberType} {name}[]'
+    def arrayData(self, memLayout):
+      """The arrays this kind of view needs beside the values, as (suffix, values).
+
+      Both the emission and the interning read the view's arrays from here,
+      so that what gets spelled once and what gets named once cannot drift
+      apart.
+      """
+      return []
+
+    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
+      for suffix, values in self.arrayData(memLayout):
+        cpp(self.formatArray(numberType, namespace + suffix + index, values,
+                             declarationOnly, hint=suffix))
+
+    def internArrays(self, memLayout, numberType):
+      for suffix, values in self.arrayData(memLayout):
+        self._arrayPool.intern(numberType, values, suffix)
+
+    def formatArray(self, numberType, name, values, declarationOnly, hint='array'):
       if declarationOnly:
         return ''
-      return f'{DATA_MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
+      if self._arrayPool is None:
+        return f'{DATA_MODIFIERS} {numberType} {name}[] = {self.listToInitializerList(values)};'
+      shared, length = self._arrayPool.intern(numberType, values, hint)
+      return '{} {} (&{})[{}] = {}::{};'.format(
+        DATA_MODIFIERS, numberType, name, length, ViewArrayPool.STRUCT_NAME, shared)
 
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
@@ -982,10 +1074,11 @@ class InitializerGenerator(object):
           self.listToInitializerList([r.stop for r in memLayout.bbox()])
         )
       )
-    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
-      if memLayout.shape():
-        cpp(self.formatArray(numberType, namespace + self.START_NAME + index, [r.start for r in memLayout.bbox()], declarationOnly))
-        cpp(self.formatArray(numberType, namespace + self.STOP_NAME + index, [r.stop for r in memLayout.bbox()], declarationOnly))
+    def arrayData(self, memLayout):
+      if not memLayout.shape():
+        return []
+      return [(self.START_NAME, [r.start for r in memLayout.bbox()]),
+              (self.STOP_NAME, [r.stop for r in memLayout.bbox()])]
 
   class CSCMatrixView(TensorView):
     ROWIND_NAME = 'RowInd'
@@ -1005,9 +1098,9 @@ class InitializerGenerator(object):
           self.COLPTR_NAME + (index if index is not None else '')
         )
       )
-    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
-      cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
-      cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
+    def arrayData(self, memLayout):
+      return [(self.ROWIND_NAME, memLayout.rowIndex()),
+              (self.COLPTR_NAME, memLayout.colPointer())]
 
   class PatternTensorView(TensorView):
     PATTERN_NAME = 'Pattern'
@@ -1026,8 +1119,8 @@ class InitializerGenerator(object):
         )
       )
 
-    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
-      cpp(self.formatArray(numberType, namespace + self.PATTERN_NAME + index, memLayout.pattern(), declarationOnly))
+    def arrayData(self, memLayout):
+      return [(self.PATTERN_NAME, memLayout.pattern())]
 
   #: What the pool needs to know about one tensor group: how large the group
   #: is, which element type its entries were stored as, and where each member
@@ -1040,6 +1133,7 @@ class InitializerGenerator(object):
     #: They get a pool entry like any other constant.
     self._inMemory = inMemory
     self._numberType = f'{self._arch.uintTypename} const'
+    self._viewArrays = None
     self._pool = dict()
     self._realType = lambda datatype: f'{datatype.ctype()} const'
     self._realPtrType = lambda datatype: self._realType(datatype) + '*'
@@ -1084,7 +1178,8 @@ class InitializerGenerator(object):
       'CSCMemoryLayout': self.CSCMatrixView,
       'PatternMemoryLayout': self.PatternTensorView
     }
-    return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch))
+    return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch),
+                                                     self._viewArrays)
 
   def iterate_collect(self):
     cur_namespace = ''
@@ -1255,9 +1350,18 @@ class InitializerGenerator(object):
 
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
+      # The shared arrays have to stand before the structs that name them, so
+      # which ones there are is settled before anything is written.
+      self._viewArrays = ViewArrayPool()
+      for _, tensors in tensor_dict.items():
+        for tensor in tensors.values():
+          self._tensorViewGenerator(tensor).internArrays(tensor.memoryLayout(),
+                                                         self._numberType)
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
+        self._viewArrays.generate(header)
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._init(header, base_name, base_name_without_namespace, '', tensors, False)
+    self._viewArrays = None
     for namespace, scalar_dict in self.iterate_collect_scalar():
       if len(scalar_dict) == 0:
         continue

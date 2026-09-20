@@ -163,7 +163,10 @@ class Datatype(Enum):
       Datatype.I32: lambda value: f'static_cast<int32_t>({self.safeint(value)}LL)',
       Datatype.I64: lambda value: f'static_cast<int64_t>({self.safeint(value)}LL)',
       Datatype.F32: lambda value: f'{float(value):.16}f',
-      Datatype.F64: lambda value: f'{float(value):.16}',
+      # Shortest spelling that reads back as the same double. A fixed field
+      # cannot do both jobs: 16 significant digits do not determine a binary64
+      # and 17 pad most values with a digit nobody needs.
+      Datatype.F64: lambda value: repr(float(value)),
       Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
       Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
       Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>(YATETO_F128_C({float(value):.36}))',

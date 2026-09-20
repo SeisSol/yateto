@@ -8,6 +8,79 @@ from abc import ABC, abstractmethod
 from . import aspp
 import sys
 
+class PreparedImage(object):
+  """Numbers a generator prepared for itself, stored as they came.
+
+  Some arrangements are not a reordering of a tensor's numbers but a
+  different set of them: one element split across several scalars, for an
+  emulated precision or for the fragment layout a matrix instruction reads.
+  Where the split lies is the generator's arithmetic, not the tensor's, so
+  it computes the numbers and hands them over, and the pool stores what it
+  was given.
+
+  The element type stays the tensor's. An entry made from this is an array
+  like any other, only longer -- nothing has to be stored as bytes, and
+  nothing that reads the pool has to learn a second shape.
+
+  Nothing here is addressed by index from this side. Whoever asked for the
+  arrangement is the one that reads it, and it knows where it put things.
+  """
+
+  def __init__(self, images, parts=1, planar=False):
+    """``images`` maps a group's flattened index to the numbers for it.
+
+    One image per member, because the members of a family hold different
+    numbers; what they share is the shape of the preparation, and that is
+    what makes them one arrangement.
+    """
+    if not images:
+      raise ValueError('A prepared image has to carry numbers.')
+    if parts < 1:
+      raise ValueError('A prepared image is at least one scalar per element.')
+    lengths = {len(image) for image in images.values()}
+    if len(lengths) != 1:
+      raise ValueError('The members of one arrangement are prepared to one '
+                       'length; got {}.'.format(sorted(lengths)))
+    length = lengths.pop()
+    if length % parts != 0:
+      raise ValueError('{} numbers do not divide into {} parts.'.format(length, parts))
+    self._images = dict(images)
+    self._parts = parts
+    self._planar = planar
+    self._length = length
+
+  def parts(self):
+    return self._parts
+
+  def planar(self):
+    return self._planar
+
+  def requiredReals(self):
+    return self._length
+
+  def alignedStride(self):
+    """Nothing is promised about an image this side did not lay out."""
+    return False
+
+  def alignmentArch(self):
+    return None
+
+  def imageFor(self, index):
+    """The numbers for one member of the group, by its flattened index."""
+    if index not in self._images:
+      raise ValueError('The arrangement carries no image for member {}.'.format(index))
+    return list(self._images[index])
+
+  def identity(self):
+    """What makes this one arrangement rather than another.
+
+    Over the shape of the preparation and not over the numbers: two members
+    of a family hold different numbers and are still arranged alike, which is
+    what lets them share a pool member and stay interchangeable.
+    """
+    return ('prepared', self._length, self._parts, self._planar)
+
+
 class MemoryLayout(ABC):
   #: Architecture a layout aligns against when it is not told one at
   #: construction.

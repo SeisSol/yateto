@@ -5,7 +5,7 @@ import operator
 import re
 from functools import reduce
 from io import StringIO
-from ..memory import DenseMemoryLayout
+from ..memory import DenseMemoryLayout, PreparedImage
 from .. import aspp
 from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
@@ -405,11 +405,23 @@ class OptimizedKernelGenerator(KernelGenerator):
     refused by name rather than ignored, because an arrangement granted in
     part is an arrangement nobody asked for.
     """
-    unknown = set(offering) - {'order'}
+    unknown = set(offering) - {'order', 'data', 'parts', 'planar'}
     if unknown:
       raise ValueError('Offering for {} asks for {}, which this yateto cannot '
                        'grant.'.format(baseName, ', '.join(sorted(unknown))))
     order = offering.get('order')
+    data = offering.get('data')
+    if data is not None:
+      if order is not None:
+        raise ValueError('Offering for {} asks both for an order and for numbers '
+                         'of its own; the numbers already carry one.'.format(baseName))
+      images = data if isinstance(data, dict) else {0: data}
+      return PreparedImage(images,
+                           parts=int(offering.get('parts', 1)),
+                           planar=bool(offering.get('planar', False)))
+    if offering.get('parts', 1) != 1 or offering.get('planar', False):
+      raise ValueError('Offering for {} asks for a prepared shape without the '
+                       'numbers to fill it.'.format(baseName))
     if order is None:
       return layout
     if not hasattr(layout, 'reordered'):
@@ -1433,7 +1445,8 @@ class InitializerGenerator(object):
           # the tensor on the host.
           continue
         memLayout = arrangement.layoutOf(group, tensor.memoryLayout())
-        hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
+        index = address(group, stride)
+        hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, index)
         groupDatatype = tensor.getDatatype(self._arch)
         if datatype is None:
           datatype = groupDatatype
@@ -1448,8 +1461,12 @@ class InitializerGenerator(object):
         # loads need.
         layoutAlignment = self._arch.cacheline if memLayout.alignedStride() else 1
         alignment = max(POOL_ALIGNMENT, layoutAlignment)
+        # A prepared image is stored as it was handed over; anything this
+        # side laid out is packed from the tensor's own numbers.
+        image = (memLayout.imageFor(index) if isinstance(memLayout, PreparedImage)
+                 else memLayout.pack(values))
         symbols[group] = dataCache.add(hint,
-                                       [groupDatatype.literal(value) for value in memLayout.pack(values)],
+                                       [groupDatatype.literal(value) for value in image],
                                        groupDatatype.ctype(),
                                        alignment)
     if not symbols:

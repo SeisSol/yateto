@@ -575,3 +575,67 @@ class TestLayoutOfferings:
     def test_an_offering_for_a_writable_operand_is_refused(self):
         with pytest.raises(ValueError, match='out'):
             self._generate({'out': {'order': [1, 0]}})
+
+
+class TestPreparedConstants:
+    """An exporter may hand back numbers of its own, not just an order.
+
+    Where one element is split across several scalars -- an emulated
+    precision, a matrix instruction's fragments -- the split is the
+    generator's arithmetic. It computes the numbers; the pool stores them.
+    """
+
+    @staticmethod
+    def _tensors():
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        return {'A': Tensor('A', (N, N), values), 'B': Tensor('B', (N, N)),
+                'out': Tensor('out', (N, N))}
+
+    def _generate(self, offerings):
+        t = self._tensors()
+        out = exportOffering([t['out']['ij'] <= t['A']['ik'] * t['B']['kj']], offerings)
+        return (open(os.path.join(out, 'pool.h')).read(),
+                open(os.path.join(out, 'pool.cpp')).read())
+
+    def test_the_numbers_are_stored_as_they_came(self):
+        prepared = [float(i) for i in range(2 * N * N)]
+
+        _, pool_cpp = self._generate({'A': {'data': prepared, 'parts': 2,
+                                            'planar': True}})
+
+        assert '31' in pool_cpp
+        assert pool_cpp.count('{') >= 1
+
+    def test_the_entry_is_as_long_as_the_image(self):
+        prepared = [float(i) for i in range(2 * N * N)]
+
+        pool_h, _ = self._generate({'A': {'data': prepared, 'parts': 2}})
+
+        assert '[{}]'.format(2 * N * N) in pool_h
+
+    def test_the_element_type_is_still_the_tensor_s(self):
+        prepared = [float(i) for i in range(2 * N * N)]
+
+        pool_h, _ = self._generate({'A': {'data': prepared, 'parts': 2}})
+
+        assert 'double const A_' in pool_h
+
+    def test_a_shape_without_numbers_is_refused(self):
+        with pytest.raises(ValueError, match='without the'):
+            self._generate({'A': {'parts': 2}})
+
+    def test_numbers_and_an_order_together_are_refused(self):
+        with pytest.raises(ValueError, match='both'):
+            self._generate({'A': {'data': [1.0, 2.0], 'order': [1, 0]}})
+
+    def test_members_prepared_to_different_lengths_are_refused(self):
+        with pytest.raises(ValueError, match='one length'):
+            self._generate({'A': {'data': {0: [1.0, 2.0], 1: [1.0]}}})
+
+    def test_numbers_that_do_not_divide_into_parts_are_refused(self):
+        with pytest.raises(ValueError, match='do not divide'):
+            self._generate({'A': {'data': [1.0, 2.0, 3.0], 'parts': 2}})

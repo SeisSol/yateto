@@ -1,6 +1,8 @@
 import collections
 import hashlib
 
+from ..memory import PreparedImage
+
 
 def layoutTag(memoryLayout):
   """A short name for how one tensor is held.
@@ -11,6 +13,11 @@ def layoutTag(memoryLayout):
   shared by two that differ is caught where the pool members are assigned
   rather than silently merged.
   """
+  if isinstance(memoryLayout, PreparedImage):
+    facts = memoryLayout.identity()
+    digest = hashlib.new('md5', usedforsecurity=False)
+    digest.update(str(facts).encode())
+    return digest.hexdigest()[:8]
   storage = memoryLayout.storage()
   arch = storage.alignmentArch()
   facts = (type(storage).__name__,

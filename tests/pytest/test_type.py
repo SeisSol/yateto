@@ -425,3 +425,39 @@ class TestAddressingPredicates:
     def test_a_scalar_has_no_storage(self):
         assert not Scalar('a').hasStorage()
         assert Scalar('a').isPassedByValue()
+
+
+class TestTensorIdentityAcrossNamespaces:
+    """Two tensor sets, one per target, is two tensors and not one."""
+
+    def _pair(self):
+        return (Tensor("kDivM", (10, 10), namespace="cpu"),
+                Tensor("kDivM", (10, 10), namespace="gpu"))
+
+    def test_the_namespace_tells_them_apart(self):
+        cpu, gpu = self._pair()
+
+        assert cpu != gpu
+        assert len({cpu, gpu}) == 2
+
+    def test_they_keep_their_own_layout(self):
+        from yateto.arch import getArchitectureIdentifiedBy
+        from yateto.memory import DenseMemoryLayout
+
+        narrow = getArchitectureIdentifiedBy("dhsw")
+        wide = getArchitectureIdentifiedBy("dskx")
+        cpu, gpu = self._pair()
+        cpu.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=narrow)
+        gpu.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=wide)
+
+        collected = {cpu: "cpu", gpu: "gpu"}
+
+        assert len(collected) == 2
+        assert cpu.memoryLayout().stridei(1) != gpu.memoryLayout().stridei(1)
+
+    def test_one_namespace_is_still_one_tensor(self):
+        assert Tensor("kDivM", (10, 10)) == Tensor("kDivM", (10, 10))
+        assert len({Tensor("kDivM", (10, 10)), Tensor("kDivM", (10, 10))}) == 1
+
+    def test_a_shape_still_tells_them_apart(self):
+        assert Tensor("a", (4, 4), namespace="cpu") != Tensor("a", (4, 5), namespace="cpu")

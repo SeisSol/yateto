@@ -410,7 +410,7 @@ class Tensor(IdentifiedType):
     # only over what cannot change: the sparsity pattern and the memory layout
     # are set after construction, and hashing them would lose a tensor that is
     # already sitting in a set
-    return hash((self._name, self._shape, self.addressing))
+    return hash((self.nameWithNamespace(), self._shape, self.addressing))
 
   def setMemoryLayout(self, memoryLayoutClass, alignStride=False, alignmentArch=None):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp,
@@ -475,7 +475,13 @@ class Tensor(IdentifiedType):
   def __eq__(self, other):
     if not isinstance(other, Tensor):
       return NotImplemented
-    return self._name == other._name \
+    # The namespace is part of which tensor this is. Two tensors of the same
+    # name in different namespaces are emitted as two, laid out apart and
+    # referred to apart, so letting them answer to one another here would
+    # collapse them into whichever was met first the moment either lands in a
+    # set or a dict -- and the kernels of the other would be generated against
+    # a stride nobody gave them.
+    return self.nameWithNamespace() == other.nameWithNamespace() \
        and self._shape == other._shape \
        and self.addressing == other.addressing
 

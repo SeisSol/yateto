@@ -388,8 +388,12 @@ class Generator(object):
       cache = RoutineCache()
     else:
       cache = routine_cache.cache
-    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters,
-                                                 namespace)
+    # One cache for the whole run, reachable from here on: the kernels are
+    # written before the tensors are collected, and a generator that wants an
+    # operand in the pool decides that while its kernel is being written.
+    dataCache = DataCache()
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, dataCache,
+                                                 routine_exporters, namespace)
 
     # Immediate operands some generator read from memory after all:
     # tensor name -> (operations that did, {kernel or family: how many kernels})
@@ -504,7 +508,6 @@ class Generator(object):
     # Before the initialisation code, not after: init binds references into the
     # pool where it can, so it has to know which entries exist.
     print('Generating constant pool...')
-    dataCache = DataCache()
     poolMap = initGen.collectPool(dataCache)
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):

@@ -8,10 +8,13 @@ caller gets back keeps pointing at its own data.
 """
 from __future__ import annotations
 
+from io import StringIO
+
 import numpy as np
 import pytest
 
 from yateto import Tensor, useArchitectureIdentifiedBy
+from yateto.codegen.code import Cpp
 from yateto.codegen.datacache import DataCache
 from yateto.codegen.visitor import POOL_ALIGNMENT, InitializerGenerator, PoolGenerator
 from yateto.type import Datatype
@@ -243,3 +246,166 @@ class TestImageAlignment:
         entry, = cache.entries()
         assert entry.alignment() > POOL_ALIGNMENT
         assert generator.imageAlignment() == entry.alignment()
+
+
+class TestReservations:
+    """An entry can be announced before there is anything to put in it.
+
+    A generator that decides how it wants an operand arranged while a kernel
+    is being written out has a symbol to emit and no image yet. It reserves,
+    keeps writing, and fills once it produces the values.
+    """
+
+    def test_a_reservation_names_itself_immediately(self, cache):
+        reservation = cache.reserve('kDivM')
+
+        assert reservation.name()
+        assert not reservation.isFilled()
+
+    def test_the_symbol_survives_being_filled(self, cache):
+        reservation = cache.reserve('kDivM')
+        name = reservation.name()
+        cache.fill(reservation, [1.0, 2.0], 'double')
+
+        assert reservation.name() == name
+        assert reservation.entry().values() == [1.0, 2.0]
+
+    def test_two_reservations_of_one_hint_stay_apart(self, cache):
+        first = cache.reserve('kDivM')
+        second = cache.reserve('kDivM')
+
+        assert first.name() != second.name()
+
+    def test_equal_images_share_one_array_under_two_symbols(self, cache):
+        first = cache.reserve('kDivM')
+        second = cache.reserve('kDivMT')
+        cache.fill(first, [1.0, 2.0], 'double')
+        cache.fill(second, [1.0, 2.0], 'double')
+
+        assert len(cache) == 1
+        assert first.entry() is second.entry()
+        assert first.name() != second.name()
+
+    def test_differing_images_stay_apart(self, cache):
+        first = cache.reserve('kDivM')
+        second = cache.reserve('kDivMT')
+        cache.fill(first, [1.0, 2.0], 'double')
+        cache.fill(second, [1.0, 3.0], 'double')
+
+        assert len(cache) == 2
+        assert first.entry() is not second.entry()
+
+    def test_a_reservation_lands_on_an_array_a_tensor_already_asked_for(self, cache):
+        added = cache.add('rDivM', [1.0, 2.0], 'double')
+        reservation = cache.reserve('mine')
+        cache.fill(reservation, [1.0, 2.0], 'double')
+
+        assert len(cache) == 1
+        assert reservation.entry().name() == added
+
+    def test_filling_twice_is_refused(self, cache):
+        reservation = cache.reserve('kDivM')
+        cache.fill(reservation, [1.0], 'double')
+
+        with pytest.raises(RuntimeError, match='twice'):
+            cache.fill(reservation, [2.0], 'double')
+
+    def test_an_unfilled_reservation_is_refused(self, cache):
+        cache.reserve('kDivM')
+
+        with pytest.raises(RuntimeError, match='kDivM'):
+            cache.reservations()
+
+    def test_reservations_keep_their_order(self, cache):
+        names = [cache.reserve(hint).name() for hint in ('a', 'b', 'c')]
+        for hint, name in zip(('a', 'b', 'c'), names):
+            cache.fill(cache._reservations[name], [1.0, float(ord(hint))], 'double')
+
+        assert [r.name() for r in cache.reservations()] == names
+
+    def test_names_are_valid_cxx_identifiers(self, cache):
+        reservation = cache.reserve('nodal::rDivM(0)')
+
+        assert reservation.name().replace('_', 'x').isalnum()
+
+
+class TestReservationsInTheEmittedPool:
+    """A reserved entry is a pool member like any other."""
+
+    @staticmethod
+    def _pool(reservationHints=()):
+        arch = useArchitectureIdentifiedBy('dhsw')
+        cache = DataCache()
+        tensor = Tensor('m', (8, 8), np.eye(8), alignStride=True)
+        initGen = InitializerGenerator(arch, [tensor], [])
+        poolMap = initGen.collectPool(cache)
+        for i, hint in enumerate(reservationHints):
+            reservation = cache.reserve(hint)
+            cache.fill(reservation, [float(i)] * 4, 'float')
+        generator = PoolGenerator(arch, cache, poolMap)
+
+        headerIO, cppIO = StringIO(), StringIO()
+        with Cpp(headerIO) as header:
+            generator.generateH(header)
+            headerText = headerIO.getvalue()
+        with Cpp(cppIO) as cpp:
+            generator.generateCpp(cpp)
+            cppText = cppIO.getvalue()
+        return headerText, cppText
+
+    def test_the_member_is_declared(self):
+        header, _ = self._pool(['scratch'])
+
+        assert 'float const* scratch{};' in header
+
+    def test_the_member_points_into_the_image(self):
+        _, cpp = self._pool(['scratch'])
+
+        assert 'result.scratch = reinterpret_cast<float const*>(' in cpp
+        assert 'offsetof(poolstorage::Storage, scratch_' in cpp
+
+    def test_a_shared_array_is_stored_once_and_pointed_at_twice(self):
+        header, cpp = self._pool(['first', 'second'])
+
+        assert 'float const* first{};' in header
+        assert 'float const* second{};' in header
+        assert cpp.count('result.first = ') == 1
+        assert cpp.count('result.second = ') == 1
+
+    def test_a_reservation_clashing_with_a_tensor_is_refused(self):
+        with pytest.raises(ValueError, match='m'):
+            self._pool(['m'])
+
+
+class TestReservingWhileKernelsAreWritten:
+    """The cache is reachable from the factories, not only afterwards."""
+
+    def test_a_factory_can_put_an_array_into_the_pool(self, tmp_path, monkeypatch):
+        import numpy as np
+
+        from yateto import Generator
+        from yateto.codegen.factory import OptimizedKernelFactory
+
+        original = OptimizedKernelFactory.post_generate
+
+        def post_generate(self, routine_cache):
+            reservation = self._dataCache.reserve('chosenLayout')
+            self._dataCache.fill(reservation, [1.0, 2.0, 3.0, 4.0], 'double')
+            return original(self, routine_cache)
+
+        monkeypatch.setattr(OptimizedKernelFactory, 'post_generate', post_generate)
+
+        arch = useArchitectureIdentifiedBy('dhsw')
+        g = Generator(arch)
+        A = Tensor('A', (4, 4), np.eye(4))
+        B = Tensor('B', (4, 4))
+        C = Tensor('C', (4, 4))
+        g.add('krnl', C['ij'] <= A['ik'] * B['kj'])
+        g.generate(str(tmp_path))
+
+        pool_h = (tmp_path / 'pool.h').read_text()
+        pool_cpp = (tmp_path / 'pool.cpp').read_text()
+
+        assert 'double const* chosenLayout{};' in pool_h
+        assert 'result.chosenLayout = reinterpret_cast<double const*>(' in pool_cpp
+        assert '1.0, 2.0, 3.0, 4.0' in pool_cpp

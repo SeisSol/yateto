@@ -28,6 +28,7 @@ import pytest
 
 from yateto import Generator, Tensor, simpleParameterSpace
 from yateto.codegen.cache import RoutineCache
+from yateto.codegen.datacache import DataCache
 from yateto.codegen.code import Cpp
 from yateto.codegen.common import BatchedOperationsAux, KernelAttributes
 from yateto.codegen.factory import (ExportFactory, ExportGenerator,
@@ -129,7 +130,7 @@ def _outline(attrs, target="gpu"):
 
 def _struct(arch, outlines, familyStride=None):
     headerIO, cppIO = StringIO(), StringIO()
-    generator = OptimizedKernelGenerator(arch, RoutineCache(), {})
+    generator = OptimizedKernelGenerator(arch, RoutineCache(), DataCache(), {})
     with Cpp(cppIO) as cpp:
         with Cpp(headerIO) as header:
             generator.generate(cpp, header, "krnl", outlines, familyStride)

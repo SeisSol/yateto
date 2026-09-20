@@ -158,9 +158,13 @@ class OptimizedKernelGenerator(KernelGenerator):
   BIND_GLOBALS_ARGUMENT = 'pool'
 
 
-  def __init__(self, arch, routineCache, routine_exporters, namespace=''):
+  def __init__(self, arch, routineCache, dataCache, routine_exporters, namespace=''):
     super().__init__(arch)
     self._routineCache = routineCache
+    #: Reachable while the kernels are written out, and not only afterwards,
+    #: so that a generator deciding how it wants an operand laid out can put
+    #: that arrangement into the pool at the moment it decides.
+    self._dataCache = dataCache
     self._routine_exporters = routine_exporters
     self._poolType = '::{}{}'.format('{}::'.format(namespace) if namespace else '',
                                      PoolGenerator.POOL_STRUCT_NAME)
@@ -244,7 +248,8 @@ class OptimizedKernelGenerator(KernelGenerator):
     function = ''
     with Cpp(functionIO) as fcpp:
       attrs = attrs if attrs is not None else KernelAttributes()
-      factory = self._routine_factories[target](fcpp, self._arch, target, attrs)
+      factory = self._routine_factories[target](fcpp, self._arch, target, attrs,
+                                                self._dataCache)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.post_generate(self._routineCache)
       factory.freeTmp()
@@ -1453,7 +1458,8 @@ class PoolGenerator(object):
     self._arch = arch
     self._dataCache = dataCache
     self._pool = pool
-    self._members = self.assignMembers(pool)
+    self._reservations = dataCache.reservations()
+    self._members = self.assignMembers(pool, self._reservations)
 
   @classmethod
   def memberName(cls, baseNameWithNamespace):
@@ -1479,14 +1485,15 @@ class PoolGenerator(object):
     return max([POOL_ALIGNMENT] + [entry.alignment() for entry in self._dataCache.entries()])
 
   @classmethod
-  def assignMembers(cls, pool):
+  def assignMembers(cls, pool, reservations=()):
     """Member name per tensor, with the collisions flattening can cause refused.
 
     Two tensors that differ only in where the namespace separator sat --
     `a::b` and `a_b` -- flatten to the same identifier. Declaring the member
     twice would not compile, and were the name to come from a hint instead
     one of them would quietly write into the other's slot. Say which two, and
-    let the caller rename one.
+    let the caller rename one. A reservation names its own member and is held
+    to the same rule, against the tensors and against the other reservations.
     """
     members = collections.OrderedDict()
     taken = dict()
@@ -1497,6 +1504,12 @@ class PoolGenerator(object):
                          'Rename one of them.'.format(taken[member], baseName, member))
       taken[member] = baseName
       members[baseName] = member
+    for reservation in reservations:
+      member = reservation.name()
+      if member in taken:
+        raise ValueError('The reserved pool entry {} shares the pool member {} with {}. '
+                         'Rename one of them.'.format(reservation.name(), member, taken[member]))
+      taken[member] = reservation.name()
     return members
 
   @staticmethod
@@ -1535,6 +1548,8 @@ class PoolGenerator(object):
       for baseName, entry in self._pool.items():
         header('{} {}{{}};'.format(self._memberType(baseName, entry),
                                    self._members[baseName]))
+      for reservation in self._reservations:
+        header('{} const* {}{{}};'.format(reservation.entry().typename(), reservation.name()))
       header.emptyline()
       header('//! Table for an image that lives at `base`, host or device.')
       header.functionDeclaration(self.CREATE_FUN_NAME,
@@ -1577,6 +1592,10 @@ class PoolGenerator(object):
             member, InitializerGenerator.CONTAINER_DATA_NAME, address(group, stride))
           cpp('result.{} = reinterpret_cast<{}>(origin + offsetof({}, {}));'.format(
             target, self._elementPtrType(entry.datatype), self._storageType(), symbol))
+      for reservation in self._reservations:
+        cpp('result.{} = reinterpret_cast<{} const*>(origin + offsetof({}, {}));'.format(
+          reservation.name(), reservation.entry().typename(), self._storageType(),
+          reservation.entry().name()))
       cpp('return result;')
     cpp.emptyline()
 

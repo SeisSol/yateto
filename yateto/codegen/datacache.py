@@ -64,6 +64,42 @@ class DataEntry(object):
     self._alignment = max(self._alignment, alignment)
 
 
+class Reservation(object):
+  """A pool entry announced before its content is known.
+
+  The symbol is fixed when the reservation is made, so code emitted at that
+  moment can already name what it will read. What ends up behind the symbol
+  is decided later, when the values arrive, and two reservations filled with
+  the same image come to rest on one array.
+
+  That the symbol does not follow from the content is the whole point: a
+  generator that decides how it wants its operand laid out while a kernel is
+  being written out, and only produces the image once it is asked to emit,
+  needs a name in between.
+  """
+
+  def __init__(self, name, hint):
+    self._name = name
+    self._hint = hint
+    self._entry = None
+
+  def name(self):
+    """The symbol, valid from the moment the reservation is made."""
+    return self._name
+
+  def hint(self):
+    return self._hint
+
+  def isFilled(self):
+    return self._entry is not None
+
+  def entry(self):
+    return self._entry
+
+  def setEntry(self, entry):
+    self._entry = entry
+
+
 class DataCache(object):
   """Registry for the constant arrays a generator run needs in memory.
 
@@ -71,6 +107,13 @@ class DataCache(object):
   array announces it and gets a symbol name back, identical announcements
   collapse into one entry, and at the end the cache writes out everything it
   collected. Where RoutineCache holds code, this holds data.
+
+  There are two ways in. ``add`` states hint and content together and names
+  the result after the content, so the same array announced twice is one
+  entry under one name. ``reserve`` states only the hint, hands back a symbol
+  straight away and takes the content through ``fill`` whenever it turns up.
+  Both end in the same place: one array per distinct image, and as many
+  symbols pointing at it as there were announcements.
 
   Registration order is preserved, so the layout of the emitted pool is a
   function of the input and not of dictionary iteration.
@@ -80,6 +123,7 @@ class DataCache(object):
 
   def __init__(self):
     self._entries = collections.OrderedDict()
+    self._reservations = collections.OrderedDict()
     self._names = dict()
 
   def add(self, hint, values, typename, alignment=1):
@@ -88,24 +132,76 @@ class DataCache(object):
     ``hint`` only shapes the name, so that the emitted pool stays readable;
     it has no part in deciding whether two arrays are the same.
     """
-    entry = DataEntry(hint, values, typename, alignment)
-    known = self._entries.get(entry.key())
-    if known is not None:
-      known.raiseAlignment(alignment)
-      return known.name()
+    return self._intern(hint, values, typename, alignment).name()
 
-    entry.setName(self._makeName(hint, entry.key()))
-    self._entries[entry.key()] = entry
+  def reserve(self, hint):
+    """Announces an array whose content is not known yet.
+
+    The reservation carries a symbol of its own, distinct from the name of
+    whatever array it ends up on, because it has to be handed out before
+    there is anything to name the array after.
+    """
+    reservation = Reservation(self._takeName(hint, None), hint)
+    self._reservations[reservation.name()] = reservation
+    return reservation
+
+  def fill(self, reservation, values, typename, alignment=1):
+    """Supplies the content of a reservation, and reports the array it lands on."""
+    if reservation.isFilled():
+      raise RuntimeError('Pool entry {} was filled twice.'.format(reservation.name()))
+    entry = self._intern(reservation.hint(), values, typename, alignment)
+    reservation.setEntry(entry)
     return entry.name()
 
   def entries(self):
     return list(self._entries.values())
 
+  def reservations(self):
+    """Every reservation, in the order it was made.
+
+    A reservation that was never filled is refused here rather than emitted:
+    its symbol has already been written into generated code, and nothing
+    behind it would be a dangling read, not a missing array.
+    """
+    unfilled = [r.name() for r in self._reservations.values() if not r.isFilled()]
+    if unfilled:
+      raise RuntimeError('Reserved in the constant pool but never filled: {}.'.format(
+        ', '.join(unfilled)))
+    return list(self._reservations.values())
+
   def __len__(self):
     return len(self._entries)
 
-  def _makeName(self, hint, key):
+  def _intern(self, hint, values, typename, alignment):
+    entry = DataEntry(hint, values, typename, alignment)
+    known = self._entries.get(entry.key())
+    if known is not None:
+      known.raiseAlignment(alignment)
+      return known
+
+    entry.setName(self._takeName(hint, entry.key()))
+    self._entries[entry.key()] = entry
+    return entry
+
+  def _takeName(self, hint, key):
+    """A symbol nothing else in this cache answers to.
+
+    With a ``key``, the name states it, so that the same content announced
+    twice asks for the same symbol and gets it. Without one, the stem is
+    numbered until it is free, because there is nothing yet to derive a name
+    from and two reservations of the same hint are two different arrays until
+    proven otherwise.
+    """
     stem = re.sub(r'\W', '_', hint)
+    if key is None:
+      name = stem
+      ordinal = 0
+      while name in self._names:
+        ordinal += 1
+        name = '{}_{}'.format(stem, ordinal)
+      self._names[name] = None
+      return name
+
     length = self.NAME_SUFFIX_LENGTH
     while True:
       name = '{}_{}'.format(stem, key[:length])

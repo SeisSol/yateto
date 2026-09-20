@@ -38,11 +38,16 @@ def _indexedTensors(node):
 class KernelFactory(object):
   ERROR_NAME = '_error'
 
-  def __init__(self, cpp, arch, target, attrs=None):
+  def __init__(self, cpp, arch, target, attrs=None, dataCache=None):
     self._cpp = cpp
     self._arch = arch
     self._freeList = list()
     self._target = target
+    #: Registry for constant arrays this kernel needs in memory. A generator
+    #: that lays an operand out its own way announces the array here and
+    #: reads it back through the pool, instead of emitting it beside the
+    #: kernel where nothing could share or copy it.
+    self._dataCache = dataCache
     #: The attributes of the kernel being generated. Every generator that
     #: emits a call into an external kernel needs them, because the flags
     #: member such a call would name only exists when the kernel declares it.
@@ -216,8 +221,8 @@ class KernelFactory(object):
           f'that is not.')
 
 class OptimizedKernelFactory(KernelFactory):
-  def __init__(self, cpp, arch, target, attrs=None):
-    super().__init__(cpp, arch, target, attrs)
+  def __init__(self, cpp, arch, target, attrs=None, dataCache=None):
+    super().__init__(cpp, arch, target, attrs, dataCache)
 
   def acceptsImmediate(self, method, node=None):
     """The element-wise generator, and the host GEMM where it can.
@@ -644,8 +649,8 @@ class ExportFactory(KernelFactory):
 
   @classmethod
   def makeFactory(cls, generator):
-    return lambda cpp, arch, target, attrs=None: cls(
-      cls._makeExporter(generator, arch, attrs), cpp, arch, target, attrs)
+    return lambda cpp, arch, target, attrs=None, dataCache=None: cls(
+      cls._makeExporter(generator, arch, attrs), cpp, arch, target, attrs, dataCache)
 
   @staticmethod
   def _makeExporter(generator, arch, attrs):
@@ -686,8 +691,8 @@ class ExportFactory(KernelFactory):
 
     return exporter
 
-  def __init__(self, generator, cpp, arch, target, attrs=None):
-    super().__init__(cpp, arch, target, attrs)
+  def __init__(self, generator, cpp, arch, target, attrs=None, dataCache=None):
+    super().__init__(cpp, arch, target, attrs, dataCache)
     self.generator = generator
     self.tensors = {}
     self.operations = []

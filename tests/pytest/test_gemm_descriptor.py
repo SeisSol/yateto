@@ -128,3 +128,109 @@ class TestTheGeneratorAgrees:
 
             assert described.operation == cfg.operation_name
             assert described.arch == 'hsw'
+
+
+def description(arch, layoutA, layoutC=None, sppA=None):
+    """A GEMM of a 6x8 by 8x4, with A's arrangement left to the caller."""
+    import numpy as np
+    from yateto import Tensor
+    from yateto.codegen.common import TensorDescription
+    from yateto.codegen.gemm.factory import Description
+    from yateto.memory import DenseMemoryLayout
+
+    values = np.ones((6, 8)) if sppA is None else sppA
+    a = Tensor('a', (6, 8), values, alignStride=True)
+    a.setMemoryLayout(layoutA, alignStride=True)
+    b = Tensor('b', (8, 4))
+    c = Tensor('c', (6, 4))
+    if layoutC is not None:
+        c.setMemoryLayout(layoutC, alignStride=True)
+
+    def td(t):
+        return TensorDescription(t.name(), t.memoryLayout(), t.spp(),
+                                 datatype=t.getDatatype(arch))
+
+    return Description(result=td(c), leftTerm=td(a), rightTerm=td(b),
+                       transA=False, transB=False, alpha=1.0, beta=0.0,
+                       arch=arch, alignedStartA=True, alignedStartC=True)
+
+
+class TestTheQuestionHoldsNoAnswer:
+    """A query says what the operation is, not how its operands are arranged."""
+
+    def _query(self, archName):
+        from yateto.codegen.gemm.descriptor import GemmQuery
+        from yateto.memory import DenseMemoryLayout
+
+        arch = useArchitectureIdentifiedBy(archName)
+        return GemmQuery.create(arch, description(arch, DenseMemoryLayout))
+
+    def test_it_carries_the_unwidened_extents(self):
+        query = self._query('dhsw')
+
+        assert query.m == [0, 6]
+        assert query.n == [0, 4]
+        assert query.k == [0, 8]
+
+    def test_widening_the_extent_does_not_reach_it(self):
+        """Padding m out to a vector boundary is arrangement, not operation."""
+        narrow = self._query('dhsw')
+        wide = self._query('dskx')
+
+        assert narrow.m == wide.m
+        assert narrow.alignedReals != wide.alignedReals
+
+    def test_it_names_no_leading_dimension_and_no_alignment(self):
+        query = self._query('dhsw')
+
+        spelled = ' '.join(query._fields)
+        for answer in ('ld', 'aligned', 'sparsity', 'encoding'):
+            assert answer not in spelled.replace('alignedReals', '')
+
+    def test_a_dense_operand_has_no_pattern(self):
+        query = self._query('dhsw')
+
+        assert query.patternA is None
+        assert query.patternB is None
+
+    def test_holes_in_an_operand_are_reported(self):
+        import numpy as np
+        from yateto.codegen.gemm.descriptor import GemmQuery
+        from yateto.memory import DenseMemoryLayout
+
+        values = np.zeros((6, 8))
+        values[0, 0] = values[3, 1] = 1.0
+        arch = useArchitectureIdentifiedBy('dhsw')
+
+        query = GemmQuery.create(arch, description(arch, DenseMemoryLayout, sppA=values))
+
+        assert query.patternA == ((0, 0), (3, 1))
+
+    def test_how_the_operand_is_stored_does_not_reach_it(self):
+        """The same holes, once stored densely and once compressed."""
+        import numpy as np
+        from yateto.codegen.gemm.descriptor import GemmQuery
+        from yateto.memory import CSCMemoryLayout, DenseMemoryLayout
+
+        values = np.zeros((6, 8))
+        values[0, 0] = values[3, 1] = 1.0
+        arch = useArchitectureIdentifiedBy('dhsw')
+
+        asDense = GemmQuery.create(arch, description(arch, DenseMemoryLayout, sppA=values))
+        asCsc = GemmQuery.create(arch, description(arch, CSCMemoryLayout, sppA=values))
+
+        assert asDense == asCsc
+
+    def test_a_round_trip_changes_nothing(self):
+        import numpy as np
+        from yateto.codegen.gemm.descriptor import GemmQuery
+        from yateto.memory import DenseMemoryLayout
+
+        values = np.zeros((6, 8))
+        values[0, 0] = values[3, 1] = 1.0
+        arch = useArchitectureIdentifiedBy('dhsw')
+        original = GemmQuery.create(arch, description(arch, DenseMemoryLayout, sppA=values))
+
+        restored = GemmQuery.fromJson(json.loads(json.dumps(original.asJson())))
+
+        assert restored == original

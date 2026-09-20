@@ -17,11 +17,17 @@ from ..type import Scalar, Tensor, Datatype
 import numpy as np
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
+# Whatever a consumer may call from device code carries the marker from
+# yateto/Marker.h. constexpr alone is not enough: clang treats a constexpr
+# function as callable from both sides, but nvcc only does so with
+# --expt-relaxed-constexpr, and neither covers a function that is not one.
+HOSTDEVICE = 'YATETO_HOSTDEVICE'
 CONSTEXPR = 'constexpr'
 STATIC = 'static'
 INLINE = 'inline'
-MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
-STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
+MODIFIERS = '{} {} {}'.format(HOSTDEVICE, CONSTEXPR, STATIC)
+STATIC_INLINE = '{} {} {}'.format(HOSTDEVICE, STATIC, INLINE)
+HOSTDEVICE_INLINE = '{} {}'.format(HOSTDEVICE, INLINE)
 #: Alignment floor, for the image and for every entry in it.
 #:
 #: For the image, because an entry's place inside it is an offset from its
@@ -495,15 +501,21 @@ class OptimizedKernelGenerator(KernelGenerator):
           ))
           args = typedNdArgs(len(familyStride), self._arch.uintTypename)
           indexF = indexFun(familyStride)
+          familySize = len(kernelOutlines)
+          boundsCheck = 'assert({} < {});'.format(indexF, familySize)
           with header.Function(self.FIND_EXECUTE_NAME, args, '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
+            header(boundsCheck)
             header('return {}[{}];'.format(self.EXECUTE_ARRAY_NAME, indexF))
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
-            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
+            ndArgList = ', '.join(ndargs(len(familyStride)))
+            header('assert({}({}) != nullptr);'.format(self.FIND_EXECUTE_NAME, ndArgList))
+            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ndArgList))
 
           indexer = f'[{indexF}]'
         else:
           args = ''
           indexer = ''
+          boundsCheck = None
 
         aux_functions = [self.NONZEROFLOPS_NAME,
                           self.HARDWAREFLOPS_NAME,
@@ -515,16 +527,10 @@ class OptimizedKernelGenerator(KernelGenerator):
         for function in aux_functions:
           funName = function[:1].lower() + function[1:]
           with header.Function(funName, args, f'{MODIFIERS} {self._arch.ulongTypename}'):
+            if boundsCheck is not None:
+              header(boundsCheck)
             header(f'return {function}{indexer};')
 
-    if familyStride is not None:
-      cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
-        CONSTEXPR,
-        self.NAMESPACE,
-        name,
-        self.MEMBER_FUNCTION_PTR_NAME,
-        self.EXECUTE_ARRAY_NAME
-      ))
     for index, kernelOutline in enumerate(kernelOutlines):
       if kernelOutline is None:
         continue
@@ -1006,6 +1012,8 @@ class InitializerGenerator(object):
             returnType = '{} {}'.format(MODIFIERS, self._arch.uintTypename)
             if len(groupSize) > 0:
               with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                header('assert({} < {});'.format(indexFun(groupSizeToStride(groupSize)),
+                                                 reduce(operator.mul, groupSize)))
                 header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
             with header.Function(self.SIZE_FUN_NAME, typedArgs, returnType):
               if len(groupSize) == 0:
@@ -1017,11 +1025,13 @@ class InitializerGenerator(object):
               with header.Struct(self.CONTAINER_CLASS_NAME):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                with header.Function('operator()', typedArgs, '{} T&'.format(HOSTDEVICE_INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                with header.Function('operator()', typedArgs, '{} T const&'.format(HOSTDEVICE_INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
     for namespace, scalar_dict in self.iterate_collect_scalar():
+      if len(scalar_dict) == 0:
+        continue
       with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
         for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
           with header.Struct(baseNameWithoutNamespace):
@@ -1030,6 +1040,8 @@ class InitializerGenerator(object):
             typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
             if len(groupSize) > 0:
               with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                header('assert({} < {});'.format(indexFun(groupSizeToStride(groupSize)),
+                                                 reduce(operator.mul, groupSize)))
                 header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
             if len(groupSize) > 0:
               header('template<typename T>')
@@ -1037,16 +1049,16 @@ class InitializerGenerator(object):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 with header.Function(self.CONTAINER_CLASS_NAME, '', ''):
                   pass
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                with header.Function('operator()', typedArgs, '{} T&'.format(HOSTDEVICE_INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                with header.Function('operator()', typedArgs, '{} T const&'.format(HOSTDEVICE_INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
 
   def generateTensorsCpp(self, cpp):
-    for namespace, tensor_dict in self.iterate_collect():
-      with cpp.Namespace(namespace):
-        for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-          self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
+    # Shape and Size are constexpr static members, and a constexpr static
+    # member is implicitly inline, so it needs no definition outside the
+    # class. Writing one anyway is deprecated and both GCC and clang say so.
+    pass
 
   def collectPool(self, dataCache):
     """Registers every constant tensor in `dataCache` and reports the symbols.
@@ -1118,6 +1130,8 @@ class InitializerGenerator(object):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._init(header, base_name, base_name_without_namespace, '', tensors, False)
     for namespace, scalar_dict in self.iterate_collect_scalar():
+      if len(scalar_dict) == 0:
+        continue
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
         for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
           with header.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):

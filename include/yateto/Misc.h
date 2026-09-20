@@ -1,29 +1,39 @@
 #ifndef YATETO_MISC_H_
 #define YATETO_MISC_H_
 
+#include "Marker.h"
+
 #include <cstddef>
+#include <type_traits>
 
 namespace yateto {
 
-template <typename KernelType>
-auto getMaxTmpMemRequired(KernelType& krnl) {
-  return KernelType::TmpMaxMemRequiredInBytes;
-}
-
+/** Computes the largest amount of temporary memory any of the given kernels
+ * needs.
+ *
+ * @param kernels the kernels to consider; only their types matter.
+ * @return the largest requirement, in bytes.
+ * */
 template <typename KernelType, typename... OtherKernelTypes>
-auto getMaxTmpMemRequired(KernelType& krnl, OtherKernelTypes&... otherKrnls) {
-  auto currentTmpMem = KernelType::TmpMaxMemRequiredInBytes;
-  auto otherTmpMem = getMaxTmpMemRequired(otherKrnls...);
-  return (currentTmpMem > otherTmpMem) ? currentTmpMem : otherTmpMem;
+YATETO_HOSTDEVICE constexpr auto getMaxTmpMemRequired(const KernelType& /*kernel*/,
+                                                      const OtherKernelTypes&... /*otherKernels*/) {
+  using SizeT = std::common_type_t<decltype(KernelType::TmpMaxMemRequiredInBytes),
+                                   decltype(OtherKernelTypes::TmpMaxMemRequiredInBytes)...>;
+  SizeT maximum = KernelType::TmpMaxMemRequiredInBytes;
+  ((maximum = OtherKernelTypes::TmpMaxMemRequiredInBytes > maximum
+                  ? static_cast<SizeT>(OtherKernelTypes::TmpMaxMemRequiredInBytes)
+                  : maximum),
+   ...);
+  return maximum;
 }
 
 template <typename Tensor, int Dim>
-constexpr size_t dimSize() noexcept {
+YATETO_HOSTDEVICE constexpr std::size_t dimSize() noexcept {
   return Tensor::Stop[Dim] - Tensor::Start[Dim];
 }
 
 template <typename Tensor>
-constexpr size_t leadDim() noexcept {
+YATETO_HOSTDEVICE constexpr std::size_t leadDim() noexcept {
   return dimSize<Tensor, 0>();
 }
 

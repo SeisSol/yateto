@@ -248,6 +248,21 @@ class DenseMemoryLayout(MemoryLayout):
     newBB = BoundingBox([copy.copy(originalBB[p]) for p in permutation])
     return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None, alignmentArch=self._alignmentArch)
 
+  def reordered(self, order):
+    """The same tensor, its axes laid out in the given order.
+
+    ``order`` lists the axes fastest first. The index space does not move --
+    an entry is still named the way the tensor names it -- only the address
+    it is given changes, so the values need no rearranging to be packed into
+    it and everything that reads by index goes on working.
+    """
+    if sorted(order) != list(range(len(self._shape))):
+      raise ValueError('{} is not an order of {} axes.'.format(order, len(self._shape)))
+    permuted = self.permuted(tuple(order))
+    stride = tuple(permuted.stridei(order.index(axis)) for axis in range(len(self._shape)))
+    return DenseMemoryLayout(self._shape, self.bbox(), stride,
+                             alignmentArch=self._alignmentArch)
+
   def address(self, entry):
     assert entry in self._bbox
     return sum((e - self._bbox[i].start) * self._stride[i] for i, e in enumerate(entry))
@@ -279,8 +294,10 @@ class DenseMemoryLayout(MemoryLayout):
   def requiredReals(self):
     if len(self._bbox) == 0:
       return 1
-    size = self._bbox[-1].size() * self._stride[-1]
-    return size
+    # Over every axis rather than the last one: the axis that reaches
+    # furthest is the one with the largest extent-times-stride, and which
+    # axis that is depends on the order the layout puts them in.
+    return max(rng.size() * stride for rng, stride in zip(self._bbox, self._stride))
 
   def addressString(self, indices, I = None, Z = None, prefix='_', offsets=()):
     if len(self._bbox) == 0:

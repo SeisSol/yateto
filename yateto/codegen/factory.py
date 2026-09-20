@@ -155,6 +155,26 @@ class KernelFactory(object):
   def allocateTemporary(self):
     return True
 
+  def layoutOfferings(self):
+    """How this factory wants the constants it reads to be arranged.
+
+    Empty from a factory that takes them as they come. One that generates
+    the reads itself may know better than the tensor does -- an order that
+    lets the loads be vectorised, say -- and says so here, by tensor name.
+
+    An offering is data: ``{'order': [axis, ...]}`` names the axes fastest
+    first, and nothing else is defined yet. Data rather than a layout,
+    because the one offering need not be in this process, and because what
+    it asks for has to be checked against what the tensor is before it is
+    granted.
+
+    Asked once the kernel is generated, because that is when the answer
+    exists. What comes back holds for this kernel alone: another kernel
+    reading the same matrix may read it another way, and the pool then holds
+    it both ways.
+    """
+    return {}
+
   def post_generate(self, routine_cache):
     pass
 
@@ -697,6 +717,27 @@ class ExportFactory(KernelFactory):
     self.tensors = {}
     self.operations = []
     self.scalarcounter = 0
+
+  def layoutOfferings(self):
+    """What the exporter asks for, where it asks for anything.
+
+    Optional on the exporter's side, and deliberately not part of the
+    interface version: one that does not offer gets the arrangement the
+    tensor gives itself, which is what every exporter got before there was
+    anywhere to say otherwise. A missing answer is therefore not a dropped
+    field but no request, and that degrades to the right thing.
+    """
+    offer = getattr(self.generator, 'layout_offerings', None)
+    if offer is None:
+      return {}
+    offerings = offer()
+    if not offerings:
+      return {}
+    if not isinstance(offerings, dict):
+      raise TypeError('{}.layout_offerings() must map a tensor name to an '
+                      'offering; got {}.'.format(type(self.generator).__name__,
+                                                 type(offerings).__name__))
+    return offerings
 
   def post_generate(self, routine_cache):
     self.generator.add_kernel({

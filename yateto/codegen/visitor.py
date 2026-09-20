@@ -344,6 +344,35 @@ class OptimizedKernelGenerator(KernelGenerator):
     for tensor in prefetchTensors:
       self.KernelOutline._addTensor(tensor, prefetch)
 
+    # Asked once the kernel is built, because only then does the generator
+    # know how it wants to read what it reads, and once the operands are
+    # known, because that is what an offering is checked against. Constants
+    # only: an operand the caller fills in is arranged by whoever fills it.
+    for offeredName, offered in factory.layoutOfferings().items():
+      # Offered under whatever name the tensor was described by, so a member
+      # of a family names that member, and only that member is rearranged.
+      named = Tensor.isValidName(offeredName)
+      baseName = Tensor.getBaseName(offeredName) if named else offeredName
+      group = Tensor.getGroup(offeredName) if named else tuple()
+      if baseName not in layouts:
+        raise ValueError('{} offered an arrangement for {}, which it does not '
+                         'read.'.format(type(factory).__name__, baseName))
+      if not is_compute_constant_tensors[baseName] or writable[baseName]:
+        raise ValueError('{} offered an arrangement for {}, which is not a '
+                         'constant it only reads.'.format(type(factory).__name__, baseName))
+      layout = layouts[baseName].layoutOf(group)
+      if layout is None:
+        raise ValueError('{} offered an arrangement for {}, which it does not '
+                         'read.'.format(type(factory).__name__, offeredName))
+      layouts[baseName] = layouts[baseName].withMember(
+        group, self._grantOffering(offeredName, layout, offered))
+
+    # Recorded once the arrangements are settled, so that the pool holds what
+    # the kernel reads and not what it was going to read on the way there.
+    for baseName, arrangement in layouts.items():
+      self._arrangements.setdefault(baseName, collections.OrderedDict())[
+        arrangement.tag()] = arrangement
+
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
                               inConstBytes,
@@ -365,6 +394,28 @@ class OptimizedKernelGenerator(KernelGenerator):
   def arrangements(self):
     """Per tensor, the arrangements the kernels actually read it in."""
     return self._arrangements
+
+  @staticmethod
+  def _grantOffering(baseName, layout, offering):
+    """The arrangement an offering asks for, checked against the tensor.
+
+    An offering names what it wants, not how to get it: the layout is built
+    here, from the one the tensor already has, so that what comes back is
+    something this yateto can address and pack. A field it does not know is
+    refused by name rather than ignored, because an arrangement granted in
+    part is an arrangement nobody asked for.
+    """
+    unknown = set(offering) - {'order'}
+    if unknown:
+      raise ValueError('Offering for {} asks for {}, which this yateto cannot '
+                       'grant.'.format(baseName, ', '.join(sorted(unknown))))
+    order = offering.get('order')
+    if order is None:
+      return layout
+    if not hasattr(layout, 'reordered'):
+      raise ValueError('Offering for {} asks for an axis order, which a {} '
+                       'cannot be given.'.format(baseName, type(layout).__name__))
+    return layout.reordered(list(order))
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):

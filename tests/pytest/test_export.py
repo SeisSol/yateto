@@ -6,6 +6,7 @@ for that target.
 
 import json
 import os
+import re
 import tempfile
 
 import numpy as np
@@ -457,3 +458,120 @@ class TestExportedAlignment:
         assert described['A']['alignment'] == narrow.alignment
         assert described['out']['alignment'] == wide.alignment
         assert narrow.alignment != wide.alignment
+
+
+class Offerer(Collector):
+    """An exporter that asks for its constants in an order of its own."""
+
+    offerings = {}
+
+    def layout_offerings(self):
+        return dict(self.offerings)
+
+
+def exportOffering(statements, offerings, target='gpu'):
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+    collector = {}
+
+    def make(a, attrs=None):
+        it = Offerer(a, attrs)
+        it.offerings = offerings
+        collector['it'] = it
+        return it
+
+    generator = Generator(arch)
+    for i, statement in enumerate(statements):
+        generator.add(f'k{i}', statement, target=target)
+    out = tempfile.mkdtemp()
+    generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                       routine_exporters={target: make})
+    return out
+
+
+class TestLayoutOfferings:
+    """An exporter may ask for a constant in an arrangement of its own."""
+
+    @staticmethod
+    def _tensors():
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        return {'A': Tensor('A', (N, N), values), 'B': Tensor('B', (N, N)),
+                'out': Tensor('out', (N, N))}
+
+    def _generate(self, offerings):
+        t = self._tensors()
+        out = exportOffering([t['out']['ij'] <= t['A']['ik'] * t['B']['kj']], offerings)
+        return (open(os.path.join(out, 'pool.h')).read(),
+                open(os.path.join(out, 'pool.cpp')).read(),
+                open(os.path.join(out, 'kernel.h')).read())
+
+    def test_without_an_offering_nothing_changes(self):
+        pool_h, pool_cpp, kernel_h = self._generate({})
+
+        assert pool_cpp.count('= {') >= 1
+        assert 'A = pool.A_' in kernel_h
+
+    def test_an_offered_order_reaches_the_image(self):
+        _, plain, _ = self._generate({})
+        _, offered, _ = self._generate({'A': {'order': [1, 0]}})
+
+        assert plain != offered
+
+    def test_the_kernel_binds_the_arrangement_it_asked_for(self):
+        _, _, plain = self._generate({})
+        _, _, offered = self._generate({'A': {'order': [1, 0]}})
+
+        assert 'A = pool.A_' in offered
+        assert plain != offered
+
+    def test_an_offering_names_the_member_it_is_about(self):
+        """One member rearranged; the others stay as they were."""
+        import numpy as np
+
+        values = [np.zeros((N, N)) for _ in range(2)]
+        for k, v in enumerate(values):
+            for i in range(N):
+                v[i, (i + k + 1) % N] = float(i + 1)
+        F = {k: Tensor('F({})'.format(k), (N, N), v) for k, v in enumerate(values)}
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        plain = exportOffering([out['ij'] <= F[0]['ik'] * B['kj'],
+                                out['ij'] <= F[1]['ik'] * B['kj']], {})
+        offered = exportOffering([out['ij'] <= F[0]['ik'] * B['kj'],
+                                  out['ij'] <= F[1]['ik'] * B['kj']],
+                                 {'F(0)': {'order': [1, 0]}})
+
+        plain_h = open(os.path.join(plain, 'pool.h')).read()
+        offered_h = open(os.path.join(offered, 'pool.h')).read()
+        # One member for the family in both, and a different one once asked
+        assert len(re.findall(r'Container<double const\*> F_\w+', plain_h)) == 1
+        assert len(re.findall(r'Container<double const\*> F_\w+', offered_h)) == 1
+        assert plain_h != offered_h
+
+    def test_an_offering_for_a_member_of_it_that_is_not_read_is_refused(self):
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        F = Tensor('F(0)', (N, N), values)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        with pytest.raises(ValueError, match=r'F\(3\)'):
+            exportOffering([out['ij'] <= F['ik'] * B['kj']],
+                           {'F(3)': {'order': [1, 0]}})
+
+    def test_an_unknown_field_is_refused_by_name(self):
+        with pytest.raises(ValueError, match='storage_parts'):
+            self._generate({'A': {'storage_parts': 2}})
+
+    def test_an_offering_for_something_unread_is_refused(self):
+        with pytest.raises(ValueError, match='nosuch'):
+            self._generate({'nosuch': {'order': [1, 0]}})
+
+    def test_an_offering_for_a_writable_operand_is_refused(self):
+        with pytest.raises(ValueError, match='out'):
+            self._generate({'out': {'order': [1, 0]}})

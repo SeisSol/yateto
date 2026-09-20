@@ -16,6 +16,8 @@ def layoutTag(memoryLayout):
   facts = (type(storage).__name__,
            tuple(storage.shape()),
            tuple((rng.start, rng.stop) for rng in storage.bbox()),
+           tuple(storage.stridei(axis) for axis in range(len(storage.shape())))
+           if hasattr(storage, 'stridei') else (),
            storage.requiredReals(),
            storage.alignedStride(),
            0 if arch is None else arch.alignment)

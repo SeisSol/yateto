@@ -85,8 +85,8 @@ def _new_arch(name: str):
     bandwidth tests don't share an ``arch`` fixture across cases
     because we want to vary precision (``dhsw`` vs ``shsw``) per test.
     """
-    from yateto.memory import DenseMemoryLayout
-    DenseMemoryLayout.ALIGNMENT_ARCH = None
+    from yateto.memory import MemoryLayout
+    MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
     return useArchitectureIdentifiedBy(name)
 
 
@@ -95,10 +95,10 @@ def reset_arch():
     """Reset alignment state both before *and* after each test - some
     of these tests construct multiple architectures.
     """
-    from yateto.memory import DenseMemoryLayout
-    DenseMemoryLayout.ALIGNMENT_ARCH = None
+    from yateto.memory import MemoryLayout
+    MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
     yield
-    DenseMemoryLayout.ALIGNMENT_ARCH = None
+    MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
 
 
 # ---------------------------------------------------------------------------
@@ -363,8 +363,8 @@ class TestPrecisionConsistency:
         A_arr = np.eye(N)  # compute-constant - hits all three buckets
         sizes = {}
         for tag, archname in [("d", "dhsw"), ("s", "shsw")]:
-            from yateto.memory import DenseMemoryLayout
-            DenseMemoryLayout.ALIGNMENT_ARCH = None
+            from yateto.memory import MemoryLayout
+            MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
             arch = useArchitectureIdentifiedBy(archname)
 
             A = Tensor("A", (N, N), spp=A_arr)

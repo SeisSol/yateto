@@ -391,12 +391,12 @@ class TestAlignmentIsTheStorages:
 
     @pytest.fixture
     def aligned(self):
-        from yateto.memory import DenseMemoryLayout
+        from yateto.memory import MemoryLayout
         arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
-        previous = DenseMemoryLayout.ALIGNMENT_ARCH
-        DenseMemoryLayout.setAlignmentArch(arch)
+        previous = MemoryLayout.DEFAULT_ALIGNMENT_ARCH
+        MemoryLayout.setAlignmentArch(arch)
         yield arch
-        DenseMemoryLayout.ALIGNMENT_ARCH = previous
+        MemoryLayout.DEFAULT_ALIGNMENT_ARCH = previous
 
     def test_a_slice_and_the_whole_describe_one_tensor(self, aligned):
         X = Tensor('X', (N, N), alignStride=True)

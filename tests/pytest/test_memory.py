@@ -206,12 +206,14 @@ class TestAddressString:
 
 class TestAlignmentArchIsolation:
     def test_fixture_resets_arch(self, arch):
-        assert DenseMemoryLayout.ALIGNMENT_ARCH is not None
+        from yateto.memory import MemoryLayout
+        assert MemoryLayout.DEFAULT_ALIGNMENT_ARCH is not None
 
     def test_fresh_test_starts_without_arch(self):
-        # This test uses no ``arch`` fixture and must see a reset global.
+        # This test uses no ``arch`` fixture and must see a reset default.
         # (If this fails, the ``arch`` fixture's teardown is broken.)
-        assert DenseMemoryLayout.ALIGNMENT_ARCH is None
+        from yateto.memory import MemoryLayout
+        assert MemoryLayout.DEFAULT_ALIGNMENT_ARCH is None
 
 
 class TestRankZeroLayout:
@@ -317,3 +319,102 @@ class TestAddressesIn:
         base = CSCMemoryLayout.fromSpp(aspp_general(pattern))
         view = MemoryLayoutView(base, 1, 1, 3)
         assert view.addressesIn() == sorted([base.address((2, 1)), base.address((1, 2))])
+
+
+class TestAlignmentArchIsCarriedByTheLayout:
+    """Two architectures at once.
+
+    A layout is built against one architecture and keeps it. Nothing that is
+    done to the default afterwards, and nothing another layout is built
+    against, may change what a layout already handed out addresses for.
+    """
+
+    def _arch(self, name):
+        from yateto.arch import getArchitectureIdentifiedBy
+
+        return getArchitectureIdentifiedBy(name)
+
+    def test_two_layouts_hold_their_own_architecture(self):
+        narrow = self._arch("dhsw")   # 32 byte vectors, 4 doubles
+        wide = self._arch("dskx")     # 64 byte vectors, 8 doubles
+        assert narrow.alignedReals != wide.alignedReals
+
+        spp = aspp_dense((5, 3))
+        a = DenseMemoryLayout.fromSpp(spp, alignStride=True, alignmentArch=narrow)
+        b = DenseMemoryLayout.fromSpp(spp, alignStride=True, alignmentArch=wide)
+
+        assert a.stridei(1) == narrow.alignedUpper(5)
+        assert b.stridei(1) == wide.alignedUpper(5)
+        assert a.alignmentArch() is narrow
+        assert b.alignmentArch() is wide
+
+    def test_an_explicit_architecture_beats_the_default(self):
+        from yateto.memory import MemoryLayout
+
+        MemoryLayout.setAlignmentArch(self._arch("dhsw"))
+        try:
+            wide = self._arch("dskx")
+            layout = DenseMemoryLayout.fromSpp(aspp_dense((5, 3)),
+                                               alignStride=True,
+                                               alignmentArch=wide)
+            assert layout.alignmentArch() is wide
+            assert layout.stridei(1) == wide.alignedUpper(5)
+        finally:
+            MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
+
+    def test_a_later_default_does_not_reach_an_existing_layout(self):
+        from yateto.memory import MemoryLayout
+
+        narrow = self._arch("dhsw")
+        MemoryLayout.setAlignmentArch(narrow)
+        try:
+            layout = DenseMemoryLayout.fromSpp(aspp_dense((5, 3)), alignStride=True)
+            stride = layout.stridei(1)
+
+            MemoryLayout.setAlignmentArch(self._arch("dskx"))
+
+            assert layout.alignmentArch() is narrow
+            assert layout.stridei(1) == stride
+            assert layout.alignedStride()
+        finally:
+            MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
+
+    @pytest.mark.parametrize("derive", [
+        lambda ml: ml.permuted((1, 0)),
+        lambda ml: ml.withDummyDimension(),
+        lambda ml: ml.withDummyDimension(front=True),
+        lambda ml: ml.subslice(1, 0, 2),
+    ])
+    def test_derived_layouts_inherit_the_architecture(self, derive):
+        from yateto.memory import MemoryLayout
+
+        narrow = self._arch("dhsw")
+        layout = DenseMemoryLayout.fromSpp(aspp_dense((5, 3)),
+                                           alignStride=True,
+                                           alignmentArch=narrow)
+
+        MemoryLayout.setAlignmentArch(self._arch("dskx"))
+        try:
+            assert derive(layout).alignmentArch() is narrow
+        finally:
+            MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
+
+    def test_sparse_layouts_hold_their_own_architecture(self):
+        from yateto.memory import CSCMemoryLayout, PatternMemoryLayout
+
+        pattern = np.zeros((9, 2), dtype=bool)
+        pattern[0, 0] = True
+        pattern[5, 1] = True
+        spp = aspp_general(pattern)
+
+        narrow = self._arch("dhsw")
+        wide = self._arch("dskx")
+
+        csc = {arch.alignedReals: CSCMemoryLayout(spp, alignStride=True, alignmentArch=arch)
+               for arch in (narrow, wide)}
+        assert csc[narrow.alignedReals].requiredReals() == 2 * narrow.alignedReals
+        assert csc[wide.alignedReals].requiredReals() == 2 * wide.alignedReals
+
+        pat = PatternMemoryLayout(spp, alignStride=True, alignmentArch=wide)
+        assert pat.alignmentArch() is wide
+        assert pat.requiredReals() == 2 * wide.alignedReals

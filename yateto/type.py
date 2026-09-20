@@ -409,8 +409,10 @@ class Tensor(IdentifiedType):
     # already sitting in a set
     return hash((self._name, self._shape, self.addressing))
 
-  def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
-    self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp, alignStride=alignStride)
+  def setMemoryLayout(self, memoryLayoutClass, alignStride=False, alignmentArch=None):
+    self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp,
+                                                   alignStride=alignStride,
+                                                   alignmentArch=alignmentArch)
 
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
@@ -422,7 +424,11 @@ class Tensor(IdentifiedType):
 
   def setGroupSpp(self, spp):
     self._setSparsityPattern(spp, setOnlyGroupSpp=True)
-    self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
+    # Rebuilt against the architecture the layout already aligns to, so that a
+    # regrouped tensor keeps the arrangement its consumers were generated for.
+    self.setMemoryLayout(self._memoryLayout.__class__,
+                         alignStride=self._memoryLayout.alignedStride(),
+                         alignmentArch=self._memoryLayout.alignmentArch())
 
   def __getitem__(self, indexNames):
     from .ast.node import IndexedTensor

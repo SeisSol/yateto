@@ -37,7 +37,7 @@
 # @section DESCRIPTION
 #
 
-from .memory import DenseMemoryLayout
+from .memory import MemoryLayout
 from .type import Datatype
 from collections import namedtuple
 from typing import Union
@@ -260,7 +260,7 @@ def useArchitectureIdentifiedBy(host_arch, device_arch=None, device_backend=None
     raise ValueError(f'given an incomplete set of input parameters: '
                      f'{host_arch}, {device_arch}, {device_backend}')
 
-  DenseMemoryLayout.setAlignmentArch(arch)
+  MemoryLayout.setAlignmentArch(arch)
   return arch
 
 HostArchDefinition = namedtuple('HostArchDefinition', 'archname precision alignment prefetch')
@@ -308,4 +308,4 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
                         cacheline=cacheline)
 
 def fixArchitectureGlobal(arch):
-  DenseMemoryLayout.setAlignmentArch(arch)
+  MemoryLayout.setAlignmentArch(arch)

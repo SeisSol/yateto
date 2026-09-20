@@ -40,12 +40,12 @@ def arch():
     test so no state leaks between tests.
     """
     from yateto import useArchitectureIdentifiedBy
-    from yateto.memory import DenseMemoryLayout
+    from yateto.memory import MemoryLayout
 
     a = useArchitectureIdentifiedBy("dhsw")
     yield a
-    # Reset global alignment state to keep tests hermetic.
-    DenseMemoryLayout.ALIGNMENT_ARCH = None
+    # Reset the default alignment architecture to keep tests hermetic.
+    MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
 
 
 @pytest.fixture

@@ -407,3 +407,53 @@ class TestAlignmentIsTheStorages:
         described = [t for t in collector.tensors if t['name'] == 'X']
         assert len(described) == 1
         assert described[0]['alignment'] == aligned.alignment
+
+
+class TestExportedAlignment:
+    """What a tensor promises about the address of a column, in bytes.
+
+    Read from the layout, so that a tensor laid out for one target keeps its
+    promise while a kernel is generated for another.
+    """
+
+    def _tensorsOf(self, tensor):
+        exporter = export([tensor['out']['ij'] <= tensor['A']['ik'] * tensor['B']['kj']])
+        return {t['name']: t for t in exporter.tensors}
+
+    def test_an_aligned_tensor_reports_its_own_architecture(self):
+        from yateto.arch import getArchitectureIdentifiedBy
+        from yateto.memory import DenseMemoryLayout
+
+        wide = getArchitectureIdentifiedBy('dskx')
+        out = Tensor('out', (N, N))
+        out.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=wide)
+
+        described = self._tensorsOf({
+            'A': Tensor('A', (N, N)), 'B': Tensor('B', (N, N)), 'out': out})
+
+        assert described['out']['alignment'] == wide.alignment
+
+    def test_an_unaligned_tensor_promises_nothing(self):
+        described = self._tensorsOf({
+            'A': Tensor('A', (N, N)), 'B': Tensor('B', (N, N)),
+            'out': Tensor('out', (N, N))})
+
+        assert described['out']['alignment'] == 0
+
+    def test_the_promise_does_not_follow_the_run(self):
+        """Two tensors, two architectures, one generator run."""
+        from yateto.arch import getArchitectureIdentifiedBy
+        from yateto.memory import DenseMemoryLayout
+
+        narrow = getArchitectureIdentifiedBy('dhsw')
+        wide = getArchitectureIdentifiedBy('dskx')
+        a = Tensor('A', (N, N))
+        a.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=narrow)
+        out = Tensor('out', (N, N))
+        out.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=wide)
+
+        described = self._tensorsOf({'A': a, 'B': Tensor('B', (N, N)), 'out': out})
+
+        assert described['A']['alignment'] == narrow.alignment
+        assert described['out']['alignment'] == wide.alignment
+        assert narrow.alignment != wide.alignment

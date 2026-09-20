@@ -879,15 +879,24 @@ class ExportFactory(KernelFactory):
     """
     return [int(value) for value in values]
 
-  def _alignment(self, memoryLayout):
+  @staticmethod
+  def _alignment(memoryLayout):
     """The alignment the layout promises for a column, in bytes.
+
+    Read from the layout and not from the architecture this run was
+    configured with, because they need not be the same one: a tensor laid out
+    for one target and described while generating for another would otherwise
+    be handed a promise nothing had made.
 
     A tensor without axes has no column and promises nothing; asking the
     layout would read a bounding box that has no first dimension.
     """
     if len(memoryLayout.shape()) == 0:
       return 0
-    return self._arch.alignment if memoryLayout.alignedStride() else 0
+    arch = memoryLayout.alignmentArch()
+    if arch is None or not memoryLayout.alignedStride():
+      return 0
+    return arch.alignment
 
   @staticmethod
   def _logicalBox(tensorIndexed):

@@ -8,6 +8,7 @@ caller gets back keeps pointing at its own data.
 """
 from __future__ import annotations
 
+import collections
 from io import StringIO
 
 import re
@@ -160,10 +161,28 @@ class TestCollectPool:
         tensors = [Tensor('F({})'.format(i), (2, 2), np.eye(2) * (i + 1)) for i in range(2)]
         pool, _ = self._collect(tensors)
 
-        entry = pool['F']
+        entry = next(e for e in pool.values() if e.baseName == 'F')
         assert entry.datatype == Datatype.F64
         assert entry.groupSize == (2,)
         assert len(entry.symbols) == 2
+
+    def test_one_arrangement_is_one_entry(self):
+        tensors = [Tensor('F({})'.format(i), (2, 2), np.eye(2) * (i + 1)) for i in range(2)]
+        pool, _ = self._collect(tensors)
+
+        arrangement = Arrangement({tensor.group(): tensor.memoryLayout()
+                                   for tensor in tensors})
+        assert [key for key in pool] == [('F', arrangement.tag())]
+
+    def test_members_laid_out_differently_are_one_entry(self):
+        """A family is one table of pointers, and each of them has its own array."""
+        tensors = [Tensor('F(0)', (2, 2), np.eye(2)),
+                   Tensor('F(1)', (4, 4), np.eye(4))]
+        pool, cache = self._collect(tensors)
+
+        entry, = pool.values()
+        assert len(entry.symbols) == 2
+        assert sorted(e.elements() for e in cache.entries()) == [4, 16]
 
     def test_mixed_datatypes_in_one_group_are_rejected(self):
         tensors = [
@@ -571,3 +590,61 @@ class TestViewArrayPool:
         header = self._initH([])
 
         assert 'viewdata' not in header
+
+
+class TestTwoArrangementsOfOneTensor:
+    """A matrix read two ways is two arrays, and two members pointing at them."""
+
+    @staticmethod
+    def _arrangements(tensor, archNames):
+        from yateto.arch import getArchitectureIdentifiedBy
+        from yateto.memory import DenseMemoryLayout
+
+        out = collections.OrderedDict()
+        for name in archNames:
+            arch = getArchitectureIdentifiedBy(name)
+            layout = DenseMemoryLayout.fromSpp(tensor.spp(), alignStride=True,
+                                               alignmentArch=arch)
+            arrangement = Arrangement({tensor.group(): layout})
+            out[arrangement.tag()] = arrangement
+        return out
+
+    def _collect(self, archNames):
+        arch = useArchitectureIdentifiedBy('dhsw')
+        cache = DataCache()
+        # Ten rows: padded to twelve on one of the two and to sixteen on the
+        # other, so the two arrangements really are different sequences.
+        values = np.zeros((10, 3))
+        values[0, 0] = values[3, 1] = values[9, 2] = 1.0
+        tensor = Tensor('m', (10, 3), values, alignStride=True)
+        gen = InitializerGenerator(arch, [tensor], [])
+        pool = gen.collectPool(cache, {'m': self._arrangements(tensor, archNames)})
+        return cache, pool
+
+    def test_each_arrangement_gets_its_own_entry(self):
+        cache, pool = self._collect(['dhsw', 'dskx'])
+
+        assert len(pool) == 2
+        assert {entry.baseName for entry in pool.values()} == {'m'}
+        assert len(cache) == 2
+
+    def test_the_entries_are_different_lengths(self):
+        cache, _ = self._collect(['dhsw', 'dskx'])
+
+        lengths = sorted(entry.elements() for entry in cache.entries())
+        assert lengths[0] != lengths[1]
+
+    def test_each_arrangement_gets_its_own_member(self):
+        _, pool = self._collect(['dhsw', 'dskx'])
+
+        members = PoolGenerator.assignMembers(pool)
+
+        assert len(set(members.values())) == 2
+        assert all(member.startswith('m_') for member in members.values())
+
+    def test_one_arrangement_is_one_entry_and_one_member(self):
+        cache, pool = self._collect(['dhsw'])
+
+        assert len(pool) == 1
+        assert len(cache) == 1
+        assert len(set(PoolGenerator.assignMembers(pool).values())) == 1

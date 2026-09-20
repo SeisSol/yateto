@@ -174,6 +174,11 @@ class OptimizedKernelGenerator(KernelGenerator):
     #: one table of pointers, so what it is asked about is how all of it is
     #: held, not the part this kernel happens to touch.
     self._families = families or {}
+    #: Every arrangement a kernel was generated against, per family. The pool
+    #: is filled from this rather than from the tensors alone: an arrangement
+    #: nobody reads need not be stored, and one that two kernels disagree
+    #: about has to be stored twice.
+    self._arrangements = collections.OrderedDict()
     self._routine_exporters = routine_exporters
     self._poolType = '::{}{}'.format('{}::'.format(namespace) if namespace else '',
                                      PoolGenerator.POOL_STRUCT_NAME)
@@ -356,6 +361,10 @@ class OptimizedKernelGenerator(KernelGenerator):
                               target,
                               attrs,
                               inMemory)
+
+  def arrangements(self):
+    """Per tensor, the arrangements the kernels actually read it in."""
+    return self._arrangements
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -1164,8 +1173,8 @@ class InitializerGenerator(object):
   #: What the pool needs to know about one tensor group: how large the group
   #: is, which element type its entries were stored as, and where each member
   #: of it ended up.
-  PoolEntry = collections.namedtuple('PoolEntry',
-                                     ['groupSize', 'datatype', 'symbols', 'arrangement'])
+  PoolEntry = collections.namedtuple(
+    'PoolEntry', ['baseName', 'groupSize', 'datatype', 'symbols', 'arrangement'])
 
   def __init__(self, arch, tensors, scalars, inMemory=frozenset()):
     self._arch = arch
@@ -1317,11 +1326,16 @@ class InitializerGenerator(object):
     # class. Writing one anyway is deprecated and both GCC and clang say so.
     pass
 
-  def collectPool(self, dataCache):
+  def collectPool(self, dataCache, arrangements=None):
     """Registers every constant tensor in `dataCache` and reports the symbols.
 
-    The result maps a tensor's base name (namespace included) to its group
-    size, its element type and the pool symbol each group ended up under.
+    The result maps a tensor and one arrangement of it -- keyed by the pair --
+    to its group size, its element type and the pool symbol each group ended
+    up under. A tensor read in two arrangements is stored twice, because the
+    two are two different sequences of numbers and an address into one is not
+    an address into the other. Where `arrangements` says nothing about a
+    tensor, it is stored as it lays itself out.
+
     Groups without values are absent: they have nothing to store, and the
     pool leaves the corresponding pointer null.
 
@@ -1338,9 +1352,25 @@ class InitializerGenerator(object):
     for baseName, tensors in self._collect.items():
       groupSize = self._groupSize[baseName]
       stride = groupSizeToStride(groupSize)
-      symbols = collections.OrderedDict()
-      datatype = None
-      for group, tensor in tensors.items():
+      read = (arrangements or {}).get(baseName) \
+        or {None: Arrangement.of(tensors)}
+      for _, arrangement in read.items():
+        entry = self._poolEntry(dataCache, baseName, tensors, groupSize, stride, arrangement)
+        if entry is not None:
+          pool[(baseName, arrangement.tag())] = entry
+    self._pool = pool
+    return pool
+
+  def _poolEntry(self, dataCache, baseName, tensors, groupSize, stride, arrangement):
+    """One family in one arrangement, registered member by member.
+
+    A member is stored as the arrangement holds it, and as it lays itself out
+    where the arrangement says nothing about it -- a member the kernels never
+    read still has an entry, because the family is handed out whole.
+    """
+    symbols = collections.OrderedDict()
+    datatype = None
+    for group, tensor in tensors.items():
         values = tensor.values()
         if values is None:
           continue
@@ -1351,7 +1381,7 @@ class InitializerGenerator(object):
           # still written, from the same numbers, for whoever computes with
           # the tensor on the host.
           continue
-        memLayout = tensor.memoryLayout()
+        memLayout = arrangement.layoutOf(group, tensor.memoryLayout())
         hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
         groupDatatype = tensor.getDatatype(self._arch)
         if datatype is None:
@@ -1371,22 +1401,23 @@ class InitializerGenerator(object):
                                        [groupDatatype.literal(value) for value in memLayout.pack(values)],
                                        groupDatatype.ctype(),
                                        alignment)
-      if symbols:
-        pool[baseName] = self.PoolEntry(groupSize, datatype, symbols,
-                                        Arrangement.of(tensors))
-    self._pool = pool
-    return pool
+    if not symbols:
+      return None
+    return self.PoolEntry(baseName, groupSize, datatype, symbols, arrangement)
 
   def poolSymbol(self, baseName, group):
     """Pool entry holding exactly what init would otherwise print, if there is one.
 
-    There is one as long as a tensor has a single realisation, which is why
-    the initialiser can bind a reference instead of materialising the values a
-    second time. Once a tensor is realised in more than one layout, only the
-    one that matches what init promises can be bound this way, and the rest of
-    them answer None here and get their own array.
+    There is one as long as a family is held the way it lays itself out, which
+    is why the initialiser can bind a reference instead of materialising the
+    values a second time. Once the kernels read it some other way, only an
+    entry that matches what init promises can be bound like that, and the rest
+    of them answer None here and get their own array.
     """
-    entry = self._pool.get(baseName)
+    tensors = self._collect.get(baseName)
+    if not tensors or group not in tensors:
+      return None
+    entry = self._pool.get((baseName, Arrangement.of(tensors).tag()))
     return entry.symbols.get(group) if entry is not None else None
 
   def generateInitH(self, header):
@@ -1626,16 +1657,6 @@ class PoolGenerator(object):
       return flat
     return '{}_{}'.format(flat, arrangement.tag())
 
-  @staticmethod
-  def _arrangementOf(pool, baseName):
-    """How the pool holds this family, where the pool says so.
-
-    A bare listing of names carries no arrangement, and members named from
-    the name alone are the right answer for it.
-    """
-    entry = pool.get(baseName) if hasattr(pool, 'get') else None
-    return None if entry is None else entry.arrangement
-
   #: A short name for how one tensor is held; see `arrangement.layoutTag`.
   arrangementTag = staticmethod(layoutTag)
 
@@ -1665,13 +1686,17 @@ class PoolGenerator(object):
     """
     members = collections.OrderedDict()
     taken = dict()
-    for baseName in pool:
-      member = cls.memberName(baseName, cls._arrangementOf(pool, baseName))
+    for key in pool:
+      # A bare listing of names carries no arrangement, and a member named
+      # from the name alone is the right answer for it.
+      entry = pool.get(key) if hasattr(pool, 'get') else None
+      baseName = key if entry is None else entry.baseName
+      member = cls.memberName(baseName, None if entry is None else entry.arrangement)
       if member in taken:
         raise ValueError('The tensors {} and {} share the pool member {}. '
                          'Rename one of them.'.format(taken[member], baseName, member))
       taken[member] = baseName
-      members[baseName] = member
+      members[key] = member
     for reservation in reservations:
       member = reservation.name()
       if member in taken:
@@ -1684,11 +1709,11 @@ class PoolGenerator(object):
   def _elementPtrType(datatype):
     return '{} const*'.format(datatype.ctype())
 
-  def _memberType(self, baseName, entry):
+  def _memberType(self, entry):
     elementPtr = self._elementPtrType(entry.datatype)
     if len(entry.groupSize) == 0:
       return elementPtr
-    prefix, name = Tensor.splitBasename(baseName)
+    prefix, name = Tensor.splitBasename(entry.baseName)
     return '{}{}::{}::{}<{}>'.format(prefix,
                                      InitializerGenerator.TENSOR_NAMESPACE,
                                      name,
@@ -1713,9 +1738,8 @@ class PoolGenerator(object):
     header.emptyline()
 
     with header.Struct(self.POOL_STRUCT_NAME):
-      for baseName, entry in self._pool.items():
-        header('{} {}{{}};'.format(self._memberType(baseName, entry),
-                                   self._members[baseName]))
+      for key, entry in self._pool.items():
+        header('{} {}{{}};'.format(self._memberType(entry), self._members[key]))
       for reservation in self._reservations:
         header('{} const* {}{{}};'.format(reservation.entry().typename(), reservation.name()))
       header.emptyline()
@@ -1752,8 +1776,8 @@ class PoolGenerator(object):
                       returnType):
       cpp('auto const* origin = static_cast<char const*>(base);')
       cpp('{} result;'.format(self.POOL_STRUCT_NAME))
-      for baseName, entry in self._pool.items():
-        member = self._members[baseName]
+      for key, entry in self._pool.items():
+        member = self._members[key]
         stride = groupSizeToStride(entry.groupSize)
         for group, symbol in entry.symbols.items():
           target = member if len(group) == 0 else '{}.{}[{}]'.format(

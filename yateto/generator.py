@@ -517,7 +517,9 @@ class Generator(object):
     # Before the initialisation code, not after: init binds references into the
     # pool where it can, so it has to know which entries exist.
     print('Generating constant pool...')
-    poolMap = initGen.collectPool(dataCache)
+    # Filled from the arrangements the kernels were written against, so that
+    # a tensor two of them read differently is stored once for each.
+    poolMap = initGen.collectPool(dataCache, optKernelGenerator.arrangements())
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         header.include(self.MARKER_HEADER)

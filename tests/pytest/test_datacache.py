@@ -10,11 +10,14 @@ from __future__ import annotations
 
 from io import StringIO
 
+import re
+
 import numpy as np
 import pytest
 
 from yateto import Tensor, useArchitectureIdentifiedBy
 from yateto.codegen.code import Cpp
+from yateto.codegen.arrangement import Arrangement
 from yateto.codegen.datacache import DataCache
 from yateto.memory import CSCMemoryLayout
 from yateto.codegen.visitor import POOL_ALIGNMENT, InitializerGenerator, PoolGenerator
@@ -169,6 +172,90 @@ class TestCollectPool:
         ]
         with pytest.raises(ValueError, match='Mixed datatypes'):
             self._collect(tensors)
+
+
+class TestAFamilyIsArrangedAsAWhole:
+    """A family is one table of pointers, so it is held one way, not per member.
+
+    Its members need not agree on how each of them is laid out -- each has an
+    array of its own -- and a kernel that reads one of them still speaks about
+    the whole family, because that is what it is handed.
+    """
+
+    @staticmethod
+    def _generate(tmp_path, reads):
+        from yateto import Generator
+        from yateto.gemm_configuration import GeneratorCollection
+
+        arch = useArchitectureIdentifiedBy('dhsw')
+        # Two members of one family, of different heights, so that they are
+        # laid out differently and cannot be held in one shape.
+        heights = {0: 9, 1: 5}
+        F = {i: Tensor('F({})'.format(i), (rows, 3), np.ones((rows, 3)),
+                       alignStride=True)
+             for i, rows in heights.items()}
+        B = Tensor('B', (3, 3))
+        g = Generator(arch)
+        for i in reads:
+            C = Tensor('C{}'.format(i), (heights[i], 3))
+            g.add('krnl{}'.format(i), C['ij'] <= F[i]['ik'] * B['kj'])
+        g.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]),
+                   include_tensors=set(F.values()))
+        return ((tmp_path / 'pool.h').read_text(),
+                (tmp_path / 'kernel.h').read_text())
+
+    def test_members_laid_out_differently_are_one_entry(self, tmp_path):
+        pool_h, _ = self._generate(tmp_path, reads=(0, 1))
+
+        members = re.findall(r'Container<double const\*> (F_\w+)', pool_h)
+        assert len(members) == 1
+        assert re.search(r'double const F_0_\w+\[36\]', pool_h)
+        assert re.search(r'double const F_1_\w+\[24\]', pool_h)
+
+    def test_reading_one_member_names_the_whole_family(self, tmp_path):
+        """Two kernels, one member each, still bind the same pool member."""
+        _, kernel_h = self._generate(tmp_path, reads=(0, 1))
+
+        bound = set(re.findall(r'F = pool\.(\w+);', kernel_h))
+        assert len(bound) == 1
+
+    def test_a_partly_read_family_is_held_whole(self, tmp_path):
+        """The unread member is in the table too; the caller is handed all of it."""
+        pool_h, _ = self._generate(tmp_path, reads=(0,))
+
+        assert re.search(r'double const F_0_\w+\[36\]', pool_h)
+        assert re.search(r'double const F_1_\w+\[24\]', pool_h)
+
+
+class TestArrangementIdentity:
+    """A tag says how a family is held, so it covers every member of it."""
+
+    @staticmethod
+    def _layout(rows, alignStride=True):
+        from yateto.memory import DenseMemoryLayout
+        values = np.ones((rows, 3))
+        return DenseMemoryLayout.fromSpp(
+            Tensor('t', (rows, 3), values).spp(), alignStride=alignStride)
+
+    def test_the_same_members_are_the_same_arrangement(self):
+        first = Arrangement({(0,): self._layout(9), (1,): self._layout(5)})
+        second = Arrangement({(1,): self._layout(5), (0,): self._layout(9)})
+
+        assert first == second
+        assert first.tag() == second.tag()
+
+    def test_one_member_held_differently_is_another_arrangement(self):
+        first = Arrangement({(0,): self._layout(9), (1,): self._layout(5)})
+        second = Arrangement({(0,): self._layout(9),
+                              (1,): self._layout(5, alignStride=False)})
+
+        assert first != second
+
+    def test_a_family_that_gains_a_member_is_held_differently(self):
+        one = Arrangement({(0,): self._layout(9)})
+        two = Arrangement({(0,): self._layout(9), (1,): self._layout(5)})
+
+        assert one != two
 
 
 class TestPoolMembers:
@@ -373,9 +460,12 @@ class TestReservationsInTheEmittedPool:
         assert cpp.count('result.first = ') == 1
         assert cpp.count('result.second = ') == 1
 
-    def test_a_reservation_clashing_with_a_tensor_is_refused(self):
-        with pytest.raises(ValueError, match='m'):
-            self._pool(['m'])
+    def test_a_tensor_member_carries_its_arrangement(self):
+        header, _ = self._pool()
+
+        assert 'const* m{};' not in header
+        assert any(line.strip().startswith('double const* m_') and line.strip().endswith('{};')
+                   for line in header.splitlines())
 
 
 class TestReservingWhileKernelsAreWritten:

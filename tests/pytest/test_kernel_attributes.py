@@ -125,6 +125,7 @@ def _outline(attrs, target="gpu"):
         tensors=collections.OrderedDict(), writable={},
         prefetch=collections.OrderedDict(), scalars=collections.OrderedDict(),
         function="  // body\n", tmp_mem_size=0, is_compute_constant_tensors={},
+        layouts={},
         datatype={}, target=target, attrs=attrs)
 
 

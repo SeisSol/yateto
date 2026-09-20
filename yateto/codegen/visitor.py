@@ -11,6 +11,7 @@ from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsL
 from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
+from .arrangement import Arrangement, layoutTag
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux, KernelAttributes
@@ -160,13 +161,19 @@ class OptimizedKernelGenerator(KernelGenerator):
   BIND_GLOBALS_ARGUMENT = 'pool'
 
 
-  def __init__(self, arch, routineCache, dataCache, routine_exporters, namespace=''):
+  def __init__(self, arch, routineCache, dataCache, routine_exporters, namespace='',
+               families=None):
     super().__init__(arch)
     self._routineCache = routineCache
     #: Reachable while the kernels are written out, and not only afterwards,
     #: so that a generator deciding how it wants an operand laid out can put
     #: that arrangement into the pool at the moment it decides.
     self._dataCache = dataCache
+    #: Which members each tensor family has, so that a kernel reading one of
+    #: them can still speak about the whole of it. A family is handed out as
+    #: one table of pointers, so what it is asked about is how all of it is
+    #: held, not the part this kernel happens to touch.
+    self._families = families or {}
     self._routine_exporters = routine_exporters
     self._poolType = '::{}{}'.format('{}::'.format(namespace) if namespace else '',
                                      PoolGenerator.POOL_STRUCT_NAME)
@@ -194,6 +201,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                  tmp_mem_size,
                  is_compute_constant_tensors,
                  datatype,
+                 layouts,
                  target,
                  attrs,
                  inMemory=None):
@@ -211,6 +219,11 @@ class OptimizedKernelGenerator(KernelGenerator):
       self.tmp_mem_size = tmp_mem_size
       self.is_compute_constant_tensors = is_compute_constant_tensors
       self.datatype = datatype
+      #: The arrangement each operand's family is generated against. Which
+      #: entry in the pool a kernel reads follows from it, so it has to be
+      #: known here, where the kernel is written, and not only where the pool
+      #: is filled.
+      self.layouts = layouts
       self.target = target
       self.attrs = attrs
       #: Immediate operands this kernel reads from memory, by name, with the
@@ -239,6 +252,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     is_compute_constant_tensors = dict()
     scalars = collections.OrderedDict()
     datatype = dict()
+    members = dict()
 
     inConstTensors = {}
     inTensors = {}
@@ -291,6 +305,11 @@ class OptimizedKernelGenerator(KernelGenerator):
 
       is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
 
+      # Noted per member. The family is what is arranged, so the layouts are
+      # put together into one once every operand has been seen.
+      members.setdefault(bn, collections.OrderedDict())[var.tensor.group()] = \
+        var.tensor.memoryLayout()
+
       nm = var.tensor.nameWithNamespace()
 
       size = var.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
@@ -305,6 +324,15 @@ class OptimizedKernelGenerator(KernelGenerator):
     inConstBytes = sum(size for size in inConstTensors.values())
     inBytes = sum(size for size in inTensors.values())
     outBytes = sum(size for size in outTensors.values())
+
+    # Over the whole family where the family is known, so that two kernels
+    # reading different members of it still name the same arrangement of it.
+    # A member this kernel never reads is in the table it is handed all the
+    # same, and a family of tensors laid out differently is that family held
+    # one way rather than two arrangements in conflict.
+    layouts = {baseName: Arrangement.of(self._families[baseName])
+               if baseName in self._families else Arrangement(byGroup)
+               for baseName, byGroup in members.items()}
 
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()
@@ -324,6 +352,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                               tmp_memory,
                               is_compute_constant_tensors,
                               datatype,
+                              layouts,
                               target,
                               attrs,
                               inMemory)
@@ -349,6 +378,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     scalars = collections.OrderedDict()
     is_compute_constant_tensors = dict()
     datatype = dict()
+    layouts = dict()
     for ko in kernelOutlines:
       if ko:
         self._addFromKO(ko.scalars, scalars)
@@ -357,6 +387,15 @@ class OptimizedKernelGenerator(KernelGenerator):
         self._addFromKO(ko.prefetch, prefetch)
         self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
         self._addFromKO(ko.datatype, datatype)
+        # The variants of one kernel share its members, so a constant they
+        # arrange differently has no one member to be bound to.
+        for baseName, arrangement in ko.layouts.items():
+          if baseName in layouts \
+             and is_compute_constant_tensors.get(baseName) and not writable.get(baseName) \
+             and layouts[baseName] != arrangement:
+            raise ValueError('The variants of this kernel lay {} out differently '
+                             'and cannot share a pool entry.'.format(baseName))
+          layouts[baseName] = arrangement
 
     target = kernelOutlines[-1].target
     is_same_target = True
@@ -480,7 +519,7 @@ class OptimizedKernelGenerator(KernelGenerator):
             _, memberName = Tensor.splitBasename(baseName)
             header('{} = {}.{};'.format(memberName,
                                         self.BIND_GLOBALS_ARGUMENT,
-                                        PoolGenerator.memberName(baseName)))
+                                        PoolGenerator.memberName(baseName, layouts[baseName])))
         header.emptyline()
 
         # containers with extra offsets for GPU-like computations
@@ -1125,7 +1164,8 @@ class InitializerGenerator(object):
   #: What the pool needs to know about one tensor group: how large the group
   #: is, which element type its entries were stored as, and where each member
   #: of it ended up.
-  PoolEntry = collections.namedtuple('PoolEntry', ['groupSize', 'datatype', 'symbols'])
+  PoolEntry = collections.namedtuple('PoolEntry',
+                                     ['groupSize', 'datatype', 'symbols', 'arrangement'])
 
   def __init__(self, arch, tensors, scalars, inMemory=frozenset()):
     self._arch = arch
@@ -1332,7 +1372,8 @@ class InitializerGenerator(object):
                                        groupDatatype.ctype(),
                                        alignment)
       if symbols:
-        pool[baseName] = self.PoolEntry(groupSize, datatype, symbols)
+        pool[baseName] = self.PoolEntry(groupSize, datatype, symbols,
+                                        Arrangement.of(tensors))
     self._pool = pool
     return pool
 
@@ -1566,14 +1607,37 @@ class PoolGenerator(object):
     self._members = self.assignMembers(pool, self._reservations)
 
   @classmethod
-  def memberName(cls, baseNameWithNamespace):
-    """Name a tensor goes by inside `Pool`.
+  def memberName(cls, baseNameWithNamespace, arrangement=None):
+    """Name an arrangement of a tensor family goes by inside `Pool`.
 
     Flattened rather than nested by namespace: a kernel may read constants
     from several namespaces at once, so one flat table is the only shape that
     lets it bind all of them against a single object.
+
+    The arrangement is part of the name, because one family may be held in
+    more than one of them: a kernel generated against a different padding or
+    a different sparsity reads a different array, and binding both to one
+    member would hand one of them a stride nobody gave it. Both sides work it
+    out from the tensors alone, each where it stands, so neither has to wait
+    for the other.
     """
-    return baseNameWithNamespace.replace('::', '_')
+    flat = baseNameWithNamespace.replace('::', '_')
+    if arrangement is None:
+      return flat
+    return '{}_{}'.format(flat, arrangement.tag())
+
+  @staticmethod
+  def _arrangementOf(pool, baseName):
+    """How the pool holds this family, where the pool says so.
+
+    A bare listing of names carries no arrangement, and members named from
+    the name alone are the right answer for it.
+    """
+    entry = pool.get(baseName) if hasattr(pool, 'get') else None
+    return None if entry is None else entry.arrangement
+
+  #: A short name for how one tensor is held; see `arrangement.layoutTag`.
+  arrangementTag = staticmethod(layoutTag)
 
   def imageAlignment(self):
     """Alignment the image is declared with.
@@ -1602,7 +1666,7 @@ class PoolGenerator(object):
     members = collections.OrderedDict()
     taken = dict()
     for baseName in pool:
-      member = cls.memberName(baseName)
+      member = cls.memberName(baseName, cls._arrangementOf(pool, baseName))
       if member in taken:
         raise ValueError('The tensors {} and {} share the pool member {}. '
                          'Rename one of them.'.format(taken[member], baseName, member))

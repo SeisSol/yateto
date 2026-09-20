@@ -383,17 +383,46 @@ class Generator(object):
       else:
         kernel_family_dict[family.namespace] = [family]
 
+    # Mapping basename -> tensor
+    tensors = dict()
+    scalars = set()
+
+    # Mapping namespace -> (basename -> tensor)
+    tensors_dict = collections.defaultdict(dict)
+
+    for tensor in include_tensors:
+      tensors[tensor.name()] = tensor
+      tensors_dict[tensor.namespace][tensor.name()] = tensor
+    for kernel in self._kernels:
+        tensors.update( FindTensors().visit(kernel.ast) )
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        scalars.update(ScalarsSet().visit(kernel.cfg))
+    for family in self._kernelFamilies.values():
+      for group, kernel in family.items():
+        tensors.update( FindTensors().visit(kernel.ast) )
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        scalars.update(ScalarsSet().visit(kernel.cfg))
+
+    # Which members a tensor family has, before a line of it is written: how a
+    # family is held is a fact about the family, so a kernel that reads one
+    # member of it still has to say how the whole of it is held.
+    families = collections.OrderedDict()
+    for tensor in tensors.values():
+      families.setdefault(tensor.baseNameWithNamespace(),
+                          collections.OrderedDict())[tensor.group()] = tensor
+
     print('Generating kernels...')
     if routine_cache is None:
       cache = RoutineCache()
     else:
       cache = routine_cache.cache
-    # One cache for the whole run, reachable from here on: the kernels are
-    # written before the tensors are collected, and a generator that wants an
-    # operand in the pool decides that while its kernel is being written.
+    # One cache for the whole run, reachable from here on: the pool is filled
+    # after the kernels are written, and a generator that wants an operand in
+    # it decides that while its kernel is being written.
     dataCache = DataCache()
     optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, dataCache,
-                                                 routine_exporters, namespace)
+                                                 routine_exporters, namespace,
+                                                 families=families)
 
     # Immediate operands some generator read from memory after all:
     # tensor name -> (operations that did, {kernel or family: how many kernels})
@@ -478,26 +507,6 @@ class Generator(object):
           cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
     else:
       routine_cache.register(outputDir)
-
-    # Mapping basename -> tensor
-    tensors = dict()
-    scalars = set()
-
-    # Mapping namespace -> (basename -> tensor)
-    tensors_dict = collections.defaultdict(dict)
-
-    for tensor in include_tensors:
-      tensors[tensor.name()] = tensor
-      tensors_dict[tensor.namespace][tensor.name()] = tensor
-    for kernel in self._kernels:
-        tensors.update( FindTensors().visit(kernel.ast) )
-        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
-        scalars.update(ScalarsSet().visit(kernel.cfg))
-    for family in self._kernelFamilies.values():
-      for group, kernel in family.items():
-        tensors.update( FindTensors().visit(kernel.ast) )
-        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
-        scalars.update(ScalarsSet().visit(kernel.cfg))
 
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group

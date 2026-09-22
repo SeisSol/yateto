@@ -30,10 +30,15 @@ class Kernel(object):
   def __init__(self, name, ast, prefetch=None, namespace=None, target='cpu',
                attrs=None):
     self.name = name
-    if isinstance(ast, list):
-      self.ast = ast
-    else:
-      self.ast = [ast]
+    # The passes from prepareUntilUnitTest on rewrite the AST in place, and a
+    # LoopOverGEMM fixes its transposition flags against the index order its
+    # operands have when it is built. Statements handed to several kernels --
+    # once per target, say -- would be optimized once per kernel, and a later
+    # kernel would permute the operands of GEMMs an earlier one has built,
+    # leaving flags, index orders and layouts that disagree. So each kernel
+    # works on its own copy; IndexedTensor.__deepcopy__ keeps the tensors.
+    asts = ast if isinstance(ast, list) else [ast]
+    self.ast = [copy.deepcopy(a) for a in asts]
     self._prefetch = None
     if prefetch is not None:
       if isinstance(prefetch, Tensor):

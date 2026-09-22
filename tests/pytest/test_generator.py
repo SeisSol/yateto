@@ -125,6 +125,47 @@ class TestKernelPreparation:
         # value we pinned down in test_ast_visitor.
         assert kernel.nonZeroFlops == 960
 
+    def test_statements_shared_by_two_kernels_are_optimized_once_each(self, arch):
+        # The same statements added to two kernels -- as for one kernel per
+        # target -- must not be optimized twice: the passes rewrite the AST in
+        # place, and the second kernel would permute the operand of the GEMM
+        # the first one built, leaving its transposition flag stale.
+        import numpy as np
+        import yateto.functions as yf
+        from yateto.ast.cost import BoundingBoxCostEstimator
+        from yateto.ast.node import LoopOverGEMM
+
+        N = 35
+        Q = Tensor("Q", (N, 11), alignStride=True)
+        epsInit = Tensor("epsInit", (6,))
+        voigt = Tensor("voigt", (6,), np.array([1.0, 1.0, 1.0, 2.0, 2.0, 2.0]))
+        eps = Tensor("eps", (N, 6), alignStride=True, temporary=True)
+        i2 = Tensor("i2", (N,), alignStride=True, temporary=True)
+        statements = [
+            eps["lc"] <= yf.add(Q["lc"].subslice("c", 0, 6), epsInit["c"]),
+            i2["l"] <= yf.mul(eps["lc"], eps["lc"]) * voigt["c"],
+        ]
+        kernels = [Kernel("first", statements), Kernel("second", statements)]
+        # the order Generator.generate prepares them in
+        for kernel in kernels:
+            kernel.prepareUntilUnitTest(arch)
+        for kernel in kernels:
+            kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+
+        def nodes(node):
+            yield node
+            for child in node:
+                yield from nodes(child)
+
+        owned = [{id(n) for ast in kernel.ast for n in nodes(ast)} for kernel in kernels]
+        assert not owned[0] & owned[1]
+        gemms = [n for kernel in kernels for ast in kernel.ast for n in nodes(ast)
+                 if isinstance(n, LoopOverGEMM)]
+        assert len(gemms) == 2
+        for gemm in gemms:
+            A = gemm.leftTerm().indices
+            assert gemm.transA() == (A.find(gemm._m[0]) > A.find(gemm._k[0]))
+
 
 # ---------------------------------------------------------------------------
 # Prefetch argument

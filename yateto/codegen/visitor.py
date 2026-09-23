@@ -471,6 +471,8 @@ class UnitTestGenerator(KernelGenerator):
   STREAM = '_stream'
   TMP_MEM = '_tmpMem'
   TMP_SIZE = 128 * 8
+  FLAGS_MEM = '_flags'
+  DEV_FLAGS_MEM = '_dev_flags'
 
   def __init__(self, arch):
     super().__init__(arch)
@@ -540,7 +542,7 @@ class UnitTestGenerator(KernelGenerator):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
 
-  def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
+  def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None, attrs=None):
     if target == 'gpu':
       if self._arch.backend in ['oneapi', 'acpp', 'hipsycl']:
         # (name queue_op "stream_op" for consistency with the existing C++ interface)
@@ -572,6 +574,8 @@ class UnitTestGenerator(KernelGenerator):
         device_test = False
     else:
       device_test = False
+
+    use_flags = device_test and attrs is not None and attrs.flags
 
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
@@ -625,12 +629,23 @@ class UnitTestGenerator(KernelGenerator):
 
         stream_new(self.STREAM)
         data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{self._arch.typename}*', self.STREAM)
+        if use_flags:
+          # A kernel that declares the batch flags reads one per element and
+          # skips the ones that are off. The member defaults to a null
+          # pointer, so leaving it unset is not a kernel that computes
+          # everything -- it is a null dereference on the device, and the
+          # context it kills takes every kernel launched after it with it.
+          # The reference computes unconditionally, so the one element is on.
+          cpp(f'unsigned {self.FLAGS_MEM}[1] = {{1}};')
+          data_malloc(self.DEV_FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', 'unsigned*', self.STREAM)
         for var in variables:
           data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{self._arch.typename}*', self.STREAM)
           data_malloc(self._devPtrTensorName(var), f'sizeof({self._arch.typename}*)', f'{self._arch.typename}**', self.STREAM)
         for var in variables:
           data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
           data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({self._arch.typename}*)', self.STREAM)
+        if use_flags:
+          data_memcpy(self.DEV_FLAGS_MEM, self.FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', self.STREAM)
         stream_wait(self.STREAM)
         cpp.emptyline()
 
@@ -644,6 +659,8 @@ class UnitTestGenerator(KernelGenerator):
         cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
         cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
+        if use_flags:
+          cpp( f'{self.KERNEL_VAR}.{BatchedOperationsAux.FLAGS_NAME} = {self.DEV_FLAGS_MEM};' )
 
       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
       cpp.emptyline()
@@ -655,6 +672,8 @@ class UnitTestGenerator(KernelGenerator):
             data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
         stream_wait(self.STREAM)
         data_free(self.TMP_MEM, self.STREAM)
+        if use_flags:
+          data_free(self.DEV_FLAGS_MEM, self.STREAM)
         for var in variables:
           data_free(self._devPtrTensorName(var), self.STREAM)
           data_free(self._devTensorName(var), self.STREAM)

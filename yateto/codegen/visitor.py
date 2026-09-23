@@ -530,6 +530,40 @@ class UnitTestGenerator(KernelGenerator):
   def _viewName(self, var):
     return '_view_' + self._name(var)
 
+  def _cmpName(self, var):
+    return '_cmp_' + self._tensorName(var)
+
+  def _cmpViewName(self, var):
+    return '_view_' + self._cmpName(var)
+
+  def _emitUnpack(self, cpp, var, packedName, denseName, viewName):
+    """Copies a tensor out of the layout the kernel stores it in into a dense
+    buffer, through the view the initializer generates for it."""
+    shape = var.memoryLayout().shape()
+    cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({denseName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
+        supportNS = SUPPORT_LIBRARY_NAMESPACE,
+        dim=len(shape),
+        arch = self._arch,
+        denseName=denseName,
+        viewName=viewName,
+        shape=', '.join([str(s) for s in shape]),
+        start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
+        stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
+      )
+    )
+    prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
+    cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({packedName}).copyToView({viewName});'.format(
+        initNS = InitializerGenerator.INIT_NAMESPACE,
+        groupTemplate=self._groupTemplate(var.tensor),
+        prefix=prefix,
+        baseName=var.tensor.baseName(),
+        packedName=packedName,
+        viewName=viewName,
+        viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
+        createFun=InitializerGenerator.VIEW_FUN_NAME
+      )
+    )
+
   def _groupStr(self, var):
     group = var.group()
     return ','.join([str(g) for g in group])
@@ -590,32 +624,8 @@ class UnitTestGenerator(KernelGenerator):
       for var in variables:
         factory.tensor(var.tensor, self._tensorName(var))
         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
-
-        shape = var.memoryLayout().shape()
-        cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
-            supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            dim=len(shape),
-            arch = self._arch,
-            utName=self._name(var),
-            viewName=self._viewName(var),
-            shape=', '.join([str(s) for s in shape]),
-            start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
-            stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
-          )
-        )
-        prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
-        cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
-            initNS = InitializerGenerator.INIT_NAMESPACE,
-            supportNS = SUPPORT_LIBRARY_NAMESPACE,
-            groupTemplate=self._groupTemplate(var.tensor),
-            prefix=prefix,
-            baseName=var.tensor.baseName(),
-            name=self._tensorName(var),
-            viewName=self._viewName(var),
-            viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
-            createFun=InitializerGenerator.VIEW_FUN_NAME
-          )
-        )
+        self._emitUnpack(cpp, var, self._tensorName(var), self._name(var),
+                         self._viewName(var))
         cpp.emptyline()
 
       kernelTensorName = self._tensorName
@@ -685,7 +695,21 @@ class UnitTestGenerator(KernelGenerator):
 
       for var in variables:
         if var.writable:
-          factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout()))
+          layout = var.tensor.memoryLayout()
+          if isinstance(layout, DenseMemoryLayout):
+            factory.compare(var, Variable(self._tensorName(var), False, layout))
+          else:
+            # A tensor the kernel stores packed has no address for the entries
+            # its pattern leaves out, so the comparison cannot walk it the way
+            # it walks the reference. Unpack what the kernel wrote, the same
+            # way the inputs are unpacked on the way in, and compare dense
+            # against dense -- which also checks that the entries outside the
+            # pattern are the zeros the reference computes for them.
+            unpacked = self._cmpName(var)
+            factory.temporary(unpacked, var.memoryLayout().requiredReals(), iniZero=True)
+            self._emitUnpack(cpp, var, self._tensorName(var), unpacked,
+                             self._cmpViewName(var))
+            factory.compare(var, Variable(unpacked, False, var.memoryLayout()))
 
       factory.freeTmp()
 

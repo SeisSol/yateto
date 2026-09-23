@@ -271,9 +271,23 @@ class UnitTestFactory(KernelFactory):
     ml = node.memoryLayout()
     size = ml.requiredReals()
 
+    values = node.values()
     spp = node.spp()
     isDense = spp.count_nonzero() == size
-    if isDense:
+    if values is not None:
+      # The numbers a tensor carries are the same in every kernel that reads
+      # it, so a generator is free to take them from the description instead
+      # of the buffer -- as literals, or as an argument passed by value. Such
+      # a kernel never looks at what the test put there, and testing it
+      # against a pattern would compare two different operators: the reference
+      # computes with the pattern, the kernel with the numbers. Filling the
+      # buffer with those same numbers is the only way the two agree, and it
+      # is what production passes anyway.
+      memory = ['0.']*size
+      for entry, value in values.items():
+        memory[ml.address(entry)] = value
+      self.temporary(resultName, size, memory=memory)
+    elif isDense:
       self.temporary(resultName, size)
       with self._cpp.For('int i = 0; i < {}; ++i'.format(size)):
         self._cpp(f'{resultName}[i] = static_cast<{self._arch.typename}>((i + {self._rand}) % {maxValue} + 1) * static_cast<{self._arch.typename}>({scale});')

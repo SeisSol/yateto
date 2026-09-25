@@ -165,7 +165,7 @@ class Datatype(Enum):
       Datatype.F64: lambda value: f'{float(value):.16}',
       Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
       Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
-      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>({float(value):.36}q)',
+      Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>(YATETO_F128_C({float(value):.36}))',
     }[self](value)
 
 class AddressingMode(Enum):

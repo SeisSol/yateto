@@ -357,6 +357,22 @@ class TestDatatypeLiteral:
     def test_double_round_trips(self):
         assert float(Datatype.F64.literal("0.1")) == 0.1
 
+    def test_quad_literal_goes_through_the_macro(self):
+        """A bare ``q`` suffix is GCC's own dialect and is rejected under
+        -std=c++17; ``f128`` is rejected by clang. The macro in Type.h carries
+        whichever suffix fits the spelling ``f128_ty`` resolved to."""
+        literal = Datatype.F128.literal("1.25")
+        assert "YATETO_F128_C(" in literal
+        assert not literal.rstrip(")").endswith("q")
+
+    @pytest.mark.parametrize("datatype", [Datatype.F16, Datatype.BF16])
+    def test_half_literals_are_cast_from_a_plain_literal(self, datatype):
+        """Neither format has a literal suffix, so the value is spelled as a
+        double and narrowed."""
+        literal = datatype.literal("1.25")
+        assert literal.startswith("static_cast<yateto::")
+        assert "1.25" in literal
+
 
 class TestAddressingPredicates:
     """What the codegen asks a mode, rather than which mode it is."""

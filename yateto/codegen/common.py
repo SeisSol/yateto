@@ -1,10 +1,12 @@
 from __future__ import annotations
+
+import contextlib
 from .. import aspp
+from ..type import AddressingMode, Datatype
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
-from .tiny_tensor_language import Dump, Function, IntegerType, MemrefType, GroupType, IntImmValue, DYNAMIC, SubviewInst, LoadInst
+from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, FloatingType, MemrefType, GroupType, IntImmValue, FloatImmValue, DYNAMIC, SubviewInst, LoadInst
 import hashlib
-
 
 class TensorDescription(object):
   def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
@@ -18,6 +20,9 @@ class TensorDescription(object):
           elements are known at compile time
       is_temporary (bool): if true then the description is for a temporary tensor which
           usually results from a result of an intermediate computation
+      values (Union[np.ndarray, None]): the values of the compute_constant tensor, if they are known at compile time
+      datatype (Datatype): the datatype of the tensor elements
+      addressing (AddressingMode): the addressing mode for the tensor
     """
     self.name = name
     self.memoryLayout = memoryLayout
@@ -39,36 +44,97 @@ class IndexedTensorDescription(TensorDescription):
 
   @classmethod
   def fromNode(cls, var, node):
+    baseNode = node.viewed()
+    datatype = baseNode.datatype
+
     is_const = False
     values = None
-    datatype = None
     addressing = None
 
-    baseNode = node.viewed()
     if hasattr(baseNode, 'tensor'):
       is_const = baseNode.tensor.is_compute_constant()
       if is_const:
         values = baseNode.tensor.values()
-      datatype = None # node.tensor.datatype
-      addressing = None # node.tensor.addressing
+      addressing = baseNode.tensor.addressing
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
   @classmethod
   def fromVar(cls, var, indices):
+    datatype = var.datatype
+
     is_const = False
     values = None
-    datatype = None
     addressing = None
     if hasattr(var, 'tensor'):
       if var.tensor is not None:
         is_const = var.tensor.is_compute_constant()
         if is_const:
           values = var.tensor.values()
-        datatype = None # var.tensor.datatype
-        addressing = None # var.tensor.addressing
+        addressing = var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
-def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', fixed={}, indexNo=None):
+def operand(term):
+  """How the generated code reads an operand.
+
+  A by-value operand is the value itself: it has a name in the kernel's
+  signature and no storage to address. Everything else is read through its
+  memory layout.
+  """
+  if term.addressing == AddressingMode.SCALAR:
+    return term.name
+  return f'{term.name}[{term.memoryLayout.addressString(term.indices)}]'
+
+
+def scaleFactor(datatype, alpha):
+  """Spell a scale factor in the result's datatype.
+
+  A number becomes a literal of that type; a named scalar is a kernel argument
+  and is emitted by name, since it already carries its own type.
+
+  Writing the factor in the result's type is what keeps an int32 result from
+  being multiplied by a double literal, but it only works while the type can
+  hold the factor. It cannot always: every non-zero number is `true`, so a
+  boolean result silently scales by one, and an integer one truncates. Neither
+  is a scaling, so neither is written.
+  """
+  if not isinstance(alpha, (int, float)):
+    return str(alpha)
+  if datatype.isBool() and alpha != 1:
+    raise ValueError(
+      f'Cannot scale a {datatype} result by {alpha}: every non-zero factor is '
+      f'the same boolean, so the factor would be lost. Cast the result to a '
+      f'numeric type before scaling it.')
+  if datatype.isInteger() and alpha != int(alpha):
+    raise ValueError(
+      f'Cannot scale a {datatype} result by {alpha}: the factor is not whole '
+      f'and writing it in the result\'s type would truncate it. Cast the '
+      f'result to a floating type before scaling it.')
+  return datatype.literal(alpha)
+
+# The prefix forLoops() puts in front of its loop variables. Any generator that
+# emits its own loops into the same scope has to use it as well.
+INDEX_PREFIX = '_'
+
+@contextlib.contextmanager
+def hoisted(cpp, datatype, value, name):
+  """The value as an expression, read into a local first if it is a name.
+
+  A named scalar is a member of the kernel object, and as far as the compiler
+  can tell a store through one of its pointer members may land on it; reading
+  it once takes that question out of the loop. The local lives in a scope of
+  its own, since one kernel may well scale two statements by the same name.
+
+  A literal has no address, needs no local and gets no scope.
+  """
+  if isinstance(value, (int, float)):
+    yield scaleFactor(datatype, value)
+    return
+  with cpp.AnonymousScope():
+    cpp(f'{datatype.ctype()} const {name} = {value};')
+    yield name
+
+
+def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix=INDEX_PREFIX, fixed={}, indexNo=None):
   flops = 0
   firstLoop = False
   if indexNo == None:
@@ -79,6 +145,13 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', fixed={
     for index in indexNames:
       if index in fixed and not (ranges[index].start <= fixed[index] < ranges[index].stop):
         return 0
+    # A nest with nothing between its loops is one iteration space, and saying
+    # so beats marking the innermost loop alone: a short innermost loop is
+    # unrolled away before the vectoriser sees it, and what is left is scalar.
+    # A pinned index breaks the nesting, so it rules the clause out.
+    if pragmaSimd and len(indexNames) > 1 and not any(i in fixed for i in indexNames):
+      cpp(f'#pragma omp simd collapse({len(indexNames)})')
+      pragmaSimd = False
   if indexNo < 0:
     if firstLoop:
       with cpp.AnonymousScope():
@@ -103,9 +176,14 @@ def forLoops(cpp, indexNames, ranges, body, pragmaSimd=True, prefix='_', fixed={
   return flops
 
 def loopRanges(term: IndexedTensorDescription, loopIndices):
-  overlap = set(loopIndices) & set(term.indices)
+  # NOTE: the term's own index order decides the insertion order here, and that
+  #       order reaches the generated code as the nesting of the unrolled loops
+  #       (Generic._generateUnroll). Iterating an intersection of two sets would
+  #       hand back an order that PYTHONHASHSEED varies between runs.
+  wanted = set(loopIndices)
   bbox = BoundingBox.fromSpp(term.eqspp)
-  return {index: bbox[term.indices.find(index)] for index in overlap}
+  return {index: bbox[position] for position, index in enumerate(term.indices)
+          if index in wanted}
 
 def testLoopRangesEqual(A, B):
   overlap = A.keys() & B.keys()
@@ -121,17 +199,17 @@ def boundingBoxFromLoopRanges(indices, loopRanges):
 def reduceSpp(spp, sourceIndices, targetIndices, fixedIndices):
   return spp.indexSum(sourceIndices, targetIndices, fixedIndices)
 
-def initializeWithZero(cpp, arch, result: TensorDescription, writeBB = None):
+def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
   if writeBB:
     addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))
     if len(addresses) > 0:
       regions = splitByDistance(addresses)
       for region in regions:
         m, M = min(region), max(region)
-        initialAddress = '{} + {}'.format(result.name, m)
-        cpp.memset(initialAddress, M-m+1, arch.typename)
+        initialAddress = f'{result.name} + {m}'
+        cpp.memset(initialAddress, M-m+1, result.datatype.ctype())
   else:
-    cpp.memset(result.name, result.memoryLayout.requiredReals(), arch.typename)
+    cpp.memset(result.name, result.memoryLayout.requiredReals(), result.datatype.ctype())
 
 
 class KernelAttributes:
@@ -187,6 +265,10 @@ class BatchedOperationsAux:
   FORBIDDEN_STREAM_PTR = 'reinterpret_cast<void*>(std::numeric_limits<uintptr_t>::max())'
 
   @classmethod
+  def _get_ptr_type(cls, addressing: AddressingMode):
+    return addressing.pointer_type()
+
+  @classmethod
   def flags_arg(cls, attrs):
     """The batch-flags argument for a kernel that always takes one.
 
@@ -197,42 +279,46 @@ class BatchedOperationsAux:
     """
     return cls.FLAGS_NAME if attrs.flags else 'nullptr'
 
-  def __init__(self, underlying_data_type):
-    self.underlying_data_type = underlying_data_type
+  @classmethod
+  def deduce_addresing(cls, term):
+    if term.addressing is not None:
+      return term.addressing
 
-  def _get_ptr_type(self, addressing):
-    return '**' if addressing == 'pointer_based' else '*'
-
-  def deduce_addresing(self, term):
+    # default deduction
     if term.is_compute_constant:
-      return 'none'
+      return AddressingMode.DIRECT
     if term.is_temporary:
-      return 'strided'
+      return AddressingMode.STRIDED
     else:
-      return 'pointer_based'
+      return AddressingMode.INDIRECT
 
-  def deduce_ptr_arg(self, term, as_const=False):
+  @classmethod
+  def deduce_ptr_arg(cls, term, as_const=False):
     if as_const:
-      addressing = self.deduce_addresing(term)
-      ptr = self._get_ptr_type(addressing)
-      const_ptr_type = f'const {self.underlying_data_type} {ptr}'
+      addressing = cls.deduce_addresing(term)
+      ptr = cls._get_ptr_type(addressing)
+      assert term.datatype is not None
+      datatype = term.datatype.ctype()
+      const_ptr_type = f'const {datatype} {ptr}'
       return f'const_cast<{const_ptr_type}>({term.name})'
     else:
       return f'{term.name}'
 
-  def deduce_offset_arg(self, term):
+  @classmethod
+  def deduce_offset_arg(cls, term):
     if term.is_compute_constant or term.is_temporary:
       return '0'
     else:
-      return f'{self.EXTRA_OFFSET_NAME}_{term.name}'
+      return f'{cls.EXTRA_OFFSET_NAME}_{term.name}'
 
 class TinytcKernelArgument:
 
-  def __init__(self, name: str, call_expr: str, constant: bool, temporary: bool, modified: bool, offset: int = 0):
+  def __init__(self, name: str, datatype: str, call_expr: str, constant: bool, temporary: bool, modified: bool, offset: int = 0):
     """Kernel argument for TinytcWrapper.
 
     Arguments:
     name -- Argument name
+    datatype -- Argument datatype in C/C++
     call_expr -- Expression used in calling wrapper
     constant -- Whether a tensor is invariant to group id
     temporary -- Whether a tensor is stored in a temporary buffer
@@ -253,7 +339,7 @@ class TinytcScalarKernelArgument:
 
 class TinytcWrapper:
 
-  def __init__(self, kernel: Function, arguments: list[TinytcKernelArgument | TinytcScalarKernelArgument], real_type: str, name: str = ''):
+  def __init__(self, kernel: Function, arguments: list[TinytcKernelArgument | TinytcScalarKernelArgument], name: str = ''):
     self.kernel_name = kernel.name
     self.source = Dump().visit(kernel)
     if name:
@@ -268,13 +354,13 @@ class TinytcWrapper:
     self.call_args = []
     for arg in arguments:
         if isinstance(arg, TinytcScalarKernelArgument):
-            self.wrapper_args.append(f'{real_type} {arg.name}')
+            self.wrapper_args.append(f'{arg.datatype} {arg.name}')
             self.wrapper_call_args.append(arg.name)
             self.call_args.append(arg.call_expr)
         else:
           ptr2ptr = '*' if not (arg.constant or arg.temporary) else ''
           const = ' const' if not (arg.modified or arg.temporary) else ''
-          wrapper_type = f'{real_type}{const}*{ptr2ptr}'
+          wrapper_type = f'{arg.datatype}{const}*{ptr2ptr}'
           self.wrapper_args.append(f'{wrapper_type} {arg.name}')
           self.wrapper_call_args.append(arg.name)
           self.call_args.append(f'const_cast<{wrapper_type}>({arg.call_expr})')
@@ -359,3 +445,25 @@ def makeLoad(bb, operand, gid, isComputeConstant: bool, isTemporary: bool):
     return bb.add(SubviewInst(operand, offsetList, sizeList))
   else:
     return bb.add(LoadInst(operand, [gid]))
+
+def toTinyTCType(datatype: Datatype):
+  return {
+    Datatype.BOOL: ScalarType(IntegerType.i1), # presumably, maybe i8
+    Datatype.I8: ScalarType(IntegerType.i8),
+    Datatype.I16: ScalarType(IntegerType.i16),
+    Datatype.I32: ScalarType(IntegerType.i32),
+    Datatype.I64: ScalarType(IntegerType.i64),
+    Datatype.F32: ScalarType(FloatingType.f32),
+    Datatype.F64: ScalarType(FloatingType.f64)
+  }[datatype]
+
+def toTinyTCImmediate(datatype: Datatype, value):
+  return {
+    Datatype.BOOL: lambda value: IntImmValue(IntegerType.i1, value),
+    Datatype.I8: lambda value: IntImmValue(IntegerType.i8, value),
+    Datatype.I16: lambda value: IntImmValue(IntegerType.i16, value),
+    Datatype.I32: lambda value: IntImmValue(IntegerType.i32, value),
+    Datatype.I64: lambda value: IntImmValue(IntegerType.i64, value),
+    Datatype.F32: lambda value: FloatImmValue(FloatingType.f32, value),
+    Datatype.F64: lambda value: FloatImmValue(FloatingType.f64, value),
+  }[datatype](value)

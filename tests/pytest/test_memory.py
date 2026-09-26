@@ -212,3 +212,63 @@ class TestAlignmentArchIsolation:
         # This test uses no ``arch`` fixture and must see a reset global.
         # (If this fails, the ``arch`` fixture's teardown is broken.)
         assert DenseMemoryLayout.ALIGNMENT_ARCH is None
+
+
+class TestRankZeroLayout:
+    """A layout with no axes still has to answer every question asked of it."""
+
+    def test_alignment_is_not_promised_where_there_is_no_column(self):
+        from yateto.memory import DenseMemoryLayout
+        layout = DenseMemoryLayout(())
+        assert layout.alignedStride() is False
+        assert layout.mayVectorizeDim(0) is False
+
+    def test_a_rank_zero_layout_may_ask_for_alignment(self):
+        """`alignStride` reaches every layout the generator builds, including
+        the ones with nothing to align."""
+        from yateto.memory import DenseMemoryLayout
+        layout = DenseMemoryLayout((), alignStride=True)
+        assert layout.requiredReals() == 1
+
+    def test_a_rank_zero_tensor_with_values_reaches_the_generator(self):
+        import io
+        import contextlib
+        import tempfile
+        from yateto import Generator, Tensor, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+
+        A = Tensor('A', (8, 8))
+        C = Tensor('C', (8, 8))
+        factor = Tensor('factor', (), spp={(): 2.5})
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        generator.add('k', C['ij'] <= factor[''] * A['ij'])
+        with tempfile.TemporaryDirectory() as out:
+            with contextlib.redirect_stdout(io.StringIO()):
+                generator.generate(out, gemm_cfg=GeneratorCollection([]))
+
+
+class TestPack:
+    """``pack`` turns a value dictionary into the flat array the layout describes."""
+
+    def test_values_land_at_their_addresses(self):
+        layout = DenseMemoryLayout((2, 2))
+        packed = layout.pack({(0, 0): 1.0, (1, 1): 2.0})
+
+        assert packed == [1.0, 0, 0, 2.0]
+
+    def test_length_is_the_storage_requirement(self):
+        layout = DenseMemoryLayout((3, 4))
+
+        assert len(layout.pack({})) == layout.requiredReals()
+
+    def test_unmapped_slots_hold_the_fill(self):
+        layout = DenseMemoryLayout((2, 2))
+
+        assert layout.pack({}, fill=7) == [7, 7, 7, 7]
+
+    def test_entries_are_not_rendered(self):
+        """Whatever went in comes back; spelling it is the emitter's business."""
+        layout = DenseMemoryLayout((2, 2))
+        packed = layout.pack({(0, 0): 'nan'})
+
+        assert packed[0] == 'nan'

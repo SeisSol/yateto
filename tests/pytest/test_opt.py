@@ -5,7 +5,7 @@ Direct tests for ``yateto.ast.opt.strengthReduction``.
 optimal pairing of tensor operands in a multi-way contraction (cf.
 Lam et al., 1997 - referenced in the paper).  Given a list of terms
 and target indices, it returns an AST built from nested
-``Product`` / ``IndexSum`` nodes whose total cost (per the supplied
+``Elementwise`` / ``Reduction`` nodes whose total cost (per the supplied
 cost estimator) is minimal.
 
 The transformer ``ast.transformer.StrengthReduction`` wraps this into a
@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import pytest
 
+from yateto import ops
 from yateto import Tensor
 from yateto.ast.cost import ShapeCostEstimator
 from yateto.ast.indices import Indices
-from yateto.ast.node import IndexedTensor, IndexSum, Product
+from yateto.ast.node import IndexedTensor, Reduction, Elementwise
 from yateto.ast.opt import strengthReduction
 
 
@@ -60,10 +61,10 @@ class TestDegenerate:
 
     def test_single_term_with_summation_wraps_in_indexsum(self):
         # Summing the only term over index ``j`` (not in target) must
-        # emit an IndexSum even though there's no Product.
+        # emit an Reduction even though there's no Elementwise.
         a = _it("A", (3, 4), "ij")
         tree = strengthReduction([a], Indices("i", (3,)), ShapeCostEstimator())
-        assert isinstance(tree, IndexSum)
+        assert isinstance(tree, Reduction)
         # The inner node is the original operand.
         assert tree.term() is a
 
@@ -76,14 +77,14 @@ class TestDegenerate:
 class TestPairwiseMatmul:
     def test_matmul_structure(self):
         # A @ B, summing over k.  Expected tree shape:
-        #   IndexSum(Product(A, B), k)
+        #   Reduction(ops.Add(), Elementwise(ops.Mul(), A, B), k)
         A = _it("A", (3, 4), "ik")
         B = _it("B", (4, 5), "kj")
         tree = strengthReduction([A, B], Indices("ij", (3, 5)),
                                  ShapeCostEstimator())
 
-        assert isinstance(tree, IndexSum)
-        assert isinstance(tree.term(), Product)
+        assert isinstance(tree, Reduction)
+        assert isinstance(tree.term(), Elementwise)
         # Both leaves are preserved.
         assert {c.tensor.name() for c in tree.term()} == {"A", "B"}
 
@@ -102,10 +103,10 @@ class TestThreeWay:
         # target: I x L
         #
         # The shape-cost estimator charges ``product(shape)`` per
-        # Product node.  Pairing (B, C) first gives a J x L intermediate
+        # Elementwise node.  Pairing (B, C) first gives a J x L intermediate
         # (3*100*2 = 600 weight); pairing (A, B) first gives a I x K
         # intermediate (2*3*100 = 600 weight).  Both are equally cheap
-        # for the first Product, but the next Product matters:
+        # for the first Elementwise, but the next Elementwise matters:
         #
         #   ((AB) C) -> I x K * K x L -> 2*100*2 = 400
         #   (A (BC)) -> I x J * J x L -> 2*3*2   = 12
@@ -117,30 +118,30 @@ class TestThreeWay:
         C = _it("C", (100, 2), "kl")
         tree = strengthReduction([A, B, C], Indices("il", (2, 2)),
                                  ShapeCostEstimator())
-        # The outer Product should have A on one side and a BC sub-tree
-        # (possibly wrapped in an IndexSum) on the other.
-        # Drill in until we find a Product of Products (i.e. a Product
-        # whose argument is itself a Product-based subtree).
+        # The outer Elementwise should have A on one side and a BC sub-tree
+        # (possibly wrapped in an Reduction) on the other.
+        # Drill in until we find a Elementwise of Elementwises (i.e. a Elementwise
+        # whose argument is itself a Elementwise-based subtree).
         products = []
         def collect(node):
-            if isinstance(node, Product):
+            if isinstance(node, Elementwise):
                 products.append(node)
             for c in node:
                 collect(c)
         collect(tree)
-        assert products, "No Product node found in the strength-reduced tree"
+        assert products, "No Elementwise node found in the strength-reduced tree"
 
         # The cheaper pairing keeps the A leaf paired *last* with the
         # (BC) intermediate.  Equivalently: A is not paired together
-        # with B directly.  Check by looking at the innermost Product
+        # with B directly.  Check by looking at the innermost Elementwise
         # - which should be BC, not AB.
-        innermost = min(products, key=lambda p: _count(Product, p))
+        innermost = min(products, key=lambda p: _count(Elementwise, p))
         inner_names = {c.tensor.name() for c in innermost
                        if isinstance(c, IndexedTensor)}
         # The innermost product is between leaves; neither side is A.
         assert "A" not in inner_names, (
             f"Strength reducer picked the more expensive pairing: "
-            f"innermost Product is {inner_names}"
+            f"innermost Elementwise is {inner_names}"
         )
 
 
@@ -158,10 +159,10 @@ class TestReductionOnly:
         B = _it("B", (4,), "j")
         tree = strengthReduction([A, B], Indices("", ()),
                                  ShapeCostEstimator())
-        # Result has the two reduction axes lifted out as IndexSum.
-        assert _has(IndexSum, tree)
-        # And exactly one Product.
-        assert _count(Product, tree) == 1
+        # Result has the two reduction axes lifted out as Reduction.
+        assert _has(Reduction, tree)
+        # And exactly one Elementwise.
+        assert _count(Elementwise, tree) == 1
 
     def test_sum_indices_are_all_eliminated(self):
         # Any target-free index of A must be summed out before we exit.
@@ -169,6 +170,6 @@ class TestReductionOnly:
         # target = "i" -> j is a sum index
         tree = strengthReduction([A], Indices("i", (3,)),
                                  ShapeCostEstimator())
-        assert isinstance(tree, IndexSum)
+        assert isinstance(tree, Reduction)
         # The sum index should be j.
-        assert str(tree.sumIndex()) == "j"
+        assert str(tree.reductionIndex()) == "j"

@@ -1,9 +1,11 @@
-from numpy import ndindex, arange, float64, add, einsum
+import numpy as np
+from numpy import ndindex, arange, float64, add, einsum, apply_along_axis
 import math
 import collections
 import itertools
 import re
 import os.path
+from .. import ops
 from .node import Op
 from .indices import LoGCost
 from .log import LoG
@@ -73,10 +75,11 @@ class FindTensors(Visitor):
     return tensors
 
   def visit_IndexedTensor(self, node):
-    if node.tensor is not None and node.tensor.temporary:
+    # by-value operands are scalars, not tensor arguments; they are collected
+    # separately by ScalarsSet
+    if node.tensor is None or node.tensor.temporary or node.tensor.isPassedByValue():
       return {}
-    else:
-      return {node.name(): node.tensor}
+    return {node.name(): node.tensor}
 
 class FindIndexPermutations(Visitor):
   class Variant(object):
@@ -110,51 +113,67 @@ class FindIndexPermutations(Visitor):
     variants[fixedPerm] = self.Variant(minCost, minInd)
     return variants
 
-  def allPermutationsNoCostBinaryOp(self, node):
+  def allPermutationsNoCostNAryOp(self, node):
     permutationVariants = self.findVariants(node)
-    lV = permutationVariants[node.leftTerm()]
-    rV = permutationVariants[node.rightTerm()]
+    V = [permutationVariants[child] for child in node]
     minCost = LoGCost()
-    minAind = None
-    minBind = None
-    for Aind in sorted(lV):
-      for Bind in sorted(rV):
-        cost = lV[Aind]._cost + rV[Bind]._cost
-        if cost < minCost:
-          minCost = cost
-          minAind = Aind
-          minBind = Bind
-    assert minAind is not None and minBind is not None
+    minInd = None
+
+    for ind in itertools.product(*V):
+
+      cost = sum((V[i][Vind]._cost for i,Vind in enumerate(ind)),
+                  LoGCost.addIdentity())
+
+      if cost < minCost:
+        minCost = cost
+        minInd = ind
+
+    assert minInd is not None
+
     iterator = itertools.permutations(node.indices)
-    permutationVariants[node] = {''.join(Cs): self.Variant(minCost, [minAind, minBind]) for Cs in iterator}
+    permutationVariants[node] = {''.join(Cs): self.Variant(minCost, list(minInd)) for Cs in iterator}
     return permutationVariants
 
   def generic_visit(self, node):
     permutationVariants = self.findVariants(node)
     variants = self.variantsFixedRootPermutation(node, str(node.indices), permutationVariants)
-    assert variants, 'Could not find implementation for {}.'.format(type(node))
+    assert variants, f'Could not find implementation for {node}.'
     permutationVariants[node] = variants
     return permutationVariants
 
-  def visit_Add(self, node):
+  def visit_Accumulate(self, node):
+    if node.optype != ops.Add():
+      return self.allPermutationsNoCostNAryOp(node)
+    # a sum is lowered into a chain of accumulating stores, so the root and
+    # every operand may carry their own permutation
     permutationVariants = self.findVariants(node)
     iterator = itertools.permutations(node.indices)
     variants = dict()
     for Cs in iterator:
       variants.update( self.variantsFixedRootPermutation(node, ''.join(Cs), permutationVariants) )
-    assert variants, 'Could not find implementation for Add.'
+    assert variants, f'Could not find implementation for {node}.'
     permutationVariants[node] = variants
     return permutationVariants
 
-  def visit_ScalarMultiplication(self, node):
-    permutationVariants = self.visit(node.term())
-    permutationVariants[node] = {key: self.Variant(variant._cost, [key]) for key,variant in permutationVariants[node.term()].items()}
+  def visit_Elementwise(self, node):
+    scaling = node.scalingOperands()
+    if scaling is None:
+      return self.allPermutationsNoCostNAryOp(node)
+
+    # a scaling keeps the permutation of the term it scales; the rank-0 operand
+    # has only the empty one, but still needs an entry, since the choices are
+    # handed back to the children in order
+    term = scaling[1]
+    permutationVariants = self.findVariants(node)
+    variants = dict()
+    for key, variant in permutationVariants[term].items():
+      choices = [key if child is term else str(child.indices) for child in node]
+      variants[key] = self.Variant(variant._cost, choices)
+    assert variants, f'Could not find implementation for {node}.'
+    permutationVariants[node] = variants
     return permutationVariants
 
-  def visit_Product(self, node):
-    return self.allPermutationsNoCostBinaryOp(node)
-
-  def visit_IndexSum(self, node):
+  def visit_Reduction(self, node):
     permutationVariants = self.findVariants(node)
     tV = permutationVariants[node.term()]
     minCost = LoGCost()
@@ -301,27 +320,43 @@ class ComputeConstantExpression(Visitor):
   def visit_Einsum(self, node):
     terms = self.generic_visit(node)
     childIndices = [child.indices for child in node]
-    assert None not in childIndices and node.indices is not None, 'Use DeduceIndices before {}.'.format(self.__class__.__name__)
+    assert None not in childIndices and node.indices is not None, f'Use DeduceIndices before {self.__class__.__name__}.'
     einsumDescription = ','.join(indices.tostring() for indices in childIndices)
     einsumDescription = '{}->{}'.format(einsumDescription, node.indices.tostring())
     return einsum(einsumDescription, *terms)
 
-  def visit_Add(self, node):
-    terms = self.generic_visit(node)
-    assert len(terms) > 1
-    permute = lambda indices, tensor: tensor.transpose(tuple(indices.find(idx) for idx in node.indices))
-    return reduce(add, [permute(child.indices, terms[i]) for i,child in enumerate(node)])
-
-  def visit_ScalarMultiplication(self, node):
-    assert node.is_constant() is not None, '{} may only be used when all involved scalars are constant.'.format(self.__class__.__name__)
-    terms = self.generic_visit(node)
-    assert len(terms) == 1
-    return node.scalar() * terms[0]
-
   def visit_IndexedTensor(self, node):
     term = node.tensor.values_as_ndarray(self._dtype)
-    assert term is not None, '{} may only be used when all involved tensors are constant.'.format(self.__class__.__name__)
+    assert term is not None, f'{self.__class__.__name__} may only be used when all involved tensors are constant.'
     return term
+
+  def visit_Reduction(self, node):
+    terms = self.generic_visit(node)
+    assert len(terms) == 1
+    # find() wants a single index name, not the Indices object reductionIndex() returns
+    indexpos = node.term().indices.find(node.sumIndexName())
+    return apply_along_axis(lambda x: reduce(node.optype.call, x), indexpos, terms[0])
+
+  def visit_Elementwise(self, node):
+    terms = self.generic_visit(node)
+    target = node.indices.tostring()
+
+    def align(indices, tensor):
+      # reorder the operand's own indices into the node's order, then give it a
+      # length-1 axis for every index it does not carry, so numpy broadcasts it
+      own = indices.tostring()
+      order = ''.join(idx for idx in target if idx in own)
+      tensor = np.einsum(f'{own}->{order}', tensor)
+      shape = tuple(tensor.shape[order.index(idx)] if idx in order else 1 for idx in target)
+      return tensor.reshape(shape)
+
+    aligned = [align(child.indices, terms[i]) for i,child in enumerate(node)]
+    return node.optype.call(*node.fillTerms(aligned))
+
+  def visit_Accumulate(self, node):
+    terms = self.generic_visit(node)
+    permute = lambda indices, tensor: tensor.transpose(tuple(indices.find(idx) for idx in node.indices))
+    return reduce(node.optype.call, [permute(child.indices, terms[i]) for i,child in enumerate(node)])
 
 class ComputeIndexSet(CachedVisitor):
   def generic_visit(self, node):

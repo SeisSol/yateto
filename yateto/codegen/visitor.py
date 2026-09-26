@@ -1,25 +1,47 @@
 import collections
+import contextlib
 import operator
 from functools import reduce
 from io import StringIO
 from ..memory import DenseMemoryLayout
-from ..controlflow.visitor import ScalarsSet, SortedGlobalsList, SortedPrefetchList
+from .. import aspp
+from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
+from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
-from ..type import Tensor
 from .code import Cpp
 from .factory import *
 from .common import BatchedOperationsAux, KernelAttributes
-from ..type import Scalar
+from ..type import Scalar, Tensor, Datatype
 
 import numpy as np
 
 SUPPORT_LIBRARY_NAMESPACE = 'yateto'
+# Whatever a consumer may call from device code carries the marker from
+# yateto/Marker.h. constexpr alone is not enough: clang treats a constexpr
+# function as callable from both sides, but nvcc only does so with
+# --expt-relaxed-constexpr, and neither covers a function that is not one.
+HOSTDEVICE = 'YATETO_HOSTDEVICE'
 CONSTEXPR = 'constexpr'
 STATIC = 'static'
 INLINE = 'inline'
-MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
-STATIC_INLINE = '{} {}'.format(STATIC, INLINE)
+MODIFIERS = '{} {} {}'.format(HOSTDEVICE, CONSTEXPR, STATIC)
+STATIC_INLINE = '{} {} {}'.format(HOSTDEVICE, STATIC, INLINE)
+HOSTDEVICE_INLINE = '{} {}'.format(HOSTDEVICE, INLINE)
+#: Alignment floor, for the image and for every entry in it.
+#:
+#: For the image, because an entry's place inside it is an offset from its
+#: base: the alignment an entry was given only survives a copy if the
+#: destination is aligned at least this far.
+#:
+#: For each entry, because entries are not only read one at a time. Constant
+#: operands that a merged kernel picks between at runtime have to be reachable
+#: with one stride, and a floor every entry meets is what makes the stride the
+#: same for all of them regardless of how large each one happens to be. An
+#: entry whose layout asks for more than the floor gets more; nothing gets
+#: less, so consumers are told the number by poolAlignment() rather than being
+#: expected to know it.
+POOL_ALIGNMENT = 128
 
 def groupSizeToStride(groupSize):
   if len(groupSize) == 0:
@@ -69,6 +91,18 @@ class KernelGenerator(object):
     else:
       return self.deduce_single_scalar(action.scalar)
 
+  def _generateScalarPrologue(self, cpp, cfg):
+    """Compute every scalar-only expression up front.
+
+    They read nothing the kernel produces, so hoisting them here means they are
+    evaluated once, before any kernel or external routine call, rather than per
+    statement. A guarded statement gets its factor computed regardless of the
+    guard, which only matters for an expression that can trap.
+    """
+    for scalar in DerivedScalarsList().visit(cfg):
+      datatype = scalar.getDatatype(self._arch)
+      cpp(f'{datatype.ctype()} const {scalar.name()} = {scalar.expression.ccode(self._arch)};')
+
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
     hwFlops = 0
     # temporary memory required (per element in case of gpu)
@@ -76,28 +110,31 @@ class KernelGenerator(object):
     #       an provided by the user
     required_tmp_mem = 0
     cfg = DetermineLocalInitialization().visit(cfg)
+    self._generateScalarPrologue(cpp, cfg)
     if factory.allocateTemporary():
       localPtrs = set()
       for pp in cfg:
         localPtrs.update(pp.bufferMap.keys())
-      if localPtrs:
-        cpp( '{}{};'.format(self._arch.typename, ','.join(map(lambda x: ' *' + str(x), localPtrs))) )
+      for localPtr in sorted(localPtrs, key=str):
+        cpp(f'{localPtr.datatype.ctype()}* {localPtr};')
     for pp in cfg:
       if factory.allocateTemporary():
         for buf, size in pp.initBuffer.items():
-          required_tmp_mem += size * self._arch.bytesPerReal
+          required_tmp_mem += size
           bufname = self._bufferName(buf)
-          factory.temporary(bufname, size)
+          # NOTE: size is in bytes here, hence the untyped (int8_t) buffer
+          factory.temporary(bufname, size, None)
         for local, buf in pp.bufferMap.items():
-          cpp('{} = {};'.format(local, self._bufferName(buf)))
+          # buffers are untyped storage; each pointer is cast to its own type
+          cpp(f'{local} = reinterpret_cast<{local.datatype.ctype()}*>({self._bufferName(buf)});')
       action = pp.action
       if action:
         scalar = self.deduce_scalar(action)
         if action.isRHSExpression():
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
-          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.add, scalar, prefetchName, routineCache, gemm_cfg)
+          hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
-          hwFlops += factory.simple(action.result, action.term, action.add, scalar, routineCache, gemm_cfg)
+          hwFlops += factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg)
     return hwFlops, required_tmp_mem
 
 class OptimizedKernelGenerator(KernelGenerator):
@@ -113,12 +150,16 @@ class OptimizedKernelGenerator(KernelGenerator):
   MEMBER_FUNCTION_PTR_NAME = 'member_function_ptr'
   TEMP_MEM_REQUIRED_NAME = 'TmpMemRequiredInBytes'
   TEMP_MAX_MEM_REQUIRED_NAME = 'TmpMaxMemRequiredInBytes'
+  BIND_GLOBALS_NAME = 'bindGlobals'
+  BIND_GLOBALS_ARGUMENT = 'pool'
 
 
-  def __init__(self, arch, routineCache, routine_exporters):
+  def __init__(self, arch, routineCache, routine_exporters, namespace=''):
     super().__init__(arch)
     self._routineCache = routineCache
     self._routine_exporters = routine_exporters
+    self._poolType = '::{}{}'.format('{}::'.format(namespace) if namespace else '',
+                                     PoolGenerator.POOL_STRUCT_NAME)
 
     self._routine_factories = {
       'cpu': OptimizedKernelFactory,
@@ -142,6 +183,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                  function,
                  tmp_mem_size,
                  is_compute_constant_tensors,
+                 datatype,
                  target,
                  attrs):
 
@@ -157,6 +199,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       self.function = function
       self.tmp_mem_size = tmp_mem_size
       self.is_compute_constant_tensors = is_compute_constant_tensors
+      self.datatype = datatype
       self.target = target
       self.attrs = attrs
 
@@ -173,22 +216,34 @@ class OptimizedKernelGenerator(KernelGenerator):
         tensors[base_name] = {group}
 
   def generateKernelOutline(self, nonZeroFlops, cfg, gemm_cfg, target, attrs=None):
-    scalarsP = ScalarsSet().visit(cfg)
+    # NOTE: sorted, because these become the kernel's scalar members and a set
+    #       enumerates in an order PYTHONHASHSEED varies between runs.
+    scalarsP = sorted(ScalarsSet().visit(cfg), key=str)
     variables = SortedGlobalsList().visit(cfg)
     tensors = collections.OrderedDict()
     writable = dict()
     is_compute_constant_tensors = dict()
     scalars = collections.OrderedDict()
+    datatype = dict()
 
     inConstTensors = {}
     inTensors = {}
     outTensors = {}
 
-    for scalar in scalarsP:
+    # A by-value operand is a scalar wherever it turns up, not only in the
+    # scaling slot of an action. Collected here rather than only from there,
+    # because a kernel that uses one both ways would otherwise declare the name
+    # twice -- once by value and once as a pointer -- and not compile.
+    byValue = [var.tensor for var in variables if var.tensor.isPassedByValue()]
+    variables = [var for var in variables if not var.tensor.isPassedByValue()]
+    for scalar in sorted(set(scalarsP) | set(byValue), key=str):
       self.KernelOutline._addTensor(scalar, scalars)
+      datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
     for var in variables:
       self.KernelOutline._addTensor(var.tensor, tensors)
       bn = var.tensor.baseNameWithNamespace()
+
+      datatype[bn] = var.datatype
 
       if bn in writable:
         if var.writable:
@@ -241,6 +296,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                               function,
                               tmp_memory,
                               is_compute_constant_tensors,
+                              datatype,
                               target,
                               attrs)
 
@@ -249,7 +305,12 @@ class OptimizedKernelGenerator(KernelGenerator):
     for key, value in koEntries.items():
       if key not in entries:
         entries[key] = value
-      else:
+      elif entries[key] != value:
+        if isinstance(value, Datatype) or isinstance(entries[key], Datatype):
+          # NOTE: Datatype is a plain Enum; `|` would raise an opaque TypeError
+          raise ValueError(
+            f'Conflicting datatypes for "{key}" across the kernels of a family: '
+            f'{entries[key]} vs. {value}.')
         entries[key] = entries[key] | value
 
 
@@ -259,6 +320,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     writable = dict()
     scalars = collections.OrderedDict()
     is_compute_constant_tensors = dict()
+    datatype = dict()
     for ko in kernelOutlines:
       if ko:
         self._addFromKO(ko.scalars, scalars)
@@ -266,6 +328,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         self._addFromKO(ko.writable, writable)
         self._addFromKO(ko.prefetch, prefetch)
         self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
+        self._addFromKO(ko.datatype, datatype)
 
     target = kernelOutlines[-1].target
     is_same_target = True
@@ -326,13 +389,15 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         if target == 'gpu':
           # LinearAllocatorT controls external extra mem. allocated on gpu for tmp. variables
-          header(f'yateto::LinearAllocatorT<{self._arch.typename}> linearAllocator;')
+          # the buffers are declared as int8_t*, and char and int8_t are
+          # distinct types, so the allocator has to hand out int8_t* as well
+          header(f'yateto::LinearAllocatorT<{Datatype.I8.ctype()}> linearAllocator;')
 
         header.emptyline()
 
-        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, target):
+        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, datatype, target):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
-          typ = self._arch.typename
+          typ = datatype.ctype()
           ptr_type = '**' if not is_constant and target == 'gpu' else '*'
           if not writable:
             typ += ' const'
@@ -341,11 +406,11 @@ class OptimizedKernelGenerator(KernelGenerator):
             container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
             header(f'{class_name}::{container_type} {base_name};')
           else:
-            header(f'{typ}{ptr_type} {base_name}{{}};')
+            header(f'{typ}{ptr_type} {base_name}{"{"}nullptr{"}"};')
 
-        def scalarArgs(base_name_with_namespace, groups):
+        def scalarArgs(base_name_with_namespace, datatype, groups):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
-          typ = self._arch.typename
+          typ = datatype.ctype()
           if len(next(iter(groups))) > 0:
             class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
             container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}>'
@@ -355,13 +420,39 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         for baseName, groups in scalars.items():
           scalarArgs(baseName,
+                     datatype[baseName],
                      groups)
         for baseName, groups in tensors.items():
           kernelArgs(baseName,
                      groups,
                      writable[baseName],
                      is_compute_constant_tensors[baseName],
+                     datatype[baseName],
                      target)
+        header.emptyline()
+
+        # Which of the members the caller does not have to fill in itself.
+        # Writable ones are excluded even when they carry values: the member
+        # is a pointer to mutable memory and the pool hands out const.
+        constants = [baseName for baseName in tensors
+                     if is_compute_constant_tensors[baseName] and not writable[baseName]]
+        # Emitted even when there is nothing to bind, so that "bind the globals
+        # of every kernel" is a rule a caller can follow without knowing which
+        # operands a kernel happens to have. The failure modes are not
+        # symmetric: a missing call is a null pointer at run time, a redundant
+        # one is nothing. It also keeps the interface stable when a kernel
+        # gains or loses its last constant operand.
+        header('//! Points every constant operand at its entry in `{}`.'.format(
+          self.BIND_GLOBALS_ARGUMENT))
+        with header.Function(self.BIND_GLOBALS_NAME,
+                             '{} const& {}'.format(self._poolType, self.BIND_GLOBALS_ARGUMENT)):
+          if not constants:
+            header('static_cast<void>({});'.format(self.BIND_GLOBALS_ARGUMENT))
+          for baseName in constants:
+            _, memberName = Tensor.splitBasename(baseName)
+            header('{} = {}.{};'.format(memberName,
+                                        self.BIND_GLOBALS_ARGUMENT,
+                                        PoolGenerator.memberName(baseName)))
         header.emptyline()
 
         # containers with extra offsets for GPU-like computations
@@ -392,7 +483,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         if len(prefetch) > 0:
           with header.Struct(self.PREFETCHSTRUCT_NAME):
             for baseName, groups in prefetch.items():
-              kernelArgs(baseName, groups, writable=False, is_constant=False, target='any')
+              kernelArgs(baseName, groups, writable=False, is_constant=False, datatype=self._arch.datatype, target='any')
           header('{} {};'.format(self.PREFETCHSTRUCT_NAME, self.PREFETCHVAR_NAME))
           header.emptyline()
 
@@ -410,15 +501,21 @@ class OptimizedKernelGenerator(KernelGenerator):
           ))
           args = typedNdArgs(len(familyStride), self._arch.uintTypename)
           indexF = indexFun(familyStride)
+          familySize = len(kernelOutlines)
+          boundsCheck = 'assert({} < {});'.format(indexF, familySize)
           with header.Function(self.FIND_EXECUTE_NAME, args, '{} {}'.format(MODIFIERS, self.MEMBER_FUNCTION_PTR_NAME)):
+            header(boundsCheck)
             header('return {}[{}];'.format(self.EXECUTE_ARRAY_NAME, indexF))
           with header.Function(self.EXECUTE_NAME, args, '{} void'.format(INLINE)):
-            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ', '.join(ndargs(len(familyStride)))))
+            ndArgList = ', '.join(ndargs(len(familyStride)))
+            header('assert({}({}) != nullptr);'.format(self.FIND_EXECUTE_NAME, ndArgList))
+            header('(this->*{}({}))();'.format(self.FIND_EXECUTE_NAME, ndArgList))
 
           indexer = f'[{indexF}]'
         else:
           args = ''
           indexer = ''
+          boundsCheck = None
 
         aux_functions = [self.NONZEROFLOPS_NAME,
                           self.HARDWAREFLOPS_NAME,
@@ -430,16 +527,10 @@ class OptimizedKernelGenerator(KernelGenerator):
         for function in aux_functions:
           funName = function[:1].lower() + function[1:]
           with header.Function(funName, args, f'{MODIFIERS} {self._arch.ulongTypename}'):
+            if boundsCheck is not None:
+              header(boundsCheck)
             header(f'return {function}{indexer};')
 
-    if familyStride is not None:
-      cpp('{0} {1}::{2}::{3} {1}::{2}::{4}[];'.format(
-        CONSTEXPR,
-        self.NAMESPACE,
-        name,
-        self.MEMBER_FUNCTION_PTR_NAME,
-        self.EXECUTE_ARRAY_NAME
-      ))
     for index, kernelOutline in enumerate(kernelOutlines):
       if kernelOutline is None:
         continue
@@ -468,6 +559,11 @@ class OptimizedKernelGenerator(KernelGenerator):
 
 class UnitTestGenerator(KernelGenerator):
   KERNEL_VAR = 'krnl'
+  CASE_VAR = '_case'
+  #: How many condition assignments to enumerate at most. Every one costs a
+  #: full run of the kernel and of the reference, and a kernel guarded by
+  #: more conditions than this is rare enough to be covered by hand.
+  MAX_CASES = 16
   STREAM = '_stream'
   TMP_MEM = '_tmpMem'
   TMP_SIZE = 128 * 8
@@ -480,7 +576,7 @@ class UnitTestGenerator(KernelGenerator):
   def deduce_single_scalar(self, scalar):
     if scalar is None:
       return 1.0
-    elif isinstance(scalar, Scalar):
+    elif isinstance(scalar, Tensor):
       return self._tensorNameS(scalar)
     else:
       return scalar
@@ -508,7 +604,7 @@ class UnitTestGenerator(KernelGenerator):
     elif writable[var.tensor.baseNameWithNamespace()]:
       return self._devPtrTensorName(var)
     else:
-      return f'const_cast<{self._arch.typename} const**>({self._devPtrTensorName(var)})'
+      return f'const_cast<{var.datatype.ctype()} const**>({self._devPtrTensorName(var)})'
 
   @classmethod
   def _nameS(cls, var):
@@ -540,9 +636,10 @@ class UnitTestGenerator(KernelGenerator):
     """Copies a tensor out of the layout the kernel stores it in into a dense
     buffer, through the view the initializer generates for it."""
     shape = var.memoryLayout().shape()
-    cpp('{supportNS}::DenseTensorView<{dim},{arch.typename},{arch.uintTypename}> {viewName}({denseName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
+    cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({denseName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
         supportNS = SUPPORT_LIBRARY_NAMESPACE,
         dim=len(shape),
+        datatype=var.datatype.ctype(),
         arch = self._arch,
         denseName=denseName,
         viewName=viewName,
@@ -575,6 +672,32 @@ class UnitTestGenerator(KernelGenerator):
   def _groupIndex(self, var):
     gstr = self._groupStr(var)
     return '({})'.format(gstr) if gstr else ''
+
+  @staticmethod
+  def _conditionVariables(cfg):
+    """The values the kernel's guards read, in a stable order.
+
+    A condition may be written inside the kernel, in which case its later
+    reads are a different value under the same variable; the variable is
+    what gets filled, so it is what is enumerated.
+    """
+    seen = {}
+    for pp in cfg:
+      action = pp.action
+      if action is None:
+        continue
+      guard = Guard.coerce(action.condition)
+      if guard.isAlways() or guard.isNever():
+        continue
+      for var in guard.variables():
+        seen.setdefault(str(var), var)
+    return [seen[name] for name in sorted(seen)]
+
+  @classmethod
+  def _conditionCases(cls, conditions):
+    if not conditions:
+      return 1
+    return min(2 ** len(conditions), cls.MAX_CASES)
 
   def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None, attrs=None):
     if target == 'gpu':
@@ -614,104 +737,121 @@ class UnitTestGenerator(KernelGenerator):
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
+    conditions = self._conditionVariables(cfg)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
-      factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
+      # A guarded kernel is several kernels: which statements run depends on
+      # the conditions, and filling them from the usual pattern picks one
+      # assignment out of the 2^n there are. The whole body -- fill, run,
+      # reference, compare -- is repeated once per assignment instead, so a
+      # branch that is never taken in one case is taken in another. Every
+      # declaration is inside the loop, so each case starts from nothing.
+      cases = self._conditionCases(conditions)
+      # nullcontext, not an anonymous scope: a kernel with no guard gets the
+      # test it always got, down to the indentation
+      loop = cpp.For(f'int {self.CASE_VAR} = 0; {self.CASE_VAR} < {cases}; ++{self.CASE_VAR}') \
+             if cases > 1 else contextlib.nullcontext()
+      with loop:
+       factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
 
-      for i,scalar in enumerate(scalars):
-        cpp('{} {} = {};'.format(self._arch.typename, self._tensorNameS(scalar), float(i+2)))
+       for i,scalar in enumerate(scalars):
+         cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
 
-      for var in variables:
-        factory.tensor(var.tensor, self._tensorName(var))
-        factory.temporary(self._name(var), var.memoryLayout().requiredReals(), iniZero=True)
-        self._emitUnpack(cpp, var, self._tensorName(var), self._name(var),
-                         self._viewName(var))
-        cpp.emptyline()
+       conditionBit = {str(var): i for i, var in enumerate(conditions)}
+       for var in variables:
+         bit = conditionBit.get(str(var))
+         factory.tensor(var.tensor, self._tensorName(var),
+                        caseVar=self.CASE_VAR if (bit is not None and cases > 1) else None,
+                        caseBit=bit)
+         factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
+         self._emitUnpack(cpp, var, self._tensorName(var), self._name(var),
+                          self._viewName(var))
+         cpp.emptyline()
 
-      kernelTensorName = self._tensorName
-      if device_test:
-        writable = dict()
-        for var in variables:
-          bn = var.tensor.baseNameWithNamespace()
-          writable[bn] = writable.get(bn, False) or var.writable
+       kernelTensorName = self._tensorName
+       if device_test:
+         writable = dict()
+         for var in variables:
+           bn = var.tensor.baseNameWithNamespace()
+           writable[bn] = writable.get(bn, False) or var.writable
 
-        kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
+         kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
 
-        stream_new(self.STREAM)
-        data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{self._arch.typename}*', self.STREAM)
-        if use_flags:
-          # A kernel that declares the batch flags reads one per element and
-          # skips the ones that are off. The member defaults to a null
-          # pointer, so leaving it unset is not a kernel that computes
-          # everything -- it is a null dereference on the device, and the
-          # context it kills takes every kernel launched after it with it.
-          # The reference computes unconditionally, so the one element is on.
-          cpp(f'unsigned {self.FLAGS_MEM}[1] = {{1}};')
-          data_malloc(self.DEV_FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', 'unsigned*', self.STREAM)
-        for var in variables:
-          data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{self._arch.typename}*', self.STREAM)
-          data_malloc(self._devPtrTensorName(var), f'sizeof({self._arch.typename}*)', f'{self._arch.typename}**', self.STREAM)
-        for var in variables:
-          data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
-          data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({self._arch.typename}*)', self.STREAM)
-        if use_flags:
-          data_memcpy(self.DEV_FLAGS_MEM, self.FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', self.STREAM)
-        stream_wait(self.STREAM)
-        cpp.emptyline()
+         stream_new(self.STREAM)
+         data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{Datatype.I8.ctype()}*', self.STREAM)
+         if use_flags:
+           # A kernel that declares the batch flags reads one per element and
+           # skips the ones that are off. The member defaults to a null
+           # pointer, so leaving it unset is not a kernel that computes
+           # everything -- it is a null dereference on the device, and the
+           # context it kills takes every kernel launched after it with it.
+           # The reference computes unconditionally, so the one element is on.
+           cpp(f'unsigned {self.FLAGS_MEM}[1] = {{1}};')
+           data_malloc(self.DEV_FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', 'unsigned*', self.STREAM)
+         for var in variables:
+           data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
+           data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)
+         for var in variables:
+           data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+           data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({var.datatype.ctype()}*)', self.STREAM)
+         if use_flags:
+           data_memcpy(self.DEV_FLAGS_MEM, self.FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', self.STREAM)
+         stream_wait(self.STREAM)
+         cpp.emptyline()
 
-      cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
-      for var in scalars:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
-      for var in variables:
-        cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
+       cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+       for var in scalars:
+         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
+       for var in variables:
+         cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
 
-      if device_test:
-        cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
-        cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
-        cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
-        if use_flags:
-          cpp( f'{self.KERNEL_VAR}.{BatchedOperationsAux.FLAGS_NAME} = {self.DEV_FLAGS_MEM};' )
+       if device_test:
+         cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
+         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
+         cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
+         if use_flags:
+           cpp( f'{self.KERNEL_VAR}.{BatchedOperationsAux.FLAGS_NAME} = {self.DEV_FLAGS_MEM};' )
 
-      cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
-      cpp.emptyline()
+       cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
+       cpp.emptyline()
 
-      if device_test:
-        stream_wait(self.STREAM)
-        for var in variables:
-          if var.writable:
-            data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
-        stream_wait(self.STREAM)
-        data_free(self.TMP_MEM, self.STREAM)
-        if use_flags:
-          data_free(self.DEV_FLAGS_MEM, self.STREAM)
-        for var in variables:
-          data_free(self._devPtrTensorName(var), self.STREAM)
-          data_free(self._devTensorName(var), self.STREAM)
-        stream_wait(self.STREAM)
-        stream_delete(self.STREAM)
-        cpp.emptyline()
+       if device_test:
+         stream_wait(self.STREAM)
+         for var in variables:
+           if var.writable:
+             data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+         stream_wait(self.STREAM)
+         data_free(self.TMP_MEM, self.STREAM)
+         if use_flags:
+           data_free(self.DEV_FLAGS_MEM, self.STREAM)
+         for var in variables:
+           data_free(self._devPtrTensorName(var), self.STREAM)
+           data_free(self._devTensorName(var), self.STREAM)
+         stream_wait(self.STREAM)
+         stream_delete(self.STREAM)
+         cpp.emptyline()
 
-      super().generate(cpp, cfg, factory, None, gemm_cfg)
+       super().generate(cpp, cfg, factory, None, gemm_cfg)
 
-      for var in variables:
-        if var.writable:
-          layout = var.tensor.memoryLayout()
-          if isinstance(layout, DenseMemoryLayout):
-            factory.compare(var, Variable(self._tensorName(var), False, layout))
-          else:
-            # A tensor the kernel stores packed has no address for the entries
-            # its pattern leaves out, so the comparison cannot walk it the way
-            # it walks the reference. Unpack what the kernel wrote, the same
-            # way the inputs are unpacked on the way in, and compare dense
-            # against dense -- which also checks that the entries outside the
-            # pattern are the zeros the reference computes for them.
-            unpacked = self._cmpName(var)
-            factory.temporary(unpacked, var.memoryLayout().requiredReals(), iniZero=True)
-            self._emitUnpack(cpp, var, self._tensorName(var), unpacked,
-                             self._cmpViewName(var))
-            factory.compare(var, Variable(unpacked, False, var.memoryLayout()))
+       for var in variables:
+         if var.writable:
+           layout = var.tensor.memoryLayout()
+           if isinstance(layout, DenseMemoryLayout):
+             factory.compare(var, Variable(self._tensorName(var), False, layout, datatype=var.datatype))
+           else:
+             # A tensor the kernel stores packed has no address for the entries
+             # its pattern leaves out, so the comparison cannot walk it the way
+             # it walks the reference. Unpack what the kernel wrote, the same
+             # way the inputs are unpacked on the way in, and compare dense
+             # against dense -- which also checks that the entries outside the
+             # pattern are the zeros the reference computes for them.
+             unpacked = self._cmpName(var)
+             factory.temporary(unpacked, var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
+             self._emitUnpack(cpp, var, self._tensorName(var), unpacked,
+                              self._cmpViewName(var))
+             factory.compare(var, Variable(unpacked, False, var.memoryLayout(), datatype=var.datatype))
 
-      factory.freeTmp()
+       factory.freeTmp()
 
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'
@@ -731,18 +871,18 @@ class InitializerGenerator(object):
   class TensorView(object):
     ARGUMENT_NAME = 'values'
 
+    def __init__(self, datatype):
+      self._datatype = datatype
+
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
-      return '::{}::{}<{},{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, dim, arch.typename, arch.uintTypename, constStr)
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{dim},{self._datatype.ctype()},{arch.uintTypename},{constStr}>'
 
-    @classmethod
-    def arguments(cls, arch, const):
-      if const:
-        return '{} const* {}'.format(arch.typename, cls.ARGUMENT_NAME)
-      else:
-        return '{} * {}'.format(arch.typename, cls.ARGUMENT_NAME)
+    def arguments(self, const):
+      conststr = ' const*' if const else '*'
+      return f'{self._datatype.ctype()}{conststr} {self.ARGUMENT_NAME}'
 
-    def generate(cpp, group, memLayout, arch, index, const):
+    def generate(cpp, group, memLayout):
       raise NotImplementedError
 
     def listToInitializerList(self, lst):
@@ -751,10 +891,10 @@ class InitializerGenerator(object):
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
 
     def formatArray(self, numberType, name, values, declarationOnly):
-      lhs = '{} {}[]'.format(numberType, name)
+      lhs = f'{numberType} {name}[]'
       if declarationOnly:
         return ''
-      return '{} {} = {};'.format(MODIFIERS, lhs, self.listToInitializerList(values))
+      return f'{MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
 
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
@@ -780,7 +920,7 @@ class InitializerGenerator(object):
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
-      return '::{}::{}<{},{},{}>'.format(SUPPORT_LIBRARY_NAMESPACE, type(self).__name__, arch.typename, arch.uintTypename, constStr)
+      return f'::{SUPPORT_LIBRARY_NAMESPACE}::{type(self).__name__}<{self._datatype.ctype()},{arch.uintTypename},{constStr}>'
 
     def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {}, {});'.format(
@@ -814,11 +954,17 @@ class InitializerGenerator(object):
     def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
       cpp(self.formatArray(numberType, namespace + self.PATTERN_NAME + index, memLayout.pattern(), declarationOnly))
 
+  #: What the pool needs to know about one tensor group: how large the group
+  #: is, which element type its entries were stored as, and where each member
+  #: of it ended up.
+  PoolEntry = collections.namedtuple('PoolEntry', ['groupSize', 'datatype', 'symbols'])
+
   def __init__(self, arch, tensors, scalars):
     self._arch = arch
-    self._numberType = '{} const'.format(self._arch.uintTypename)
-    self._realType = '{} const'.format(self._arch.typename)
-    self._realPtrType = self._realType + '*'
+    self._numberType = f'{self._arch.uintTypename} const'
+    self._pool = dict()
+    self._realType = lambda datatype: f'{datatype.ctype()} const'
+    self._realPtrType = lambda datatype: self._realType(datatype) + '*'
     self._scalarCollect = collections.OrderedDict()
     self._collect = collections.OrderedDict()
     for tensor in tensors:
@@ -853,13 +999,14 @@ class InitializerGenerator(object):
     maxIndexScalar = {baseName: tuple(map(max, *groups.keys())) if len(groups) > 1 else next(iter(groups.keys())) for baseName, groups in self._scalarCollect.items()}
     self._groupSizeScalar = {baseName: tuple(map(lambda x: x+1, mi)) for baseName, mi in maxIndexScalar.items()}
 
-  def _tensorViewGenerator(self, memoryLayout):
+  def _tensorViewGenerator(self, tensor):
+    memoryLayout = tensor.memoryLayout()
     memLayoutMap = {
       'DenseMemoryLayout': self.DenseTensorView,
       'CSCMemoryLayout': self.CSCMatrixView,
       'PatternMemoryLayout': self.PatternTensorView
     }
-    return memLayoutMap[type(memoryLayout).__name__]()
+    return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch))
 
   def iterate_collect(self):
     cur_namespace = ''
@@ -909,6 +1056,8 @@ class InitializerGenerator(object):
             returnType = '{} {}'.format(MODIFIERS, self._arch.uintTypename)
             if len(groupSize) > 0:
               with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                header('assert({} < {});'.format(indexFun(groupSizeToStride(groupSize)),
+                                                 reduce(operator.mul, groupSize)))
                 header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
             with header.Function(self.SIZE_FUN_NAME, typedArgs, returnType):
               if len(groupSize) == 0:
@@ -920,11 +1069,13 @@ class InitializerGenerator(object):
               with header.Struct(self.CONTAINER_CLASS_NAME):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 header('{}() : {}{{}} {{}}'.format(self.CONTAINER_CLASS_NAME, self.CONTAINER_DATA_NAME))
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                with header.Function('operator()', typedArgs, '{} T&'.format(HOSTDEVICE_INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                with header.Function('operator()', typedArgs, '{} T const&'.format(HOSTDEVICE_INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
     for namespace, scalar_dict in self.iterate_collect_scalar():
+      if len(scalar_dict) == 0:
+        continue
       with header.Namespace(namespace), header.Namespace(self.TENSOR_NAMESPACE):
         for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
           with header.Struct(baseNameWithoutNamespace):
@@ -933,6 +1084,8 @@ class InitializerGenerator(object):
             typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
             if len(groupSize) > 0:
               with header.Function(self.INDEX_FUN_NAME, typedArgs, returnType):
+                header('assert({} < {});'.format(indexFun(groupSizeToStride(groupSize)),
+                                                 reduce(operator.mul, groupSize)))
                 header('return {};'.format(indexFun(groupSizeToStride(groupSize))))
             if len(groupSize) > 0:
               header('template<typename T>')
@@ -940,16 +1093,80 @@ class InitializerGenerator(object):
                 header('T {}[{}];'.format(self.CONTAINER_DATA_NAME, reduce(operator.mul, groupSize)))
                 with header.Function(self.CONTAINER_CLASS_NAME, '', ''):
                   pass
-                with header.Function('operator()', typedArgs, '{} T&'.format(INLINE)):
+                with header.Function('operator()', typedArgs, '{} T&'.format(HOSTDEVICE_INLINE)):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
-                with header.Function('operator()', typedArgs, '{} T const&'.format(INLINE), const=True):
+                with header.Function('operator()', typedArgs, '{} T const&'.format(HOSTDEVICE_INLINE), const=True):
                   header('return {}[{}({})];'.format(self.CONTAINER_DATA_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
 
   def generateTensorsCpp(self, cpp):
-    for namespace, tensor_dict in self.iterate_collect():
-      with cpp.Namespace(namespace):
-        for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
-          self._tensor(cpp, '::'.join([self.TENSOR_NAMESPACE, base_name_without_namespace, '']), tensors, self._groupSize[base_name], True)
+    # Shape and Size are constexpr static members, and a constexpr static
+    # member is implicitly inline, so it needs no definition outside the
+    # class. Writing one anyway is deprecated and both GCC and clang say so.
+    pass
+
+  def collectPool(self, dataCache):
+    """Registers every constant tensor in `dataCache` and reports the symbols.
+
+    The result maps a tensor's base name (namespace included) to its group
+    size, its element type and the pool symbol each group ended up under.
+    Groups without values are absent: they have nothing to store, and the
+    pool leaves the corresponding pointer null.
+
+    The element type is the tensor's own, not the architecture's. A tensor
+    may carry a datatype of its own, and an entry stored under the wrong one
+    is not a matter of spelling: init binds a reference of the tensor's type
+    to it, and that reference does not bind.
+
+    Registration happens here rather than while writing init.cpp so that the
+    two stay independent -- the pool is built from the tensors, not from the
+    text that was printed for them.
+    """
+    pool = collections.OrderedDict()
+    for baseName, tensors in self._collect.items():
+      groupSize = self._groupSize[baseName]
+      stride = groupSizeToStride(groupSize)
+      symbols = collections.OrderedDict()
+      datatype = None
+      for group, tensor in tensors.items():
+        values = tensor.values()
+        if values is None:
+          continue
+        memLayout = tensor.memoryLayout()
+        hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
+        groupDatatype = tensor.getDatatype(self._arch)
+        if datatype is None:
+          datatype = groupDatatype
+        elif datatype != groupDatatype:
+          # One member of a group, one element type: the group is handed out
+          # as a Container<T>, and there is no T that fits both.
+          raise ValueError('Mixed datatypes are not allowed within a tensor group. '
+                           '({} and {} for {}.)'.format(datatype, groupDatatype, baseName))
+        # The floor is what keeps entries at a common stride; the layout is
+        # asked on top of it, because a target whose cache line is wider than
+        # the floor -- a64fx -- would otherwise get less than its aligned
+        # loads need.
+        layoutAlignment = self._arch.cacheline if memLayout.alignedStride() else 1
+        alignment = max(POOL_ALIGNMENT, layoutAlignment)
+        symbols[group] = dataCache.add(hint,
+                                       [groupDatatype.literal(value) for value in memLayout.pack(values)],
+                                       groupDatatype.ctype(),
+                                       alignment)
+      if symbols:
+        pool[baseName] = self.PoolEntry(groupSize, datatype, symbols)
+    self._pool = pool
+    return pool
+
+  def poolSymbol(self, baseName, group):
+    """Pool entry holding exactly what init would otherwise print, if there is one.
+
+    There is one as long as a tensor has a single realisation, which is why
+    the initialiser can bind a reference instead of materialising the values a
+    second time. Once a tensor is realised in more than one layout, only the
+    one that matches what init promises can be bound this way, and the rest of
+    them answer None here and get their own array.
+    """
+    entry = self._pool.get(baseName)
+    return entry.symbols.get(group) if entry is not None else None
 
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
@@ -957,6 +1174,8 @@ class InitializerGenerator(object):
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._init(header, base_name, base_name_without_namespace, '', tensors, False)
     for namespace, scalar_dict in self.iterate_collect_scalar():
+      if len(scalar_dict) == 0:
+        continue
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
         for (baseName, baseNameWithoutNamespace), scalars in scalar_dict.items():
           with header.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):
@@ -987,47 +1206,75 @@ class InitializerGenerator(object):
     if declarationOnly:
       for group,tensor in tensors.items():
         ml = tensor.memoryLayout()
-        tv = self._tensorViewGenerator(ml)
+        tv = self._tensorViewGenerator(tensor)
         tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, True)
       valueNames = dict()
       for group,tensor in tensors.items():
         values = tensor.values()
         memLayout = tensor.memoryLayout()
+        datatype = tensor.getDatatype(self._arch)
         if values is not None:
-          memory = ['0.']*memLayout.requiredReals()
-          for idx,x in values.items():
-            memory[memLayout.address(idx)] = x
-          valuesName = '{}{}{}'.format(name, self.VALUES_BASENAME, index(group))
-          valueNames[group] = ['&{}[0]'.format(valuesName)]
-          cpp('{} {}[] = {{{}}};'.format(self._realType, valuesName, ', '.join(memory)))
+          valuesName = f'{name}{self.VALUES_BASENAME}{index(group)}'
+          valueNames[group] = [f'&{valuesName}[0]']
+          if self.poolSymbol(baseName, group) is None:
+            memory = [datatype.literal(value) for value in memLayout.pack(values)]
+            cpp('{} {}[] = {{{}}};'.format(self._realType(datatype), valuesName, ', '.join(memory)))
+          # Otherwise the header has already bound it, and a constexpr
+          # reference needs no definition outside the class.
       if len(valueNames) > 1:
-        self._array(cpp, self._realPtrType, name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
+        _,prototensor = next(iter(tensors.items()))
+        datatype = prototensor.getDatatype(self._arch)
+        self._array(cpp, self._realPtrType(datatype), name + self.VALUES_BASENAME, valueNames, groupSize, alwaysArray=False, constexpr=False, static=False)
     else:
       with cpp.Struct('{0} : {1}::{0}'.format(baseNameWithoutNamespace, self.TENSOR_NAMESPACE)):
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          tv = self._tensorViewGenerator(tensor)
           tv.arrays(cpp, ml, self._arch, name, index(group), self._numberType, False)
 
         nValueArrays = 0
         for group,tensor in tensors.items():
           values = tensor.values()
+          datatype = tensor.getDatatype(self._arch)
           if values is not None:
-            name = '{}{}'.format(self.VALUES_BASENAME, index(group))
-            aligned = ''
-            if tensor.memoryLayout().alignedStride():
-              aligned = ' __attribute__((aligned({})))'.format(self._arch.cacheline)
-            cpp('{} {} {}[]{};'.format(STATIC, self._realType, name, aligned))
+            name = f'{self.VALUES_BASENAME}{index(group)}'
+            symbol = self.poolSymbol(baseName, group)
+            if symbol is None:
+              aligned = ''
+              if tensor.memoryLayout().alignedStride():
+                aligned = f' __attribute__((aligned({self._arch.cacheline})))'
+              cpp('{} {} {}[]{};'.format(STATIC, self._realType(datatype), name, aligned))
+            else:
+              # Bound here and as a constant expression, for two reasons. A
+              # reference whose initialiser lives in another translation unit
+              # has to be read before it can be followed, which costs a load
+              # and a dynamic relocation at every use; one that is a constant
+              # expression is folded to the address instead. And the entry's
+              # alignment comes along with the address, where an out-of-line
+              # reference would have hidden it.
+              #
+              # No alignment attribute either: the pool aligns the entry to
+              # at least POOL_ALIGNMENT, which is not less than this would
+              # have asked for.
+              cpp('{} {} {} (&{})[{}] = {}::{}.{};'.format(CONSTEXPR,
+                                                           STATIC,
+                                                           self._realType(datatype),
+                                                           name,
+                                                           tensor.memoryLayout().requiredReals(),
+                                                           PoolGenerator.STORAGE_NAMESPACE,
+                                                           PoolGenerator.STORAGE_VAR_NAME,
+                                                           symbol))
             nValueArrays += 1
         if nValueArrays > 1:
-          cpp('{} {} {}[];'.format(STATIC, self._realPtrType, self.VALUES_BASENAME))
+          cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')
 
         cpp.emptyline()
-        viewArgs = self.TensorView.arguments(self._arch, False)
-        viewArgsConst = self.TensorView.arguments(self._arch, True)
         if len(groupSize) == 0:
-          ml = next(iter(tensors.values())).memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          prototensor = next(iter(tensors.values()))
+          ml = prototensor.memoryLayout()
+          tv = self._tensorViewGenerator(prototensor)
+          viewArgs = tv.arguments(False)
+          viewArgsConst = tv.arguments(True)
           with cpp.Struct(self.VIEW_STRUCT_NAME):
             cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch, False)};')
             cpp(f'using {self.VIEW_TYPE_NAME_CONST} = {tv.typename(len(ml.shape()), self._arch, True)};')
@@ -1042,7 +1289,9 @@ class InitializerGenerator(object):
       if len(groupSize) > 0:
         for group,tensor in tensors.items():
           ml = tensor.memoryLayout()
-          tv = self._tensorViewGenerator(ml)
+          tv = self._tensorViewGenerator(tensor)
+          viewArgs = tv.arguments(False)
+          viewArgsConst = tv.arguments(True)
           typename = tv.typename(len(ml.shape()), self._arch, False)
           typenameConst = tv.typename(len(ml.shape()), self._arch, True)
           special = ','.join(str(g) for g in group)
@@ -1089,3 +1338,182 @@ class InitializerGenerator(object):
         initStr = '{{{}}}'.format(initStr)
 
       cpp('{}{}{} {}{}{} = {};'.format(cexpr, stat, typ, name, groupIndices, arrayIndices, initStr))
+
+class PoolGenerator(object):
+  """Emits the constant pool: one image, one allocation, one copy.
+
+  The image is a struct of named arrays rather than a flat byte blob, so that
+  every entry keeps a real array type -- sizeof works, a debugger shows
+  something useful, and the offsets come out of offsetof instead of being
+  computed here and written down a second time.
+
+  What a consumer binds against is not the image but `Pool`, a table of
+  pointers derived from a base address. Pointing it at the image gives the
+  host view with no allocation and no copy; pointing it at a device
+  allocation gives the device view. Entries that the cache merged are one
+  member of the image and two pointers in the table.
+
+  This makes every entry position-independent, which is the condition for
+  copying the image in one piece: an entry may not contain an address into
+  another one.
+  """
+
+  STORAGE_NAMESPACE = 'poolstorage'
+  STORAGE_STRUCT_NAME = 'Storage'
+  STORAGE_VAR_NAME = 'image'
+  POOL_STRUCT_NAME = 'Pool'
+  CREATE_FUN_NAME = 'create'
+  HOST_FUN_NAME = 'host'
+  BYTES_FUN_NAME = 'poolBytes'
+  DATA_FUN_NAME = 'poolData'
+  ALIGN_FUN_NAME = 'poolAlignment'
+  SIZE_TYPE = 'std::size_t'
+
+  def __init__(self, arch, dataCache, pool):
+    self._arch = arch
+    self._dataCache = dataCache
+    self._pool = pool
+    self._members = self.assignMembers(pool)
+
+  @classmethod
+  def memberName(cls, baseNameWithNamespace):
+    """Name a tensor goes by inside `Pool`.
+
+    Flattened rather than nested by namespace: a kernel may read constants
+    from several namespaces at once, so one flat table is the only shape that
+    lets it bind all of them against a single object.
+    """
+    return baseNameWithNamespace.replace('::', '_')
+
+  def imageAlignment(self):
+    """Alignment the image is declared with.
+
+    The floor, or the strictest entry where that asks for more. alignas on a
+    class states a minimum and a member asking for more raises the class past
+    it, so declaring the floor alone would leave pool.h saying 128 for a type
+    that is actually aligned to 256 -- and would have the declaration weaken
+    an alignment that alignas is not meant to weaken. Naming the maximum
+    keeps the declared number, alignof() and poolAlignment() one number
+    instead of two.
+    """
+    return max([POOL_ALIGNMENT] + [entry.alignment() for entry in self._dataCache.entries()])
+
+  @classmethod
+  def assignMembers(cls, pool):
+    """Member name per tensor, with the collisions flattening can cause refused.
+
+    Two tensors that differ only in where the namespace separator sat --
+    `a::b` and `a_b` -- flatten to the same identifier. Declaring the member
+    twice would not compile, and were the name to come from a hint instead
+    one of them would quietly write into the other's slot. Say which two, and
+    let the caller rename one.
+    """
+    members = collections.OrderedDict()
+    taken = dict()
+    for baseName in pool:
+      member = cls.memberName(baseName)
+      if member in taken:
+        raise ValueError('The tensors {} and {} share the pool member {}. '
+                         'Rename one of them.'.format(taken[member], baseName, member))
+      taken[member] = baseName
+      members[baseName] = member
+    return members
+
+  @staticmethod
+  def _elementPtrType(datatype):
+    return '{} const*'.format(datatype.ctype())
+
+  def _memberType(self, baseName, entry):
+    elementPtr = self._elementPtrType(entry.datatype)
+    if len(entry.groupSize) == 0:
+      return elementPtr
+    prefix, name = Tensor.splitBasename(baseName)
+    return '{}{}::{}::{}<{}>'.format(prefix,
+                                     InitializerGenerator.TENSOR_NAMESPACE,
+                                     name,
+                                     InitializerGenerator.CONTAINER_CLASS_NAME,
+                                     elementPtr)
+
+  def _storageType(self):
+    return '{}::{}'.format(self.STORAGE_NAMESPACE, self.STORAGE_STRUCT_NAME)
+
+  def generateH(self, header):
+    with header.Namespace(self.STORAGE_NAMESPACE):
+      with header.Struct('alignas({}) {}'.format(self.imageAlignment(), self.STORAGE_STRUCT_NAME)):
+        for entry in self._dataCache.entries():
+          alignment = 'alignas({}) '.format(entry.alignment()) if entry.alignment() > 1 else ''
+          header('{}{} const {}[{}];'.format(alignment,
+                                             entry.typename(),
+                                             entry.name(),
+                                             entry.elements()))
+      header.emptyline()
+      header('//! The image itself, so that init can bind references into it.')
+      header('extern {} const {};'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
+    header.emptyline()
+
+    with header.Struct(self.POOL_STRUCT_NAME):
+      for baseName, entry in self._pool.items():
+        header('{} {}{{}};'.format(self._memberType(baseName, entry),
+                                   self._members[baseName]))
+      header.emptyline()
+      header('//! Table for an image that lives at `base`, host or device.')
+      header.functionDeclaration(self.CREATE_FUN_NAME,
+                                 'void const* base',
+                                 '{} {}'.format(STATIC, self.POOL_STRUCT_NAME))
+      header('//! Table for the image in this binary. No allocation, no copy.')
+      header.functionDeclaration(self.HOST_FUN_NAME,
+                                 '',
+                                 '{} {}'.format(STATIC, self.POOL_STRUCT_NAME))
+    header.emptyline()
+
+    header('//! Size of the image, for one allocation of one block.')
+    header.functionDeclaration(self.BYTES_FUN_NAME, '', self.SIZE_TYPE)
+    header('//! Alignment the allocation has to meet for create() to hold.')
+    header.functionDeclaration(self.ALIGN_FUN_NAME, '', self.SIZE_TYPE)
+    header('//! Address of the image, for one copy of one block.')
+    header.functionDeclaration(self.DATA_FUN_NAME, '', 'void const*')
+
+  def generateCpp(self, cpp):
+    with cpp.Namespace(self.STORAGE_NAMESPACE):
+      entries = self._dataCache.entries()
+      cpp('extern {} const {} = {{'.format(self.STORAGE_STRUCT_NAME, self.STORAGE_VAR_NAME))
+      for i, entry in enumerate(entries):
+        separator = ',' if i + 1 < len(entries) else ''
+        cpp('  {{{}}}{}'.format(', '.join(str(value) for value in entry.values()), separator))
+      cpp('};')
+    cpp.emptyline()
+
+    returnType = self.POOL_STRUCT_NAME
+    with cpp.Function('{}::{}'.format(self.POOL_STRUCT_NAME, self.CREATE_FUN_NAME),
+                      'void const* base',
+                      returnType):
+      cpp('auto const* origin = static_cast<char const*>(base);')
+      cpp('{} result;'.format(self.POOL_STRUCT_NAME))
+      for baseName, entry in self._pool.items():
+        member = self._members[baseName]
+        stride = groupSizeToStride(entry.groupSize)
+        for group, symbol in entry.symbols.items():
+          target = member if len(group) == 0 else '{}.{}[{}]'.format(
+            member, InitializerGenerator.CONTAINER_DATA_NAME, address(group, stride))
+          cpp('result.{} = reinterpret_cast<{}>(origin + offsetof({}, {}));'.format(
+            target, self._elementPtrType(entry.datatype), self._storageType(), symbol))
+      cpp('return result;')
+    cpp.emptyline()
+
+    with cpp.Function('{}::{}'.format(self.POOL_STRUCT_NAME, self.HOST_FUN_NAME), '', returnType):
+      cpp('return {}({}());'.format(self.CREATE_FUN_NAME, self.DATA_FUN_NAME))
+    cpp.emptyline()
+
+    with cpp.Function(self.BYTES_FUN_NAME, '', self.SIZE_TYPE):
+      cpp('return sizeof({});'.format(self._storageType()))
+    cpp.emptyline()
+
+    with cpp.Function(self.ALIGN_FUN_NAME, '', self.SIZE_TYPE):
+      # Read off the image rather than repeated from the number the struct was
+      # declared with, so that the two cannot drift apart -- a consumer that
+      # allocated for less than the image wants would be one entry short.
+      cpp('return alignof({});'.format(self._storageType()))
+    cpp.emptyline()
+
+    with cpp.Function(self.DATA_FUN_NAME, '', 'void const*'):
+      cpp('return &{}::{};'.format(self.STORAGE_NAMESPACE, self.STORAGE_VAR_NAME))

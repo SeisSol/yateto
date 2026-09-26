@@ -5,12 +5,15 @@ from .. import aspp
 class Indices(object):
   def __init__(self, indexNames = '', shape = ()):
     self._indices = tuple(indexNames)
-    self._size = dict()
+    self._shape = tuple(shape)
 
-    assert len(self._indices) == len(set(self._indices)), 'Repeated indices are not allowed ({}).'.format(indexNames)
-    assert len(self._indices) == len(shape), 'Indices {} do not match tensor shape {}.'.format(str(self), shape)
+    assert len(self._indices) == len(self._shape), 'Indices {} do not match tensor shape {}.'.format(str(self), shape)
 
-    self._size = {self._indices[i]: size for i, size in enumerate(shape)}
+    self._size = dict(zip(self._indices, self._shape))
+
+    # the map has one entry per distinct name, so a name occurring twice shows
+    # up as a missing entry -- no second pass over the names needed
+    assert len(self._size) == len(self._indices), 'Repeated indices are not allowed ({}).'.format(indexNames)
 
   def tostring(self):
     return ''.join(self._indices)
@@ -22,7 +25,7 @@ class Indices(object):
     return self.extract(self._indices[0])
 
   def shape(self):
-    return self.subShape(self._indices)
+    return self._shape
 
   def subShape(self, indexNames):
     return tuple(self._size[index] for index in indexNames)
@@ -48,16 +51,20 @@ class Indices(object):
     return [self.find(i) for i in I if i in self]
 
   def __eq__(self, other):
-    return other != None and self._indices == other._indices and self._size == other._size
+    return (isinstance(other, Indices)
+            and self._indices == other._indices and self._shape == other._shape)
 
   def __ne__(self, other):
-    return other == None or self._indices != other._indices or self._size != other._size
+    return not self.__eq__(other)
 
   def __hash__(self):
-    return hash((self._indices, self.shape()))
+    return hash((self._indices, self._shape))
 
   def __iter__(self):
     return iter(self._indices)
+
+  def __contains__(self, index):
+    return index in self._size
 
   def __getitem__(self, key):
     return self._indices[key]
@@ -72,35 +79,37 @@ class Indices(object):
     return self & other
 
   def __le__(self, other):
-    indexNamesContained = set(self._indices) <= set(other._indices)
-    return indexNamesContained and all(self._size[index] == other._size[index] for index in self._indices)
+    otherSize = other._size
+    return all(otherSize.get(index) == size
+               for index, size in zip(self._indices, self._shape))
 
   def __sub__(self, other):
     indexNames = [index for index in self._indices if index not in other]
     return Indices(indexNames, self.subShape(indexNames))
 
   def merged(self, other):
-    indexNames = self._indices + other._indices
-    shape = self.subShape(self._indices) + other.subShape(other._indices)
-    return Indices(indexNames, shape)
+    return Indices(self._indices + other._indices, self._shape + other._shape)
 
   def mergeStrict(self, other):
+    mySize = self._size
     indexNames = list(self._indices)
-    shape = list(self.subShape(self._indices))
-    otherShape = other.subShape(other._indices)
-    for idx,shp in zip(other._indices, otherShape):
-      if idx not in self._indices:
-        indexNames += idx
-        shape += [shp]
+    shape = list(self._shape)
+    for idx, shp in zip(other._indices, other._shape):
+      myShp = mySize.get(idx)
+      if myShp is None:
+        indexNames.append(idx)
+        shape.append(shp)
       else:
-        myPos = indexNames.index(idx)
-        myShp = shape[myPos]
         assert myShp == shp, f"Index merge failed. {self} vs. {other} in {idx}: {myShp} vs. {shp}"
     return Indices(tuple(indexNames), tuple(shape))
 
   def sorted(self):
     indexNames = sorted(self._indices)
     return Indices(indexNames, self.subShape(indexNames))
+
+  def ranges(self):
+    """The full extent of every index, as (start, stop) pairs in index order."""
+    return [(0, size) for size in self._shape]
 
   def __str__(self):
     return self.tostring()

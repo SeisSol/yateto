@@ -15,6 +15,8 @@ class MergeScalarMultiplications(object):
         if va.isRHSExpression() and not va.isCompound() and ua.term == va.result:
           va.scalar = ua.scalar
           va.result = ua.result
+          # the merged action now performs ua's store, so it inherits ua's guard
+          va.condition = va.getGuard() & ua.getGuard()
           del cfg[i]
           i -= 1
           n -= 1
@@ -23,10 +25,24 @@ class MergeScalarMultiplications(object):
 
 class LivenessAnalysis(object):
   def visit(self, cfg):
-    cfg[-1].live = set()
+    cfg[-1].live = LiveSet({})
     for i in reversed(range(len(cfg)-1)):
-      cfg[i].live = (cfg[i+1].live - {cfg[i].action.result}) | cfg[i].action.variables()
+      action = cfg[i].action
+      guard = action.getGuard()
+      live = cfg[i+1].live - {action.result: guard}
+      live = live | {var: guard for var in action.variables()}
+      # the guard has to be read to decide the branch, so its variables are
+      # live regardless of the outcome
+      live = live | {var: Guard.always() for var in action.guardVariables()}
+      cfg[i].live = live
     return cfg
+
+def _guardsCompatible(cfg, rng, definition):
+  """Every touched action must run at least as restrictively as `definition`.
+
+  Otherwise the substituted variable may be read where it was never written.
+  """
+  return all(cfg[j].action.getGuard().implies(definition) for j in rng)
 
 class SubstituteForward(object):
   def visit(self, cfg):
@@ -39,14 +55,16 @@ class SubstituteForward(object):
           and ua.isRHSVariable() \
           and ua.term.writable \
           and ua.result.isLocal() \
-          and ua.term not in v.live \
+          and (ua.term, ua.getGuard()) not in v.live \
           and (ua.hasTrivialScalar() or ua.term.isLocal()):
 
         when = ua.result
         by = ua.term
-        maySubs = all([cfg[j].action.maySubstitute(when, by) for j in range(i, n)])
+        maySubs = all([cfg[j].action.maySubstitute(when, by) for j in range(i, n)]) \
+                  and _guardsCompatible(cfg, range(i, n), ua.getGuard())
         if maySubs:
           for j in range(i, n):
+            # a read substitution; the downstream guards stay as they are
             cfg[j].action = cfg[j].action.substituted(when, by)
           cfg = LivenessAnalysis().visit(cfg)
 
@@ -62,14 +80,18 @@ class SubstituteBackward(object):
         found = -1
         for j in range(i):
           u = cfg[j]
-          if by not in u.live and not u.action.isCompound() and u.action.result == va.term:
+          if (by, va.getGuard()) not in u.live and not u.action.isCompound() and u.action.result == va.term:
             found = j
             break
         if found >= 0:
-          when = u.action.result
-          maySubs = cfg[found].action.maySubstitute(when, by, term=False) and all([cfg[j].action.maySubstitute(when, by) for j in range(found+1,i+1)])
+          when = cfg[found].action.result
+          maySubs = cfg[found].action.maySubstitute(when, by, term=False) \
+                    and all([cfg[j].action.maySubstitute(when, by) for j in range(found+1,i+1)]) \
+                    and _guardsCompatible(cfg, range(found, i+1), va.getGuard())
           if maySubs:
-            cfg[found].action = cfg[found].action.substituted(when, by, term=False)
+            # only the producing action changes its write target and hence
+            # inherits va's guard; the remaining ones merely read `by`
+            cfg[found].action = cfg[found].action.substituted(when, by, va.getGuard(), term=False)
             for j in range(found+1,i+1):
               cfg[j].action = cfg[j].action.substituted(when, by)
             cfg = LivenessAnalysis().visit(cfg)
@@ -96,7 +118,7 @@ class MergeActions(object):
       ua = cfg[i].action
       if not ua.isCompound():
         found = -1
-        V = ua.variables()
+        V = ua.allVariables()
         for j in range(i+1,n):
           va = cfg[j].action
           if va.isRHSVariable() \
@@ -106,14 +128,15 @@ class MergeActions(object):
               and ua.result.isLocal():
             found = j
             break
-          elif ua.result in va.variables() or ua.result == va.result:
+          elif ua.result in va.allVariables() or ua.result == va.result:
             break
           else:
-            V = V | va.variables() | {va.result}
+            V = V | va.allVariables() | {va.result}
         if found >= 0:
           va = cfg[found].action
           if ua.maySubstitute(ua.result, va.result, term=False):
-            cfg[i].action = ua.substituted(ua.result, va.result, term=False)
+            # this action's write target becomes va's, so it inherits va's guard
+            cfg[i].action = ua.substituted(ua.result, va.result, va.getGuard(), term=False)
             cfg[i].action.add = va.add
             if not va.hasTrivialScalar():
               cfg[i].action.scalar = va.scalar
@@ -124,7 +147,6 @@ class MergeActions(object):
 
 class DetermineLocalInitialization(object):
   def visit(self, cfg):
-    lcls = dict()
     numBuffers = 0
     usedBuffers = dict()
     freeBuffers = deque()
@@ -140,7 +162,7 @@ class DetermineLocalInitialization(object):
       # assign buffer
       if ua and not ua.isCompound() and not ua.result.isGlobal():
         if ua.result in usedBuffers:
-            buf = usedBuffers[ua.result]
+          buf = usedBuffers[ua.result]
         elif len(freeBuffers) > 0:
           buf = freeBuffers.pop()
         else:
@@ -149,14 +171,18 @@ class DetermineLocalInitialization(object):
         cfg[i].bufferMap[ua.result] = buf
         usedBuffers[ua.result] = buf
 
-        size = ua.result.viewed().memoryLayout().storage().requiredReals()
+        # size in bytes
+        datatype = ua.result.datatype
+        assert datatype is not None, \
+          f'No datatype deduced for {ua.result}; run SetDatatype before the code generator.'
+        size = ua.result.viewed().memoryLayout().storage().requiredReals() * datatype.size()
         if buf in bufferSize:
           bufferSize[buf] = max(bufferSize[buf], size)
         else:
           bufferSize[buf] = size
 
       # free buffers
-      free = cfg[i].live - cfg[i+1].live
+      free = cfg[i].live.variables() - cfg[i+1].live.variables()
       for local in free:
         # warning: local.isLocal() check is suboptimal (but currently good enough)
         # refactor liveness for better results
@@ -176,6 +202,6 @@ class FindFusedGemms(object):
       for pp in cfg:
         context.process(pp)
       cfg = context.get_cfg()
-    except Expression as err:
+    except Exception as err:
       print(f'Warning: {err}')
     return cfg

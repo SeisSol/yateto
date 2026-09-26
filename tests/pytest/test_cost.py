@@ -30,7 +30,7 @@ from yateto.ast.cost import (
     ExactCost,
     ShapeCostEstimator,
 )
-from yateto.ast.node import IndexedTensor, IndexSum, Product
+from yateto.ast.node import IndexedTensor, Reduction, Elementwise
 from yateto.ast.transformer import (
     DeduceIndices,
     EquivalentSparsityPattern,
@@ -41,7 +41,7 @@ from yateto.ast.transformer import (
 
 
 def _lower_to_product_tree(kernel, estimator_cls=BoundingBoxCostEstimator):
-    """Helper: run the minimal set of passes so Product / IndexSum nodes
+    """Helper: run the minimal set of passes so Elementwise / Reduction nodes
     exist and eqspps are set.
     """
     kernel = DeduceIndices().visit(kernel)
@@ -63,10 +63,10 @@ class TestShapeCostEstimator:
         assert ShapeCostEstimator().generic_estimate(it) == 0
 
     def test_matmul_cost_is_ijk(self, square_tensors):
-        # For an 8x8 matmul built of a Product node (shape i,j,k) + an
-        # IndexSum over k, the cost is shape-based:
-        #   Product: 8 * 8 * 8        = 512
-        #   IndexSum: (k-1) * i * j   = 7 * 8 * 8 = 448
+        # For an 8x8 matmul built of a Elementwise node (shape i,j,k) + an
+        # Reduction over k, the cost is shape-based:
+        #   Elementwise: 8 * 8 * 8        = 512
+        #   Reduction: (k-1) * i * j   = 7 * 8 * 8 = 448
         # total = 960.  Same as ComputeOptimalFlopCount's answer above
         # (the cost model agrees with the flop counter for dense ops).
         A, B, C = square_tensors["A"], square_tensors["B"], square_tensors["C"]

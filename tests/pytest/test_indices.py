@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from yateto import ops
 from yateto.ast.indices import Indices, Range, BoundingBox, LoGCost
 
 
@@ -58,7 +59,7 @@ class TestIndicesSetOps:
         a = Indices("ij", (3, 4))
         b = Indices("jk", (4, 5))
         # Intersection is a plain ``set``, not an ``Indices`` object.
-        # This is how ``Einsum`` / ``Product`` identify contraction indices.
+        # This is how ``Einsum`` / ``Elementwise`` identify contraction indices.
         assert a & b == {"j"}
         # Commutative
         assert b & a == {"j"}

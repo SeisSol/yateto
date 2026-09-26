@@ -15,7 +15,8 @@ import pytest
 
 from yateto import Tensor
 from yateto.ast.indices import Indices
-from yateto.ast.node import Add, Assign, Einsum, IndexedTensor, Product
+from yateto import ops
+from yateto.ast.node import Accumulate, Assign, Einsum, IndexedTensor, Elementwise
 from yateto.ast.transformer import DeduceIndices
 from yateto.ast.visitor import (
     CachedVisitor,
@@ -71,7 +72,7 @@ class TestVisitorDispatch:
                 depth["cur"] -= 1
 
         DepthProbe().visit(A["ij"] + B["ij"])
-        # Add wraps two IndexedTensor leaves -> max depth 2.
+        # Accumulate wraps two IndexedTensor leaves -> max depth 2.
         assert depth["max"] == 2
 
     def test_cached_visitor_reuses_results(self, square_tensors):
@@ -168,7 +169,7 @@ class TestComputeSparsityPattern:
     node's ``computeSparsityPattern`` method.  Crucially, it does *not*
     work on raw ``Einsum`` nodes - ``Einsum.computeSparsityPattern``
     explicitly raises ``NotImplementedError``.  The compiler pipeline
-    first lowers ``Einsum`` to ``Product`` + ``IndexSum`` via the
+    first lowers ``Einsum`` to ``Elementwise`` + ``Reduction`` via the
     ``EquivalentSparsityPattern`` transformer, which is what the
     ``run_ast_pipeline`` fixture does.
     """
@@ -177,7 +178,7 @@ class TestComputeSparsityPattern:
         # Locking this in: ``ComputeSparsityPattern`` on a fresh DSL tree
         # crashes because ``Einsum`` refuses to compute its pattern
         # on its own.  The fix is to run ``EquivalentSparsityPattern``
-        # first (which decomposes the Einsum into Product + IndexSum).
+        # first (which decomposes the Einsum into Elementwise + Reduction).
         A, B, C = square_tensors["A"], square_tensors["B"], square_tensors["C"]
         kernel = C["ij"] <= A["ik"] * B["kj"]
         kernel = deduced(kernel)
@@ -219,8 +220,8 @@ class TestComputeOptimalFlopCount:
         A, B, C = square_tensors["A"], square_tensors["B"], square_tensors["C"]
         kernel = C["ij"] <= A["ik"] * B["kj"]
         kernel = run_ast_pipeline(kernel)
-        # 8x8 matmul decomposes into a Product (for each output) plus
-        # IndexSum over k.  After strength reduction the flop count is
+        # 8x8 matmul decomposes into a Elementwise (for each output) plus
+        # Reduction over k.  After strength reduction the flop count is
         # well-defined: 960 for a dense 8x8x8 GEMM in Yateto's accounting.
         #
         # The exact number is a regression-lock - anything that changes

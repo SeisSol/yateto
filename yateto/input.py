@@ -166,17 +166,9 @@ def memoryLayoutFromFile(xmlFile, db, clones, strict=False):
     sparsealigned = matrix.get('sparse', '').lower() == 'aligned'
 
     if group in groups or name in clones or db.containsName(name):
-      blocks = []
       for block in matrix:
-        raise NotImplementedError
-        if block.tag == 'block':
-          startrow = int(block.get('startrow'))
-          stoprow = int(block.get('stoprow'))
-          startcol = int(block.get('startcol'))
-          stopcol = int(block.get('stopcol'))
-          blksparse = (block.get('sparse') == None and sparse) or block.get('sparse', '').lower() in strtobool
-        else:
-          __complain(block)
+        # a <matrix> that declares its sparsity block by block is not read
+        raise NotImplementedError(f'Block-wise sparsity of matrix "{name}" is not supported.')
       names = groups[group] if group in groups else (clones[name] if name in clones else [name])
       for n in names:
         tensor = db.byName(n)

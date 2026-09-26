@@ -12,7 +12,8 @@ import numpy as np
 import pytest
 
 from yateto import Tensor, Scalar
-from yateto.type import Collection, IdentifiedType
+from yateto.memory import DenseMemoryLayout
+from yateto.type import AddressingMode, Collection, Datatype, IdentifiedType
 
 
 # ---------------------------------------------------------------------------
@@ -199,25 +200,35 @@ class TestTensorSparsity:
 
 
 class TestTensorIdentity:
-    def test_hash_is_name_based(self):
-        # The hash is built from the tensor name, so two tensors with the
-        # same name can be put in a set even if they live in different
-        # scopes.  This is what the codegen relies on.
-        assert hash(Tensor("A", (2, 2))) == hash(Tensor("A", (4, 4)))
+    def test_hash_covers_only_what_cannot_change(self):
+        # The sparsity pattern and the memory layout are set after
+        # construction, so hashing them would lose a tensor already sitting in
+        # a set.
+        t = Tensor("A", (2, 2))
+        before = hash(t)
+        t.setMemoryLayout(DenseMemoryLayout, alignStride=True)
+        assert hash(t) == before
+
+    def test_equal_tensors_hash_alike(self):
+        assert hash(Tensor("A", (2, 2))) == hash(Tensor("A", (2, 2)))
 
     def test_equality_by_name(self):
         t1 = Tensor("A", (2, 2))
         t2 = Tensor("A", (2, 2))
         assert t1 == t2
 
-    def test_equality_across_shapes_asserts(self):
-        # Yateto's ``__eq__`` asserts same shape/layout when names match -
-        # i.e. two tensors that share a name but differ structurally are
-        # detected as a bug in the user's code, not silently un-equal.
-        t1 = Tensor("A", (2, 2))
-        t2 = Tensor("A", (3, 3))
-        with pytest.raises(AssertionError):
-            t1 == t2
+    def test_shape_is_part_of_the_identity(self):
+        assert Tensor("A", (2, 2)) != Tensor("A", (3, 3))
+
+    def test_addressing_is_part_of_the_identity(self):
+        direct = Tensor("A", (2, 2), addressing=AddressingMode.DIRECT)
+        indirect = Tensor("A", (2, 2), addressing=AddressingMode.INDIRECT)
+        assert direct != indirect
+
+    def test_comparison_against_a_non_tensor(self):
+        # returning NotImplemented lets Python fall back rather than raise
+        assert (Tensor("A", (2, 2)) == None) is False
+        assert (Tensor("A", (2, 2)) == 3) is False
 
     def test_inequality_by_name(self):
         assert (Tensor("A", (2, 2)) == Tensor("B", (2, 2))) is False
@@ -300,3 +311,64 @@ class TestCollection:
         b["B"] = Tensor("B", (3, 3))
         a.update(b)
         assert "A" in a and "B" in a
+
+
+# ---------------------------------------------------------------------------
+# Literal spelling
+# ---------------------------------------------------------------------------
+
+
+class TestDatatypeLiteral:
+    """``Datatype.literal`` turns a stored value into C++ source text.
+
+    Its input is whatever ``Tensor.values()`` holds, and that is a string, so
+    every case below has to survive the string spelling as well as the number.
+    """
+
+    @pytest.mark.parametrize("value", ["nan", float("nan")])
+    def test_nan_is_routed_through_limits(self, value):
+        assert Datatype.F64.literal(value) == "std::numeric_limits<double>::quiet_NaN()"
+
+    @pytest.mark.parametrize("value", ["inf", float("inf")])
+    def test_infinity_is_routed_through_limits(self, value):
+        assert Datatype.F64.literal(value) == "std::numeric_limits<double>::infinity()"
+
+    @pytest.mark.parametrize("value", ["-inf", float("-inf")])
+    def test_negative_infinity_keeps_its_sign(self, value):
+        assert Datatype.F64.literal(value) == "-std::numeric_limits<double>::infinity()"
+
+    def test_single_precision_keeps_its_suffix(self):
+        assert Datatype.F32.literal("0.25") == "0.25f"
+
+    def test_integers_are_spelled_as_integers(self):
+        """A float spelling in an integer array would be a narrowing error."""
+        assert Datatype.I32.literal("3.0") == "static_cast<int32_t>(3LL)"
+
+    def test_integers_saturate_at_infinity(self):
+        assert Datatype.I32.literal("inf") == "std::numeric_limits<int32_t>::max()"
+
+    @pytest.mark.parametrize(
+        "value,expected", [("0.0", "false"), ("1.0", "true"), ("nan", "false")]
+    )
+    def test_bool_reads_the_number_not_the_string(self, value, expected):
+        """Every non-empty string is truthy, so the number has to be looked at."""
+        assert Datatype.BOOL.literal(value) == expected
+
+    def test_double_round_trips(self):
+        assert float(Datatype.F64.literal("0.1")) == 0.1
+
+    def test_quad_literal_goes_through_the_macro(self):
+        """A bare ``q`` suffix is GCC's own dialect and is rejected under
+        -std=c++17; ``f128`` is rejected by clang. The macro in Type.h carries
+        whichever suffix fits the spelling ``f128_ty`` resolved to."""
+        literal = Datatype.F128.literal("1.25")
+        assert "YATETO_F128_C(" in literal
+        assert not literal.rstrip(")").endswith("q")
+
+    @pytest.mark.parametrize("datatype", [Datatype.F16, Datatype.BF16])
+    def test_half_literals_are_cast_from_a_plain_literal(self, datatype):
+        """Neither format has a literal suffix, so the value is spelled as a
+        double and narrowed."""
+        literal = datatype.literal("1.25")
+        assert literal.startswith("static_cast<yateto::")
+        assert "1.25" in literal

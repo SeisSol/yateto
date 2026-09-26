@@ -51,6 +51,25 @@ class MemoryLayout(ABC):
   def isCompatible(self, spp):
     pass
 
+  def pack(self, values, fill=0):
+    """Places ``values`` at the addresses this layout assigns them.
+
+    ``values`` maps multi-indices to entries, the way ``Tensor.values()``
+    hands them out. The result has ``requiredReals()`` slots; every slot the
+    layout does not map an entry of ``values`` onto -- padding, alignment
+    gaps, structural zeros -- holds ``fill``.
+
+    Entries come back exactly as they went in, ``fill`` included. Turning
+    them into source text is the emitter's job: it is the one that knows
+    which datatype the array will have, and a slot holding a rendered zero
+    next to slots holding unrendered values is a list that nothing can use
+    as a whole.
+    """
+    memory = [fill] * self.requiredReals()
+    for entry, value in values.items():
+      memory[self.address(entry)] = value
+    return memory
+
   def _subShape(self, positions):
     sub = 1
     for p in positions:
@@ -78,8 +97,12 @@ class MemoryLayout(ABC):
 
     assert writeBB in self._bbox
     re = [range(r.start, r.stop) for r in self._bbox]
-    we = [range(w.start, w.stop) for w in writeBB]
-    return [self.address(e) for e in set(itertools.product(*re)) - set(itertools.product(*we)) if self.hasValue(e)]
+    we = set(itertools.product(*[range(w.start, w.stop) for w in writeBB]))
+    # NOTE: iterate the read box, rather than differencing two sets. A set of
+    #       tuples enumerates in hash order, which PYTHONHASHSEED varies from
+    #       run to run, and these addresses end up as generated code.
+    return [self.address(e) for e in itertools.product(*re)
+            if e not in we and self.hasValue(e)]
 
   def relranges(self):
     starts = [0] * len(self._shape)
@@ -147,6 +170,9 @@ class DenseMemoryLayout(MemoryLayout):
     self._stride = tuple(stride)
 
   def _alignBB(self):
+    if len(self._bbox) == 0:
+      # a tensor without axes has no column to line up
+      return
     if self.ALIGNMENT_ARCH is not None:
       self._range0 = self._bbox[0]
       rnew = Range( self.ALIGNMENT_ARCH.alignedLower(self._range0.start), self.ALIGNMENT_ARCH.alignedUpper(self._range0.stop) )
@@ -155,14 +181,20 @@ class DenseMemoryLayout(MemoryLayout):
       warnings.warn('Set architecture with DenseMemoryLayout.setAlignmentArch(arch) if you want to use the align stride feature.', UserWarning)
 
   def alignedStride(self):
-    if self.ALIGNMENT_ARCH is None:
+    """Whether the distance between two columns is a multiple of the alignment.
+
+    A tensor without axes has no columns and hence no such distance. That is
+    not a promise that happens to be false, it is the absence of one, and the
+    answer is the same either way: nothing to rely on.
+    """
+    if self.ALIGNMENT_ARCH is None or len(self._bbox) == 0:
       return False
     ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
     localOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].stop - self._bbox[0].start)
     return ldOk and localOk
 
   def mayVectorizeDim(self, dim):
-    if self.ALIGNMENT_ARCH is None:
+    if self.ALIGNMENT_ARCH is None or dim >= len(self._bbox):
       return False
     return self.ALIGNMENT_ARCH.checkAlignment(self._bbox[dim].size())
 
@@ -199,8 +231,8 @@ class DenseMemoryLayout(MemoryLayout):
 
     assert writeBB in self._bbox
     re = [range(r.start, r.stop) for r in self._bbox]
-    we = [range(w.start, w.stop) for w in writeBB]
-    return [self.address(e) for e in set(itertools.product(*re)) - set(itertools.product(*we))]
+    we = set(itertools.product(*[range(w.start, w.stop) for w in writeBB]))
+    return [self.address(e) for e in itertools.product(*re) if e not in we]
 
   def stride(self):
     return self._stride

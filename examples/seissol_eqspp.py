@@ -2,7 +2,8 @@
 
 from yateto import *
 from yateto.input import parseXMLMatrixFile
-from yateto.ast.node import Add
+from yateto import ops
+from yateto.ast.node import Accumulate
 from yateto.ast.transformer import DeduceIndices, EquivalentSparsityPattern
 
 def printEqspp():
@@ -23,7 +24,7 @@ def add(g):
   star_ela = Tensor('star_ela', (9,9), spp=db.star['qp'].spp().as_ndarray()[0:9,0:9])
   dQ_prev = dQ0
   for i in range(1,4):
-    derivativeSum = Add()
+    derivativeSum = Accumulate(ops.Add())
     for j in range(3):
       derivativeSum += db.kDivMT[j]['kl'] * dQ_prev['lq'] * star_ela['qp']
     derivativeSum = DeduceIndices('kp').visit(derivativeSum)

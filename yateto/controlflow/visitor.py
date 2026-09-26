@@ -1,8 +1,11 @@
+import collections
+from .. import aspp
+from .. import ops
 from ..ast.visitor import Visitor
-from yateto import Scalar
+from ..type import AddressingMode, Tensor, DerivedScalar
 from .graph import *
 from ..memory import DenseMemoryLayout
-from ..ast.node import Permute, Broadcast
+from ..ast.node import Permute, Node, Broadcast
 
 class AST2ControlFlow(Visitor):
   TEMPORARY_RESULT = '_tmp'
@@ -12,6 +15,15 @@ class AST2ControlFlow(Visitor):
     self._cfg = []
     self._writable = set()
     self._simpleMemoryLayout = simpleMemoryLayout
+    self._guard = [Guard.always()]
+    # a condition tensor may be rewritten inside the kernel, so every write
+    # starts a new version and guards refer to (variable, version)
+    self._version = collections.defaultdict(int)
+    # the guard a given version was produced under; reading it is only
+    # meaningful where that guard held, so it is conjoined at every use
+    self._definitionGuard = dict()
+    # name -> (tensor, datatype), so a name collision is reported where it happens
+    self._bound = dict()
 
   def cfg(self):
     return self._cfg + [ProgramPoint(None)]
@@ -23,8 +35,9 @@ class AST2ControlFlow(Visitor):
     if not self._simpleMemoryLayout:
       permute.setEqspp( permute.computeSparsityPattern() )
       permute.computeMemoryLayout()
+    permute.datatype = permute[0].datatype
     result = self._nextTemporary(permute)
-    action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False)
+    action = ProgramAction(result, Expression(permute, self._ml(permute), [variable]), False, condition=self._guard[-1])
     self._addAction(action)
     return result
 
@@ -56,7 +69,7 @@ class AST2ControlFlow(Visitor):
     variables = [self.visit(child) for child in node]
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, Expression(node, self._ml(node), variables), False)
+    action = ProgramAction(result, Expression(node, self._ml(node), variables), False, condition=self._guard[-1])
     self._addAction(action)
 
     return result
@@ -66,43 +79,110 @@ class AST2ControlFlow(Visitor):
     ml = node.getMemoryLayout(var.memoryLayout())
     return VariableView(var, ml, node.eqspp())
 
-  def visit_Add(self, node):
+  def visit_Accumulate(self, node):
     variables = [self.visit(child) for child in node]
     assert len(variables) >= 1
 
+    assert node.optype == ops.Add(), \
+      f'{node} should have been folded into element-wise steps by FoldAccumulate.'
+
+    # A sum becomes a chain of accumulating stores rather than one n-ary
+    # operation: that is what lets a GEMM write into the result with beta = 1
+    # instead of into a temporary.
     variables.sort(key=lambda var: int(not var.writable) + int(not var.isGlobal()))
 
     tmp = self._nextTemporary(node)
     add = False
     for i,var in enumerate(variables):
       rhs = self._addPermuteIfRequired(node.indices, node[i], var)
-      action = ProgramAction(tmp, rhs, add)
+      action = ProgramAction(tmp, rhs, add, condition=self._guard[-1])
       self._addAction(action)
       add = True
 
     return tmp
 
-  def visit_ScalarMultiplication(self, node):
-    variable = self.visit(node.term())
+  def visit_Elementwise(self, node):
+    scaling = node.scalingOperands()
+    if scaling is None:
+      return self.generic_visit(node)
+
+    # A multiplication by a by-value rank-0 quantity becomes the scale factor of
+    # a single action rather than a loop of its own; that is what lets it fold
+    # into a GEMM's alpha instead of running as a separate pass.
+    scalar, term = scaling
+    variable = self.visit(term)
 
     result = self._nextTemporary(node)
-    action = ProgramAction(result, variable, False, node.scalar())
+    action = ProgramAction(result, variable, False, scalar, condition=self._guard[-1])
     self._addAction(action)
 
     return result
 
   def visit_Assign(self, node):
+    outerGuard = self._guard[-1]
+
+    # The condition is evaluated to decide the branch, so it is computed
+    # outside the new guard -- before it is pushed.
+    if isinstance(node.condition(), Node):
+      conditionVar = self.visit(node[2])
+      version = self._version[conditionVar.name]
+      myGuard = Guard.literal(conditionVar, version) \
+                & self._definitionGuard.get((conditionVar.name, version), Guard.always())
+    else:
+      myGuard = Guard.coerce(node.condition())
+
     self.updateWritable(node[0].name())
-    variables = [self.visit(child) for child in node]
 
-    rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), variables[1])
-    action = ProgramAction(variables[0], rhs, False)
-    self._addAction(action)
+    guard = outerGuard & myGuard
 
-    return variables[0]
+    # The whole right-hand side runs under the guard, not just the final store.
+    self._guard.append(guard)
+    try:
+      rVar = self.visit(node[1])
+      rhs = self._addPermuteIfRequired(node.indices, node.rightTerm(), rVar)
+
+      lVar = self.visit(node[0])
+      self._addAction(ProgramAction(lVar, rhs, False, condition=guard))
+    finally:
+      self._guard.pop()
+
+    name = node[0].name()
+    self._version[name] += 1
+    self._definitionGuard[(name, self._version[name])] = guard
+
+    return lVar
 
   def visit_IndexedTensor(self, node):
-    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, is_temporary=node.tensor.temporary)
+    self._bindName(node.name(), node.tensor, node.datatype)
+    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype, is_temporary=node.tensor.temporary)
+
+  def _bindName(self, name, tensor, datatype):
+    """One name, one tensor: a name yields one declaration in the signature.
+
+    Checked here because this is where a name is first bound; further down the
+    variables are deduplicated by name and the second tensor is no longer
+    visible.
+    """
+    bound, boundType = self._bound.setdefault(name, (tensor, datatype))
+    if bound is tensor:
+      return
+    # the datatype comes from the node: by this point SetDatatype has resolved
+    # the ones that were left to the architecture
+    for what, mine, theirs in (('shape', tensor.shape(), bound.shape()),
+                               ('addressing', tensor.addressing, bound.addressing),
+                               ('datatype', datatype, boundType),
+                               ('memory layout', tensor.memoryLayout(), bound.memoryLayout())):
+      if mine != theirs:
+        raise ValueError(
+          f'"{name}" is used with two different {what}s ({mine} vs. {theirs}); '
+          f'one name yields one declaration.')
+    if not aspp.array_equal(tensor.spp(), bound.spp()):
+      raise ValueError(f'"{name}" is used with two different sparsity patterns; '
+                       f'one name yields one declaration.')
+
+  def visit_IfThenElse(self, node):
+    raise NotImplementedError(
+      'IfThenElse is not lowered yet; use yateto.functions.where (Elementwise(Ternary)).')
 
   def _addAction(self, action):
     self._cfg.append(ProgramPoint(action))
@@ -110,7 +190,7 @@ class AST2ControlFlow(Visitor):
   def _nextTemporary(self, node):
     name = f'{self.TEMPORARY_RESULT}{self._tmp}'
     self._tmp += 1
-    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True)
+    return Variable(name, True, self._ml(node), node.eqspp(), is_temporary=True, datatype=node.datatype)
 
   def updateWritable(self, name):
     self._writable = self._writable | {name}
@@ -124,7 +204,7 @@ class SortedGlobalsList(object):
     V = set()
     for pp in cfg:
       if pp.action:
-        V = V | pp.action.result.variables() | pp.action.variables()
+        V = V | pp.action.result.variables() | pp.action.allVariables()
     return sorted([var for var in V if var.isGlobal()], key=lambda x: str(x))
 
 class SortedPrefetchList(object):
@@ -135,14 +215,31 @@ class SortedPrefetchList(object):
         V = V | {pp.action.term.node.prefetch}
     return sorted([v for v in V], key=lambda x: x.name())
 
+def _scalarsOf(cfg):
+  S = set()
+  for pp in cfg:
+    if pp.action:
+      scalars = pp.action.scalar if isinstance(pp.action.scalar, list) else [pp.action.scalar]
+      S = S | {scalar for scalar in scalars if isinstance(scalar, Tensor)}
+  return S
+
 class ScalarsSet(object):
+  """The scalars the caller sets, i.e. the ones in the kernel signature."""
+
   def visit(self, cfg):
-    S = set()
-    for pp in cfg:
-      if pp.action:
-        if isinstance(pp.action.scalar, Scalar):
-          S = S | {pp.action.scalar}
-    return S
+    scalars = _scalarsOf(cfg)
+    # a derived scalar is computed in the prologue, so it also pulls in the
+    # named scalars its expression reads
+    for derived in [s for s in scalars if isinstance(s, DerivedScalar)]:
+      scalars = scalars | derived.dependencies()
+    return {scalar for scalar in scalars if not scalar.temporary}
+
+class DerivedScalarsList(object):
+  """The scalars the kernel computes before it does anything else."""
+
+  def visit(self, cfg):
+    derived = [s for s in _scalarsOf(cfg) if isinstance(s, DerivedScalar)]
+    return sorted(derived, key=lambda s: s.name())
 
 class PrettyPrinter(object):
   def __init__(self, printPPState = False):

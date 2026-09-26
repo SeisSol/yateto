@@ -357,7 +357,9 @@ class UnitTestFactory(KernelFactory):
     resultTerm = self._formatTerm(result, node.indices)
     terms = [self._formatTerm(arguments[i], child.indices) for i,child in enumerate(node)]
 
-    if scalar and scalar != 1.0:
+    # `is not None`, not truthiness: a factor of zero is a factor, and the one
+    # the kernel applies -- dropping it made the reference compute B for 0 * B
+    if scalar is not None and scalar != 1.0:
       terms.insert(0, str(scalar))
 
     if not add:
@@ -433,7 +435,7 @@ class UnitTestFactory(KernelFactory):
   def _simpleBody(self, resultTerm, termTerm, add, scalar, indices, reduceIdx = None):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
 
-    if scalar and scalar != 1.0:
+    if scalar is not None and scalar != 1.0:
       # parenthesised: `*` binds tighter than the operators an operation may
       # spell itself with, so the factor would otherwise land on one operand
       termTerm = f'{scalar} * ({termTerm})'

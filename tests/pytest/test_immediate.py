@@ -79,21 +79,26 @@ class TestPrecondition:
 
 
 class TestFallback:
-    """A generator that reads through an address gets the tensor from memory.
+    """A generator that cannot take the numbers gets the tensor from memory.
 
     The mode is a request: the occurrence whose generator cannot take it reads
-    the pool entry instead, and the generation says so. An operand that can
-    be written into the code where one statement reads it need not be
-    refused a GEMM elsewhere.
+    the pool entry instead, and the generation says so. Here that is a GEMM
+    the immediate operand is looped over -- a different matrix in every
+    iteration -- while an element-wise statement elsewhere reads the same
+    tensor with its numbers in the code.
     """
 
     @pytest.fixture(autouse=True)
-    def emitted(self, tmp_path, immediate, operands, capsys):
-        A = Tensor('A', (N, N))
-        self.files = generate(
-            tmp_path,
-            [operands['out']['ij'] <= immediate['ik'] * operands['B']['kj'],
-             operands['out']['ij'] <= immediate['ij'] * A['ij']])
+    def emitted(self, tmp_path, capsys):
+        data = np.zeros((N, N, 2))
+        data[0, 0, 0] = 0.5
+        data[1, 2, 1] = -1.0
+        C = Tensor('C', (N, N, 2), spp=data, addressing=AddressingMode.IMMEDIATE)
+        A = Tensor('A', (N, N, 2))
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N, 2))
+        self.files = generate(tmp_path, [out['ijl'] <= C['ikl'] * B['kj'],
+                                         out['ijl'] <= C['ijl'] * A['ijl']])
         self.printed = capsys.readouterr().out
 
     def struct(self, name):
@@ -127,16 +132,66 @@ class TestFallback:
         test = self.files['KernelTest.t.h'].split('void testk0')[1].split('void test')[0]
         assert test.index('krnl.bindGlobals(Pool::host());') < test.index('krnl.B = B;')
 
-    def test_a_kernel_without_immediates_binds_nothing_in_its_test(self, tmp_path,
-                                                                  operands):
+    def test_a_kernel_without_immediates_binds_nothing_in_its_test(self, tmp_path):
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
         (tmp_path / 'plain').mkdir()
-        files = generate(tmp_path / 'plain',
-                         [operands['out']['ij'] <= 2.0 * operands['B']['ij']])
+        files = generate(tmp_path / 'plain', [out['ij'] <= 2.0 * B['ij']])
         assert 'bindGlobals' not in files['KernelTest.t.h']
 
-    def test_the_operand_is_restored_after_the_operation(self, immediate):
-        """The memory reading is the occurrence's, not the tensor's."""
-        assert not immediate.isPassedAsArgument()
+
+class TestHostGemm:
+    """A GEMM on the host writes the numbers into its loops.
+
+    One loop per column of the result (per row, for a left operand), holding
+    that column's entries as a sum: the loop over k and the operand are gone,
+    a zero costs nothing, a one is not a multiplication and a minus one is a
+    sign. A selector is therefore the column it selects.
+    """
+
+    def body(self, tmp_path, statement, capsys=None):
+        files = generate(tmp_path, [statement])
+        body = files['kernel.cpp'].split('k0::execute')[1]
+        return files, body
+
+    def test_a_right_operand_is_one_loop_per_column(self, tmp_path, immediate,
+                                                   operands, capsys):
+        files, body = self.body(tmp_path, operands['out']['ij']
+                                <= operands['B']['ik'] * immediate['kj'])
+        assert '= 0.5 * B[0 + 1*m + 4*0];' in body
+        assert '= -B[0 + 1*m + 4*1];' in body
+        assert 'Note:' not in capsys.readouterr().out
+        struct = files['kernel.h'].split('struct k0')[1].split('struct')[0]
+        assert '* C' not in struct and '** C' not in struct
+
+    def test_a_left_operand_is_one_loop_per_row(self, tmp_path, immediate, operands):
+        _, body = self.body(tmp_path, operands['out']['ij']
+                            <= immediate['ik'] * operands['B']['kj'])
+        assert 'out[0 + 1*0 + 4*n] = 0.5 * B[0 + 1*0 + 4*n];' in body
+        assert 'out[0 + 1*1 + 4*n] = -B[0 + 1*2 + 4*n];' in body
+
+    def test_a_selector_is_the_entry_it_selects(self, tmp_path):
+        unit = np.zeros(13)
+        unit[5] = 1.0
+        pick = Tensor('pick', (13,), spp=unit, addressing=AddressingMode.IMMEDIATE)
+        p = Tensor('p', (13,))
+        s = Tensor('s', ())
+        _, body = self.body(tmp_path, s[''] <= p['z'] * pick['z'])
+        assert '] = p[5 + 13*m + 1*0];' in body
+        assert '*' not in body.split('] = p[')[1].split(';')[0].replace('13*m', '').replace('1*0', '')
+
+    def test_the_scale_factor_is_folded_into_the_numbers(self, tmp_path, immediate,
+                                                        operands):
+        _, body = self.body(tmp_path, operands['out']['ij']
+                            <= 2.0 * operands['B']['ik'] * immediate['kj'])
+        # 2 * 0.5 is one, and 2 * -1 a factor of two with a sign
+        assert '= B[0 + 1*m + 4*0];' in body
+        assert '= -2.0 * B[0 + 1*m + 4*1];' in body
+
+    def test_nothing_is_read_for_it(self, tmp_path, immediate, operands):
+        _, body = self.body(tmp_path, operands['out']['ij']
+                            <= operands['B']['ik'] * immediate['kj'])
+        assert 'C[' not in body and 'C != nullptr' not in body
 
 
 class TestInMemoryTwin:

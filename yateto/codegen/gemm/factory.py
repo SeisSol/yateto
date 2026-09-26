@@ -76,6 +76,10 @@ class Description(object):
 
 
 def generator(arch, descr, gemm_cfg, target, attrs=None):
+  if descr.leftTerm.immediate is not None or descr.rightTerm.immediate is not None:
+    # a tool is handed addresses, and an immediate operand has none: its
+    # numbers are written where they are read, which is this generator's
+    return Generic(arch, descr)
   AOk = descr.isACsc or descr.leftTerm.memoryLayout.stridei(0) == 1
   BOk = descr.isBCsc or descr.rightTerm.memoryLayout.stridei(0) == 1
   strideOneC = descr.result.memoryLayout.stridei(0) == 1

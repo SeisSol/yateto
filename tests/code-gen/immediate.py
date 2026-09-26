@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from yateto import *
+from yateto import memory
 from yateto.type import AddressingMode
 
 import numpy as np
@@ -54,15 +55,31 @@ def add(g):
   _(A['kc'].subslice('c', 1, 3) <= e0['k'] * v['c'].subslice('c', 0, 2))
   _(A['kc'].subslice('c', 5, 8) <= T['kc'].subslice('c', 2, 5) * v['k'])
 
-  # read through an address: a generator that cannot write the numbers into
-  # its code reads the tensor from the pool, which the test binds
+  # GEMMs on the host: one loop per column (or row) with the numbers in it;
+  # a selector is the column it selects
   w = Tensor('w', (N,))
   s = Tensor('s', ())
   _(A['ij'] <= T['ik'] * B['kj'])
+  _(A['ij'] <= B['ik'] * T['kj'])
+  _(A['ij'] <= 2.0 * T['ik'] * B['kj'])
+  _(A['ij'] <= A['ij'] + B['ik'] * T['kj'])
   _(w['i'] <= B['ij'] * e0['j'])
   _(s[''] <= v['i'] * trace['i'])
+  Tc = Tensor('Tc', (N, N), spp=table, memoryLayoutClass=memory.CSCMemoryLayout,
+              addressing=AddressingMode.IMMEDIATE)
+  _(A['ij'] <= B['ik'] * Tc['kj'])
 
-  # both in one kernel: the element-wise statement writes the numbers, the
-  # GEMM reads the same tensor from memory
+  # both in one kernel: the element-wise statement and the GEMM both write
+  # the numbers
   _([A['ij'] <= T['ij'] * B['ij'],
      B['ij'] <= T['ik'] * A['kj']])
+
+  # looped over, so a different matrix in every iteration: read from the
+  # pool, which the test binds
+  cube = np.zeros((N, N, 2))
+  cube[0, 0, 0] = 0.5
+  cube[1, 2, 1] = -1.0
+  cube[5, 5, 1] = 3.0
+  C3 = immediate('C3', cube)
+  A3 = Tensor('A3', (N, N, 2))
+  _(A3['ijl'] <= C3['ikl'] * B['kj'])

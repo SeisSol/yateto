@@ -64,7 +64,7 @@ class KernelFactory(object):
     with self._immediatesFromMemory('simple', 'copy', None, [result, term]):
       return self.simple(result, term, condition, add, scalar, routineCache, gemm_cfg)
 
-  def acceptsImmediate(self, method):
+  def acceptsImmediate(self, method, node=None):
     """Whether `method`'s generator can read an operand with no storage.
 
     Two ways to be able to: spell the numbers out where the operand is read,
@@ -90,7 +90,7 @@ class KernelFactory(object):
     the kernel declares the member, the pool holds the entry and
     `bindGlobals` binds it.
     """
-    if self.acceptsImmediate(method):
+    if self.acceptsImmediate(method, node):
       yield
       return
     holders = [occurrence for occurrence in _indexedTensors(node)]
@@ -219,16 +219,38 @@ class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target, attrs=None):
     super().__init__(cpp, arch, target, attrs)
 
-  def acceptsImmediate(self, method):
-    """The element-wise generator writes the numbers where it reads them.
+  def acceptsImmediate(self, method, node=None):
+    """The element-wise generator, and the host GEMM where it can.
 
-    It is the one that already unrolls: a sparse operand has no address
+    The element-wise one already unrolls: a sparse operand has no address
     expression either, so the entries are written out one statement at a
-    time and each of them can name a number instead of a load. Everything
-    else here reads its operands through an address, or hands them to a
-    routine that does.
+    time and each of them can name a number instead of a load.
+
+    A GEMM on the host goes to the generic generator, which writes one loop
+    per column of the result with that column's numbers in it -- provided the
+    immediate operand is the same matrix in every iteration of the loops
+    around the GEMM, which is to say it has none of their indices, and that
+    what it meets is dense. Everything else here reads its operands through
+    an address, or hands them to a routine that does.
     """
-    return method == 'create_Elementwise'
+    if method == 'create_Elementwise':
+      return True
+    if method == 'create_LoopOverGEMM' and self._target == 'cpu' and node is not None:
+      return self._gemmTakesImmediates(node)
+    return False
+
+  @staticmethod
+  def _gemmTakesImmediates(node):
+    loopIndices = set(node.loopIndices())
+    immediate = [not operand.viewed().tensor.isPassedAsArgument()
+                 if isinstance(operand.viewed(), IndexedTensor) else False
+                 for operand in (node[0], node[1])]
+    for operand, isImmediate in zip((node[0], node[1]), immediate):
+      if isImmediate and loopIndices & set(operand.indices):
+        return False
+      if not isImmediate and any(immediate) and operand.memoryLayout().isSparse():
+        return False
+    return True
 
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
@@ -312,7 +334,7 @@ class UnitTestFactory(KernelFactory):
     self._rand = 0
     self._testFramework = testFramework
 
-  def acceptsImmediate(self, method):
+  def acceptsImmediate(self, method, node=None):
     """Always: the reference implementation reads buffers of its own.
 
     The test fills one for every tensor, from the same values, so it can
@@ -607,7 +629,7 @@ class ExportGenerator:
     pass
 
 class ExportFactory(KernelFactory):
-  def acceptsImmediate(self, method):
+  def acceptsImmediate(self, method, node=None):
     """Always: the description states the values, so the far side decides.
 
     Whether it can materialise them is its own question and it is asked

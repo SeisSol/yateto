@@ -806,3 +806,19 @@ class TestOfferingsAcrossVariants:
         # only the variant that reads G(0) asks for F(0) rearranged
         with pytest.raises(ValueError, match=r'Variants 0 and 1 of fam read F\(0\)'):
             exportFamily(build, lambda name, described: name == 'F(0)' and 'G(0)' in described)
+
+    def test_an_offering_names_a_namespaced_tensor_as_it_was_described(self):
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        A = Tensor('A', (N, N), values, namespace='ns')
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        plain = exportFamily(lambda g: g.add('k', out['ij'] <= A['ik'] * B['kj'], target='gpu'),
+                             lambda name, described: False)
+        offered = exportFamily(lambda g: g.add('k', out['ij'] <= A['ik'] * B['kj'], target='gpu'),
+                               lambda name, described: name == 'A')
+        assert open(os.path.join(plain, 'pool.h')).read() \
+            != open(os.path.join(offered, 'pool.h')).read()

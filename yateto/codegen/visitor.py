@@ -359,12 +359,25 @@ class OptimizedKernelGenerator(KernelGenerator):
     # know how it wants to read what it reads, and once the operands are
     # known, because that is what an offering is checked against. Constants
     # only: an operand the caller fills in is arranged by whoever fills it.
+    # The description names a tensor as the kernel does, without its
+    # namespace, and an offering answers in those names.
+    described = collections.defaultdict(set)
+    for bn in members:
+      described[Tensor.splitBasename(bn)[1]].add(bn)
     for offeredName, offered in factory.layoutOfferings().items():
       # Offered under whatever name the tensor was described by, so a member
       # of a family names that member, and only that member is rearranged.
       named = Tensor.isValidName(offeredName)
       baseName = Tensor.getBaseName(offeredName) if named else offeredName
       group = Tensor.getGroup(offeredName) if named else tuple()
+      if baseName not in layouts:
+        candidates = described.get(baseName, set())
+        if len(candidates) > 1:
+          raise ValueError('{} offered an arrangement for {}, which this kernel reads '
+                           'from more than one namespace ({}).'.format(
+                             type(factory).__name__, offeredName, ', '.join(sorted(candidates))))
+        if candidates:
+          baseName = next(iter(candidates))
       if baseName not in layouts:
         raise ValueError('{} offered an arrangement for {}, which it does not '
                          'read.'.format(type(factory).__name__, baseName))

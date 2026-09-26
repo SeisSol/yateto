@@ -131,7 +131,7 @@ class AST2ControlFlow(Visitor):
     else:
       myGuard = Guard.coerce(node.condition())
 
-    self.updateWritable(node[0].name())
+    self.updateWritable(self._variableName(node[0].viewed()))
 
     guard = outerGuard & myGuard
 
@@ -146,15 +146,30 @@ class AST2ControlFlow(Visitor):
     finally:
       self._guard.pop()
 
-    name = node[0].name()
+    name = self._variableName(node[0].viewed())
     self._version[name] += 1
     self._definitionGuard[(name, self._version[name])] = guard
 
     return lVar
 
   def visit_IndexedTensor(self, node):
-    self._bindName(node.name(), node.tensor, node.datatype)
-    return Variable(node.name(), node.name() in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype, is_temporary=node.tensor.temporary)
+    name = self._variableName(node)
+    self._bindName(name, node.tensor, node.datatype)
+    return Variable(name, name in self._writable, self._ml(node), node.eqspp(), node.tensor, datatype=node.datatype, is_temporary=node.tensor.temporary)
+
+  @staticmethod
+  def _variableName(node):
+    """The name the generated code knows an operand by.
+
+    The tensor's own for anything the kernel is handed: `M(0)` reads one
+    member of a group, which is what it is. A temporary is a local pointer
+    instead, and `double* T(0);` declares nothing of the kind -- so a
+    temporary that belongs to a group carries the group in its name.
+    """
+    tensor = node.tensor
+    if not tensor.temporary or len(tensor.group()) == 0:
+      return node.name()
+    return '_'.join([tensor.baseName()] + [str(g) for g in tensor.group()])
 
   def _bindName(self, name, tensor, datatype):
     """One name, one tensor: a name yields one declaration in the signature.
@@ -169,6 +184,10 @@ class AST2ControlFlow(Visitor):
     # the datatype comes from the node: by this point SetDatatype has resolved
     # the ones that were left to the architecture
     for what, mine, theirs in (('shape', tensor.shape(), bound.shape()),
+                               # a temporary named after its group can meet a
+                               # tensor that is called that outright
+                               ('kind', 'temporary' if tensor.temporary else 'tensor',
+                                'temporary' if bound.temporary else 'tensor'),
                                ('addressing', tensor.addressing, bound.addressing),
                                ('datatype', datatype, boundType),
                                ('memory layout', tensor.memoryLayout(), bound.memoryLayout())):

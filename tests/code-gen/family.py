@@ -18,3 +18,12 @@ def add(g):
 
   g.addFamily("family1px", parameterSpaceFromRanges(range(1, 10, 2)), build)
   g.addFamily("family2px", parameterSpaceFromRanges(range(1, 10, 2), range(10, 20, 3)), build)
+
+  # temporaries that form a group: locals, so the group is part of the name
+  M = [Tensor(f"M({i})", (N, N)) for i in range(2)]
+  T = [Tensor(f"T({i})", (N, N), temporary=True) for i in range(2)]
+  g.add("tmpgroup", [T[0]["ij"] <= M[0]["ik"] * A["kj"],
+                     T[1]["ij"] <= M[1]["ik"] * B["kj"],
+                     C["ij"] <= T[0]["ik"] * T[1]["kj"]])
+  g.addFamily("tmpgroupfamily", simpleParameterSpace(2),
+              lambda i: [T[i]["ij"] <= M[i]["ik"] * A["kj"], C["ij"] <= C["ij"] + T[i]["ik"] * B["kj"]])

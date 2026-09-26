@@ -14,6 +14,7 @@ from ..controlflow.graph import Variable
 from .arrangement import Arrangement, layoutTag
 from .code import Cpp
 from .factory import *
+from .flops import FlopCount
 from .common import BatchedOperationsAux, KernelAttributes
 from ..type import Scalar, Tensor, Datatype
 
@@ -111,7 +112,7 @@ class KernelGenerator(object):
       cpp(f'{datatype.ctype()} const {scalar.name()} = {scalar.expression.ccode(self._arch)};')
 
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
-    hwFlops = 0
+    hwFlops = FlopCount()
     # temporary memory required (per element in case of gpu)
     # NOTE: it is required to know in case if the memory is allocated on the heap
     #       an provided by the user
@@ -344,6 +345,11 @@ class OptimizedKernelGenerator(KernelGenerator):
     for tensor in prefetchTensors:
       self.KernelOutline._addTensor(tensor, prefetch)
 
+    # Counted by whoever issued it: a generator working in a precision other
+    # than the operation's is the only one that can say what it issued, and
+    # in what.
+    hwFlops = hwFlops + FlopCount(factory.flopReport())
+
     # Asked once the kernel is built, because only then does the generator
     # know how it wants to read what it reads, and once the operands are
     # known, because that is what an offering is checked against. Constants
@@ -508,6 +514,20 @@ class OptimizedKernelGenerator(KernelGenerator):
           ))
 
         addConst(self.NONZEROFLOPS_NAME, lambda ko: ko.nonZeroFlops)
+        # What the total is made of, where it is made of more than one kind of
+        # arithmetic. Said here rather than summed silently: a kernel that
+        # reaches its result in a narrower precision issues a count in a
+        # currency of its own, and dividing it by one peak gives a figure that
+        # means nothing.
+        for index, ko in enumerate(kernelOutlines):
+          counted = FlopCount(ko.hwFlops) if ko is not None else FlopCount()
+          if counted.isPlain():
+            continue
+          header('// {}{}: {}'.format(
+            self.HARDWAREFLOPS_NAME,
+            '[{}]'.format(index) if brackets else '',
+            ', '.join('{} {}'.format(count, kind)
+                      for kind, count in counted.kinds().items())))
         addConst(self.HARDWAREFLOPS_NAME, lambda ko: ko.hwFlops)
         addConst(self.INBOUND_CONST_BYTES_NAME, lambda ko: ko.inConstBytes)
         addConst(self.INBOUND_BYTES_NAME, lambda ko: ko.inBytes)

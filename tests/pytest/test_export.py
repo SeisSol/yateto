@@ -639,3 +639,94 @@ class TestPreparedConstants:
     def test_numbers_that_do_not_divide_into_parts_are_refused(self):
         with pytest.raises(ValueError, match='do not divide'):
             self._generate({'A': {'data': [1.0, 2.0, 3.0], 'parts': 2}})
+
+
+class Counter(Collector):
+    """An exporter that says what kind of arithmetic it issued."""
+
+    report = {}
+
+    def flop_report(self):
+        return dict(self.report)
+
+
+def exportCounting(statements, report, target='gpu'):
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+
+    def make(a, attrs=None):
+        it = Counter(a, attrs)
+        it.report = report
+        return it
+
+    generator = Generator(arch)
+    for i, statement in enumerate(statements):
+        generator.add(f'k{i}', statement, target=target)
+    out = tempfile.mkdtemp()
+    generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                       routine_exporters={target: make})
+    return open(os.path.join(out, 'kernel.h')).read()
+
+
+class TestReportedFlops:
+    """What a generator issued, in the currency it issued it in."""
+
+    @staticmethod
+    def _tensors():
+        return {'A': Tensor('A', (N, N)), 'B': Tensor('B', (N, N)),
+                'out': Tensor('out', (N, N))}
+
+    def _kernelH(self, report):
+        t = self._tensors()
+        return exportCounting([t['out']['ij'] <= t['A']['ik'] * t['B']['kj']], report)
+
+    def test_without_a_report_the_count_stays_zero(self):
+        kernel_h = self._kernelH({})
+
+        assert 'HardwareFlops' in kernel_h
+        assert 'HardwareFlops:' not in kernel_h
+
+    def test_a_reported_count_reaches_the_total(self):
+        kernel_h = self._kernelH({'mma:tf32': 300})
+
+        assert 'HardwareFlops' in kernel_h
+        assert '300' in kernel_h
+
+    def test_the_kinds_are_stated_beside_the_total(self):
+        kernel_h = self._kernelH({'mma:tf32': 300, 'fma:f32': 12})
+
+        assert '300 mma:tf32' in kernel_h
+        assert '12 fma:f32' in kernel_h
+
+    def test_a_total_of_one_kind_needs_no_explaining(self):
+        kernel_h = self._kernelH({'plain': 44})
+
+        assert '44' in kernel_h
+        assert 'HardwareFlops:' not in kernel_h
+
+
+class TestFlopCount:
+    """The count itself: it adds like a number and keeps its kinds."""
+
+    def test_it_adds_to_a_plain_number(self):
+        from yateto.codegen.flops import FlopCount
+
+        assert int(0 + FlopCount(12) + 30) == 42
+
+    def test_kinds_stay_apart_while_the_total_adds_up(self):
+        from yateto.codegen.flops import FlopCount
+
+        counted = FlopCount({'a': 2}) + FlopCount({'b': 3}) + FlopCount({'a': 1})
+
+        assert counted.kinds() == {'a': 3, 'b': 3}
+        assert int(counted) == 6
+
+    def test_it_spells_itself_as_its_total(self):
+        from yateto.codegen.flops import FlopCount
+
+        assert '{}'.format(FlopCount({'a': 2, 'b': 3})) == '5'
+
+    def test_nothing_counted_is_falsy(self):
+        from yateto.codegen.flops import FlopCount
+
+        assert not FlopCount()
+        assert FlopCount() == 0

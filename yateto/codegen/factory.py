@@ -155,6 +155,20 @@ class KernelFactory(object):
   def allocateTemporary(self):
     return True
 
+  def flopReport(self):
+    """The arithmetic this factory issued that it has not already counted.
+
+    Empty from a factory whose operations return their own count, which is
+    every one that works in the type the operation is written in. One that
+    emulates -- carrying a multiply out in a narrower precision, several
+    products to a product -- returns what it issued and in what kind, since
+    the count it would otherwise give would be in a currency of its own
+    without saying so.
+
+    Asked once the kernel is generated, for the same reason an offering is.
+    """
+    return {}
+
   def layoutOfferings(self):
     """How this factory wants the constants it reads to be arranged.
 
@@ -717,6 +731,26 @@ class ExportFactory(KernelFactory):
     self.tensors = {}
     self.operations = []
     self.scalarcounter = 0
+
+  def flopReport(self):
+    """What the exporter says it issued, where it says anything.
+
+    Optional on its side and outside the interface version, as an offering
+    is: an exporter that says nothing is one whose arithmetic yateto could
+    not have counted anyway, and zero is what it reported before there was
+    anywhere to say otherwise.
+    """
+    report = getattr(self.generator, 'flop_report', None)
+    if report is None:
+      return {}
+    counts = report()
+    if not counts:
+      return {}
+    if not isinstance(counts, dict):
+      raise TypeError('{}.flop_report() must map a kind of arithmetic to a '
+                      'count; got {}.'.format(type(self.generator).__name__,
+                                              type(counts).__name__))
+    return counts
 
   def layoutOfferings(self):
     """What the exporter asks for, where it asks for anything.

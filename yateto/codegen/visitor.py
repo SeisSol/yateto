@@ -1124,6 +1124,7 @@ class InitializerGenerator(object):
   SIZE_FUN_NAME = 'size'
   INDEX_FUN_NAME = 'index'
   VALUES_BASENAME = 'Values'
+  POOL_MEMBER_NAME = 'PoolMember'
   CONTAINER_CLASS_NAME = 'Container'
   CONTAINER_DATA_NAME = 'data'
   TENSOR_NAMESPACE = 'tensor'
@@ -1617,6 +1618,17 @@ class InitializerGenerator(object):
             nValueArrays += 1
         if nValueArrays > 1:
           cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')
+
+        # Where a pool holds the family as it lays itself out -- the numbers
+        # `Values` refers to. The member of `Pool` is named after the
+        # arrangement, which is a hash; code that reads the constants itself
+        # rather than through a kernel's bindGlobals, from a pool that lives
+        # on a device, say, names it through this instead: `pool.*PoolMember`.
+        own = self._pool.get((baseName, Arrangement.of(tensors).tag()))
+        if own is not None:
+          cpp('{} {} auto {} = &{}::{};'.format(CONSTEXPR, STATIC, self.POOL_MEMBER_NAME,
+                                                PoolGenerator.POOL_STRUCT_NAME,
+                                                PoolGenerator.memberName(baseName, own.arrangement)))
 
         cpp.emptyline()
         if len(groupSize) == 0:

@@ -9,6 +9,9 @@ caller gets back keeps pointing at its own data.
 from __future__ import annotations
 
 import collections
+import pathlib
+import shutil
+import subprocess
 from io import StringIO
 
 import re
@@ -718,3 +721,60 @@ class TestTheHostsWidth:
         arch = self._arch(('shsw',))
 
         assert arch.hostAlignment.alignment == arch.alignment
+
+
+class TestPoolMemberOfATensor:
+    """Where a pool holds a tensor as it lays itself out, named stably.
+
+    The member of `Pool` carries a hash of the arrangement, which is nothing
+    code outside the generated kernels can spell. Such code -- a hand-written
+    device routine reading a constant from a pool on the device -- reaches it
+    through `init::X::PoolMember`, a pointer to that member.
+    """
+
+    @staticmethod
+    def _generate(tmp_path):
+        from yateto import Generator
+        from yateto.gemm_configuration import GeneratorCollection
+
+        arch = useArchitectureIdentifiedBy('dhsw')
+        A = Tensor('A', (4, 4), np.arange(1.0, 17.0).reshape(4, 4))
+        F = {i: Tensor('F({})'.format(i), (4, 4), np.full((4, 4), float(i + 2)))
+             for i in range(2)}
+        B = Tensor('B', (4, 4))
+        C = Tensor('C', (4, 4))
+        g = Generator(arch)
+        g.add('k', C['ij'] <= A['ik'] * F[0]['kl'] * F[1]['lm'] * B['mj'])
+        g.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return tmp_path
+
+    def test_it_points_at_the_member_that_holds_it(self, tmp_path):
+        out = self._generate(tmp_path)
+        init_h = (out / 'init.h').read_text()
+        pool_h = (out / 'pool.h').read_text()
+        found = re.findall(r'constexpr static auto PoolMember = &Pool::((\w+?)_[0-9a-f]{8});', init_h)
+        members = {base: member for member, base in found}
+        assert set(members) == {'A', 'F'}
+        for member in members.values():
+            assert re.search(r'\b{}\{{\}};'.format(member), pool_h), member
+
+    @pytest.mark.skipif(shutil.which('c++') is None, reason='needs a C++ compiler')
+    def test_it_reaches_the_same_numbers_as_init(self, tmp_path):
+        (tmp_path / 'gen').mkdir()
+        out = self._generate(tmp_path / 'gen')
+        include = pathlib.Path(__file__).resolve().parents[2] / 'include'
+        (tmp_path / 'main.cpp').write_text(
+            '#include "init.h"\n'
+            'int main() {\n'
+            '  auto pool = yateto::Pool::host();\n'
+            '  if (pool.*yateto::init::A::PoolMember != yateto::init::A::Values) return 1;\n'
+            '  if ((pool.*yateto::init::F::PoolMember)(1) != yateto::init::F::Values1) return 2;\n'
+            '  if ((pool.*yateto::init::F::PoolMember)(1)[0] != 3.0) return 3;\n'
+            '  return 0;\n'
+            '}\n')
+        sources = [str(tmp_path / 'main.cpp')] + [str(out / name) for name in
+                                                  ('pool.cpp', 'init.cpp', 'tensor.cpp')]
+        subprocess.run(['c++', '-std=c++17', f'-I{include}', f'-I{out}', *sources,
+                        '-o', str(tmp_path / 'poolmember')], check=True,
+                       capture_output=True, text=True)
+        assert subprocess.run([str(tmp_path / 'poolmember')]).returncode == 0

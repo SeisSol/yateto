@@ -360,3 +360,41 @@ class TestByValueOperand:
         assert header.count('double beta') == 1
         assert 'double const* beta' not in header
         assert 'beta[0]' not in code
+
+    @staticmethod
+    def _emitTest(statements):
+        """The unit test the generator writes for `statements`."""
+        import pathlib
+        import tempfile
+        from yateto import Generator, useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        generator = Generator(useArchitectureIdentifiedBy('dhsw'))
+        for i, statement in enumerate(statements):
+            generator.add(f'k{i}', statement)
+        with tempfile.TemporaryDirectory() as out:
+            generator.generate(out, gemm_cfg=GeneratorCollection([]))
+            return (pathlib.Path(out) / 'KernelTest.t.h').read_text()
+
+    def test_the_unit_test_hands_it_over_by_value(self):
+        """The test used to fill it like a tensor: a buffer, an init view that
+        a scalar does not have, and the buffer assigned to the value member."""
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        floor = Scalar('floor')
+        test = self._emitTest([C['ij'] <= yf.maximum(A['ij'], floor)])
+        assert 'double floor = ' in test
+        assert 'krnl.floor = floor;' in test
+        assert 'init::floor' not in test
+        # the reference reads it through a buffer of its own, from that value
+        assert 'double _ut_floor[1] = {floor};' in test
+
+    def test_the_unit_test_declares_a_scalar_used_two_ways_once(self):
+        import yateto.functions as yf
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        beta = Scalar('beta')
+        test = self._emitTest([[C['ij'] <= beta * A['ij'], C['ij'] <= yf.add(beta, B['ij'])]])
+        assert test.count('double beta = ') == 1
+        assert test.count('krnl.beta = beta;') == 1

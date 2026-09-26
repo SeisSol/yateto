@@ -757,9 +757,18 @@ class UnitTestGenerator(KernelGenerator):
     use_flags = device_test and attrs is not None and attrs.flags
 
     scalars = ScalarsSet().visit(cfg)
-    scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
     bindPool = any(not var.tensor.isPassedAsArgument() for var in variables)
+    # A by-value operand is a scalar wherever it turns up, as it is in the
+    # kernel's signature: the kernel takes its value, and there is no buffer,
+    # no init view and no device copy of it. The reference reads it through a
+    # buffer of its own like any other operand, filled from that same value.
+    byValue = [var for var in variables if var.tensor.isPassedByValue()]
+    variables = [var for var in variables if not var.tensor.isPassedByValue()]
+    scalars = {scalar.name(): scalar for scalar in scalars}
+    for var in byValue:
+      scalars.setdefault(var.tensor.name(), var.tensor)
+    scalars = sorted(scalars.values(), key=str)
     conditions = self._conditionVariables(cfg)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
@@ -777,10 +786,15 @@ class UnitTestGenerator(KernelGenerator):
       with loop:
        factory = UnitTestFactory(cpp, self._arch, self._name, testFramework)
 
-       for i,scalar in enumerate(scalars):
-         cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), float(i+2)))
-
        conditionBit = {str(var): i for i, var in enumerate(conditions)}
+       for i,scalar in enumerate(scalars):
+         bit = conditionBit.get(scalar.name())
+         value = (f'(({self.CASE_VAR} >> {bit}) & 1) != 0' if bit is not None and cases > 1
+                  else float(i+2))
+         cpp('{} {} = {};'.format(scalar.getDatatype(self._arch).ctype(), self._tensorNameS(scalar), value))
+       for var in byValue:
+         cpp('{} {}[1] = {{{}}};'.format(var.datatype.ctype(), self._name(var), self._tensorNameS(var.tensor)))
+
        for var in variables:
          bit = conditionBit.get(str(var))
          factory.tensor(var.tensor, self._tensorName(var),

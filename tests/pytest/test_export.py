@@ -377,3 +377,33 @@ class TestConflictingOccurrences:
         factory._handleTensor(self.description(sizes=(4, 4)), ['i', 'j'])
         with pytest.raises(ValueError, match=r'storage\.sizes: \[4, 2\] here, \[4, 4\] before'):
             factory._handleTensor(self.description(sizes=(4, 2)), ['i', 'j'])
+
+
+class TestAlignmentIsTheStorages:
+    """`alignment` is stated for the tensor, so it is the storage's promise.
+
+    Asked of the occurrence, a slice along the leading axis of a width that is
+    not a multiple of the vector length promised nothing while the whole
+    tensor promised its alignment -- two descriptions of one name, and the
+    exporter refused the kernel. The shift of a slice arrives with its
+    reference; what it means for the alignment is the far side's to derive.
+    """
+
+    @pytest.fixture
+    def aligned(self):
+        from yateto.memory import DenseMemoryLayout
+        arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+        previous = DenseMemoryLayout.ALIGNMENT_ARCH
+        DenseMemoryLayout.setAlignmentArch(arch)
+        yield arch
+        DenseMemoryLayout.ALIGNMENT_ARCH = previous
+
+    def test_a_slice_and_the_whole_describe_one_tensor(self, aligned):
+        X = Tensor('X', (N, N), alignStride=True)
+        out = Tensor('out', (N, N))
+        part = Tensor('part', (N - 1, N))
+        collector = export([[out['ij'] <= X['ij'],
+                             part['ij'] <= X['ij'].subslice('i', 1, N)]])
+        described = [t for t in collector.tensors if t['name'] == 'X']
+        assert len(described) == 1
+        assert described[0]['alignment'] == aligned.alignment

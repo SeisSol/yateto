@@ -583,7 +583,9 @@ class ExportGenerator:
   #:    passed for the operand and no pool entry is bound for it. Its
   #:    `addressing` is `null`, so an exporter ignoring the field falls off
   #:    the end of its formula table, or addresses a parameter that no
-  #:    kernel declares.
+  #:    kernel declares. And `alignment` is the storage's in every
+  #:    occurrence, as version 2 states it: a slice along the leading axis
+  #:    used to state its own, and two occurrences of one name disagreed.
   #:
   #: 6: a scale factor is stated once, as `linear.alpha`, for every kind of
   #:    operation. A multilinear one also listed it among its operands, so an
@@ -828,7 +830,10 @@ class ExportFactory(KernelFactory):
       # What the layout guarantees about the address of a column, in bytes.
       # Zero is not "unaligned", it is "no promise" -- the receiving side
       # decides what to do with a promise, and can make none out of nothing.
-      'alignment': self._alignment(tensorIndexed.memoryLayout),
+      # The storage's promise, like everything else in here: a slice is an
+      # occurrence, and its shift arrives with the reference. Asking the view
+      # made the field differ between two occurrences of one tensor.
+      'alignment': self._alignment(ml),
       'flags': {
         'temporary': tensorIndexed.is_temporary,
         'constant': tensorIndexed.is_compute_constant

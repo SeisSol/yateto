@@ -182,8 +182,12 @@ class DetermineLocalInitialization(object):
           bufferSize[buf] = size
 
       # free buffers
+      # NOTE: in name order. The difference of two sets enumerates in hash
+      #       order, which PYTHONHASHSEED varies between runs, and the order
+      #       in which buffers go back on the free list decides which
+      #       temporary gets which buffer -- and so how large each is.
       free = cfg[i].live.variables() - cfg[i+1].live.variables()
-      for local in free:
+      for local in sorted(free, key=str):
         # warning: local.isLocal() check is suboptimal (but currently good enough)
         # refactor liveness for better results
         if local.isLocal():

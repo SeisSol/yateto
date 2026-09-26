@@ -53,3 +53,16 @@ def add(g):
   # test's own pattern before and after, and the comparison covers them
   _(A['kc'].subslice('c', 1, 3) <= e0['k'] * v['c'].subslice('c', 0, 2))
   _(A['kc'].subslice('c', 5, 8) <= T['kc'].subslice('c', 2, 5) * v['k'])
+
+  # read through an address: a generator that cannot write the numbers into
+  # its code reads the tensor from the pool, which the test binds
+  w = Tensor('w', (N,))
+  s = Tensor('s', ())
+  _(A['ij'] <= T['ik'] * B['kj'])
+  _(w['i'] <= B['ij'] * e0['j'])
+  _(s[''] <= v['i'] * trace['i'])
+
+  # both in one kernel: the element-wise statement writes the numbers, the
+  # GEMM reads the same tensor from memory
+  _([A['ij'] <= T['ij'] * B['ij'],
+     B['ij'] <= T['ik'] * A['kj']])

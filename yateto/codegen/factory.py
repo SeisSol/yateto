@@ -1,8 +1,8 @@
+import contextlib
 import inspect
 import string
 from ..ast.indices import BoundingBox, Indices, Range
 from ..ast.node import IndexedTensor
-from ..ast.visitor import FindTensors
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
 from .common import forLoops, zeroFill, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
@@ -10,6 +10,16 @@ from . import copyscaleadd, log, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
 from ..ops import Add, Mul
+
+def _indexedTensors(node):
+  """Every occurrence of a tensor in `node`, the node itself included."""
+  if node is None:
+    return
+  if isinstance(node, IndexedTensor):
+    yield node
+    return
+  for child in node:
+    yield from _indexedTensors(child)
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -23,12 +33,22 @@ class KernelFactory(object):
     #: emits a call into an external kernel needs them, because the flags
     #: member such a call would name only exists when the kernel declares it.
     self._attrs = attrs if attrs is not None else KernelAttributes()
+    #: Immediate operands read from memory after all, by name, with the
+    #: operations that could not take them. See `_immediatesFromMemory`.
+    self.inMemory = dict()
 
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
-    self._checkImmediates(node, method)
     factory = getattr(self, method, self.generic_create)
-    return factory(node, *args)
+    result, arguments = args[0], args[1]
+    with self._immediatesFromMemory(method, node.__class__.__name__,
+                                    node, [result] + list(arguments)):
+      return factory(node, *args)
+
+  def assign(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
+    """`simple`, for a statement that is not an operation but a copy."""
+    with self._immediatesFromMemory('simple', 'copy', None, [result, term]):
+      return self.simple(result, term, condition, add, scalar, routineCache, gemm_cfg)
 
   def acceptsImmediate(self, method):
     """Whether `method`'s generator can read an operand with no storage.
@@ -36,27 +56,44 @@ class KernelFactory(object):
     Two ways to be able to: spell the numbers out where the operand is read,
     or read a buffer of one's own that was filled from them. A generator
     doing neither forms an address for every operand, and an operand
-    addressed as `immediate` has none -- so it would either name a parameter
-    that the kernel does not declare or read the pool entry that was never
-    registered.
+    addressed as `immediate` has none -- so it gets the tensor from memory
+    instead, see `_immediatesFromMemory`.
 
     No by default, because that is the answer for a generator that has not
     been taught either way.
     """
     return False
 
-  def _checkImmediates(self, node, method):
-    """States the refusal at the operation rather than in the emitted code."""
+  @contextlib.contextmanager
+  def _immediatesFromMemory(self, method, operation, node, variables):
+    """Hands `method` a memory operand for every immediate it cannot take.
+
+    The capability is the generator's, so the choice is made here, per
+    occurrence: the tensor stated that its numbers may go into the code, and
+    this generator reads through an address. So it reads the tensor from
+    memory -- the same name, numbers and layout, which is the pool entry --
+    for the length of this one operation, and `inMemory` records it, so that
+    the kernel declares the member, the pool holds the entry and
+    `bindGlobals` binds it.
+    """
     if self.acceptsImmediate(method):
+      yield
       return
-    for name, tensor in FindTensors().visit(node).items():
-      if tensor.isPassedAsArgument():
+    holders = [occurrence for occurrence in _indexedTensors(node)]
+    holders += [var.viewed() for var in variables if var is not None]
+    swapped = []
+    for holder in holders:
+      tensor = holder.tensor
+      if tensor is None or tensor.isPassedAsArgument():
         continue
-      raise NotImplementedError(
-        f'{name} is addressed as {tensor.addressing}, and the generator for '
-        f'{node.__class__.__name__} reads its operands from memory. Address '
-        f'the tensor in memory, or generate this kernel for a target whose '
-        f'generator writes the values into the code.')
+      self.inMemory.setdefault(tensor.nameWithNamespace(), set()).add(operation)
+      swapped.append((holder, tensor))
+      holder.tensor = tensor.inMemory()
+    try:
+      yield
+    finally:
+      for holder, tensor in reversed(swapped):
+        holder.tensor = tensor
 
   def generic_create(self, node, *args):
     raise NotImplementedError

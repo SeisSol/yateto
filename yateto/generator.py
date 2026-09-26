@@ -386,6 +386,15 @@ class Generator(object):
     optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters,
                                                  namespace)
 
+    # Immediate operands some generator read from memory after all:
+    # tensor name -> (operations that did, {kernel or family: how many kernels})
+    inMemory = collections.OrderedDict()
+    def recordInMemory(kernelName, tensors):
+      for tensorName, operations in tensors.items():
+        ops, kernels = inMemory.setdefault(tensorName, (set(), collections.OrderedDict()))
+        ops.update(operations)
+        kernels[kernelName] = kernels.get(kernelName, 0) + 1
+
     kernelSource = StringIO()
     kernelSourceContent = ''
     with Cpp(kernelSource) as cpp:
@@ -416,6 +425,7 @@ class Generator(object):
                                                                            gemm_cfg,
                                                                            kernel.target,
                                                                            kernel.attrs)
+                  recordInMemory(kernel.name, kernelOutline.inMemory)
                   with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
                     optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
 
@@ -429,10 +439,20 @@ class Generator(object):
                                                                                      gemm_cfg,
                                                                                      kernel.target,
                                                                                      kernel.attrs)
+                    recordInMemory(family.name, kernelOutlines[group].inMemory)
 
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
       kernelSourceContent = kernelSource.getvalue()
+
+    # An immediate operand is a request, and a generator that reads through an
+    # address declines it for its own occurrence. That is not an error, but it
+    # is not what was asked for either, so it is said.
+    for tensorName, (operations, kernels) in inMemory.items():
+      where = ', '.join(name if count == 1 else f'{name} ({count}x)'
+                        for name, count in kernels.items())
+      print(f'Note: {tensorName} is read from memory in {where}; '
+            f'{", ".join(sorted(operations))} cannot take it as immediate.')
 
     with Cpp(fKernels.cpp) as cpp:
       for gemm_tool in gemm_cfg.selected:
@@ -473,7 +493,8 @@ class Generator(object):
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
-    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key))
+    initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key),
+                                   inMemory=set(inMemory))
 
     # Before the initialisation code, not after: init binds references into the
     # pool where it can, so it has to know which entries exist.

@@ -134,7 +134,7 @@ class KernelGenerator(object):
           prefetchName = '{}.{}'.format(self.PREFETCHVAR_NAME, action.term.node.prefetch.name()) if action.term.node.prefetch is not None else None
           hwFlops += factory.create(action.term.node, action.result, action.term.variableList(), action.condition, action.add, scalar, prefetchName, routineCache, gemm_cfg)
         else:
-          hwFlops += factory.simple(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg)
+          hwFlops += factory.assign(action.result, action.term, action.condition, action.add, scalar, routineCache, gemm_cfg)
     return hwFlops, required_tmp_mem
 
 class OptimizedKernelGenerator(KernelGenerator):
@@ -185,7 +185,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                  is_compute_constant_tensors,
                  datatype,
                  target,
-                 attrs):
+                 attrs,
+                 inMemory=None):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
@@ -202,6 +203,9 @@ class OptimizedKernelGenerator(KernelGenerator):
       self.datatype = datatype
       self.target = target
       self.attrs = attrs
+      #: Immediate operands this kernel reads from memory, by name, with the
+      #: operations that could not take them as they are addressed.
+      self.inMemory = inMemory if inMemory is not None else {}
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -230,6 +234,21 @@ class OptimizedKernelGenerator(KernelGenerator):
     inTensors = {}
     outTensors = {}
 
+    # The body first: which immediate operands a generator could not take, and
+    # so reads from memory after all, is only known once it has been asked.
+    functionIO = StringIO()
+    function = ''
+    with Cpp(functionIO) as fcpp:
+      attrs = attrs if attrs is not None else KernelAttributes()
+      factory = self._routine_factories[target](fcpp, self._arch, target, attrs)
+      hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
+      factory.post_generate(self._routineCache)
+      factory.freeTmp()
+      factory.reset_stream()
+      factory.reset_flags()
+      function = functionIO.getvalue()
+    inMemory = factory.inMemory
+
     # A by-value operand is a scalar wherever it turns up, not only in the
     # scaling slot of an action. Collected here rather than only from there,
     # because a kernel that uses one both ways would otherwise declare the name
@@ -238,10 +257,12 @@ class OptimizedKernelGenerator(KernelGenerator):
     # An operand whose data is in the generated code has nothing to pass and
     # nothing to bind: neither a member nor a scalar. It stays in the
     # initializer namespace, where it describes a tensor rather than an
-    # argument.
+    # argument -- unless one of the generators here read it from memory, in
+    # which case it is a constant member like any other.
     variables = [var for var in variables
                  if not var.tensor.isPassedByValue()
-                 and var.tensor.isPassedAsArgument()]
+                 and (var.tensor.isPassedAsArgument()
+                      or var.tensor.nameWithNamespace() in inMemory)]
     for scalar in sorted(set(scalarsP) | set(byValue), key=str):
       self.KernelOutline._addTensor(scalar, scalars)
       datatype[scalar.baseNameWithNamespace()] = scalar.getDatatype(self._arch)
@@ -279,17 +300,6 @@ class OptimizedKernelGenerator(KernelGenerator):
     for tensor in prefetchTensors:
       self.KernelOutline._addTensor(tensor, prefetch)
 
-    functionIO = StringIO()
-    function = ''
-    with Cpp(functionIO) as fcpp:
-      attrs = attrs if attrs is not None else KernelAttributes()
-      factory = self._routine_factories[target](fcpp, self._arch, target, attrs)
-      hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
-      factory.post_generate(self._routineCache)
-      factory.freeTmp()
-      factory.reset_stream()
-      factory.reset_flags()
-      function = functionIO.getvalue()
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
                               inConstBytes,
@@ -304,7 +314,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                               is_compute_constant_tensors,
                               datatype,
                               target,
-                              attrs)
+                              attrs,
+                              inMemory)
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -575,6 +586,7 @@ class UnitTestGenerator(KernelGenerator):
   TMP_SIZE = 128 * 8
   FLAGS_MEM = '_flags'
   DEV_FLAGS_MEM = '_dev_flags'
+  DEV_POOL_MEM = '_dev_pool'
 
   def __init__(self, arch):
     super().__init__(arch)
@@ -743,6 +755,7 @@ class UnitTestGenerator(KernelGenerator):
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
+    bindPool = any(not var.tensor.isPassedAsArgument() for var in variables)
     conditions = self._conditionVariables(cfg)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
@@ -802,10 +815,24 @@ class UnitTestGenerator(KernelGenerator):
            data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({var.datatype.ctype()}*)', self.STREAM)
          if use_flags:
            data_memcpy(self.DEV_FLAGS_MEM, self.FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', self.STREAM)
+         if bindPool:
+           data_malloc(self.DEV_POOL_MEM, f'{PoolGenerator.BYTES_FUN_NAME}()', 'char*', self.STREAM)
+           data_memcpy(self.DEV_POOL_MEM, f'{PoolGenerator.DATA_FUN_NAME}()',
+                       f'{PoolGenerator.BYTES_FUN_NAME}()', self.STREAM)
          stream_wait(self.STREAM)
          cpp.emptyline()
 
        cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
+       if bindPool:
+         # A generator that cannot write an immediate operand into its code
+         # reads it from the pool instead, and which ones do is decided when
+         # the kernel is generated -- after this test was. Binding the pool
+         # first covers them whichever they are; the members assigned below
+         # then point the rest at the test's own buffers, as they always do.
+         pool = (f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.CREATE_FUN_NAME}({self.DEV_POOL_MEM})'
+                 if device_test else
+                 f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.HOST_FUN_NAME}()')
+         cpp(f'{self.KERNEL_VAR}.{OptimizedKernelGenerator.BIND_GLOBALS_NAME}({pool});')
        for var in scalars:
          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
        for var in variables:
@@ -836,6 +863,8 @@ class UnitTestGenerator(KernelGenerator):
          data_free(self.TMP_MEM, self.STREAM)
          if use_flags:
            data_free(self.DEV_FLAGS_MEM, self.STREAM)
+         if bindPool:
+           data_free(self.DEV_POOL_MEM, self.STREAM)
          for var in variables:
            data_free(self._devPtrTensorName(var), self.STREAM)
            data_free(self._devTensorName(var), self.STREAM)
@@ -971,8 +1000,11 @@ class InitializerGenerator(object):
   #: of it ended up.
   PoolEntry = collections.namedtuple('PoolEntry', ['groupSize', 'datatype', 'symbols'])
 
-  def __init__(self, arch, tensors, scalars):
+  def __init__(self, arch, tensors, scalars, inMemory=frozenset()):
     self._arch = arch
+    #: Immediate tensors some kernel reads from memory after all, by name.
+    #: They get a pool entry like any other constant.
+    self._inMemory = inMemory
     self._numberType = f'{self._arch.uintTypename} const'
     self._pool = dict()
     self._realType = lambda datatype: f'{datatype.ctype()} const'
@@ -1143,11 +1175,12 @@ class InitializerGenerator(object):
         values = tensor.values()
         if values is None:
           continue
-        if not tensor.isPassedAsArgument():
-          # Its data is in the kernel, so the pool has nothing to hold and
-          # nobody to hand an address to. `init::X::Values` is still written,
-          # from the same numbers, for whoever computes with the tensor on
-          # the host.
+        if not tensor.isPassedAsArgument() \
+           and tensor.nameWithNamespace() not in self._inMemory:
+          # Its data is in every kernel that reads it, so the pool has nothing
+          # to hold and nobody to hand an address to. `init::X::Values` is
+          # still written, from the same numbers, for whoever computes with
+          # the tensor on the host.
           continue
         memLayout = tensor.memoryLayout()
         hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))

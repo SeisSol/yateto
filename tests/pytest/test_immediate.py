@@ -78,20 +78,74 @@ class TestPrecondition:
             immediate['ij'] <= operands['B']['ij']
 
 
-class TestRefusal:
-    def test_a_generator_reading_from_memory_refuses_it(self, tmp_path,
-                                                        immediate, operands):
-        with pytest.raises(NotImplementedError, match='reads its operands'):
-            generate(tmp_path, [operands['out']['ij']
-                                <= immediate['ik'] * operands['B']['kj']])
+class TestFallback:
+    """A generator that reads through an address gets the tensor from memory.
 
-    def test_the_message_names_the_tensor_and_the_operation(self, tmp_path,
-                                                            immediate, operands):
-        with pytest.raises(NotImplementedError) as raised:
-            generate(tmp_path, [operands['out']['ij']
-                                <= immediate['ik'] * operands['B']['kj']])
-        assert 'C' in str(raised.value)
-        assert 'LoopOverGEMM' in str(raised.value)
+    The mode is a request: the occurrence whose generator cannot take it reads
+    the pool entry instead, and the generation says so. An operand that can
+    be written into the code where one statement reads it need not be
+    refused a GEMM elsewhere.
+    """
+
+    @pytest.fixture(autouse=True)
+    def emitted(self, tmp_path, immediate, operands, capsys):
+        A = Tensor('A', (N, N))
+        self.files = generate(
+            tmp_path,
+            [operands['out']['ij'] <= immediate['ik'] * operands['B']['kj'],
+             operands['out']['ij'] <= immediate['ij'] * A['ij']])
+        self.printed = capsys.readouterr().out
+
+    def struct(self, name):
+        return self.files['kernel.h'].split(f'struct {name}')[1].split('struct')[0]
+
+    def test_the_gemm_reads_it_from_memory(self):
+        body = self.files['kernel.cpp'].split('k0::execute')[1].split('execute')[0]
+        assert 'C != nullptr' in body
+
+    def test_that_kernel_declares_a_member_and_binds_it(self):
+        struct = self.struct('k0')
+        assert 'C' in struct
+        assert 'C = pool.' in struct
+
+    def test_the_pool_holds_it(self):
+        assert 'C_' in self.files['pool.h']
+
+    def test_the_element_wise_kernel_still_writes_the_numbers(self):
+        struct = self.struct('k1')
+        assert '* C' not in struct and '** C' not in struct
+        body = self.files['kernel.cpp'].split('k1::execute')[1]
+        assert '(0.5) * (A[0])' in body
+        assert 'C[' not in body
+
+    def test_the_generation_says_so(self):
+        assert 'Note: C is read from memory in k0; LoopOverGEMM cannot take it ' \
+               'as immediate.' in self.printed
+        assert 'k1' not in self.printed.split('Note:')[1]
+
+    def test_the_unit_test_binds_the_pool_before_its_own_buffers(self):
+        test = self.files['KernelTest.t.h'].split('void testk0')[1].split('void test')[0]
+        assert test.index('krnl.bindGlobals(Pool::host());') < test.index('krnl.B = B;')
+
+    def test_a_kernel_without_immediates_binds_nothing_in_its_test(self, tmp_path,
+                                                                  operands):
+        (tmp_path / 'plain').mkdir()
+        files = generate(tmp_path / 'plain',
+                         [operands['out']['ij'] <= 2.0 * operands['B']['ij']])
+        assert 'bindGlobals' not in files['KernelTest.t.h']
+
+    def test_the_operand_is_restored_after_the_operation(self, immediate):
+        """The memory reading is the occurrence's, not the tensor's."""
+        assert not immediate.isPassedAsArgument()
+
+
+class TestInMemoryTwin:
+    def test_it_is_the_same_tensor_read_through_an_address(self, immediate):
+        twin = immediate.inMemory()
+        assert twin.name() == immediate.name()
+        assert twin.values() is immediate.values()
+        assert twin.memoryLayout() is immediate.memoryLayout()
+        assert twin.isPassedAsArgument() and twin.hasStorage()
 
 
 class TestDescription:

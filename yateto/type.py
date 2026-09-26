@@ -1,3 +1,4 @@
+import copy
 import re
 from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
@@ -185,6 +186,15 @@ class AddressingMode(Enum):
   #: alignment. What it costs is instruction memory, which is not free and
   #: on a GPU is often the binding resource -- so this is a choice to make
   #: per occurrence and per target, not a property a tensor is born with.
+  #:
+  #: Which is how it is settled: the tensor states the mode, and every
+  #: occurrence asks the generator that reads it. One that writes the
+  #: numbers into its code takes the operand as it is; one that reads its
+  #: operands through an address gets the tensor from memory instead -- the
+  #: kernel declares a member for it, the pool holds its numbers and
+  #: `bindGlobals` binds them -- and the generation says so. The same
+  #: selector can therefore be spelled out in the element-wise statement that
+  #: reads it and be a pool constant in the GEMM that reads it too.
   IMMEDIATE = 4
 
   def __str__(self):
@@ -382,6 +392,16 @@ class Tensor(IdentifiedType):
   def isPassedAsArgument(self):
     """Whether this tensor appears in the kernel's signature."""
     return self.addressing is None or self.addressing.isPassedAsArgument()
+
+  def inMemory(self):
+    """This tensor, read through an address rather than written into the code.
+
+    The same name, numbers, pattern and layout -- the pool entry for it -- for
+    an occurrence whose generator cannot take the tensor as it is addressed.
+    """
+    twin = copy.copy(self)
+    twin.addressing = None
+    return twin
 
   def __hash__(self):
     # only over what cannot change: the sparsity pattern and the memory layout

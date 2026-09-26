@@ -335,10 +335,10 @@ class Generator(object):
     print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
         for kernel in self._kernels:
-            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, kernel.target, gemm_cfg, testFramework)
+            UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, attrs=kernel.attrs)
         for family in self._kernelFamilies.values():
             for group, kernel in family.items():
-                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, group)
+                UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, group, attrs=kernel.attrs)
     with Cpp(fUTdoctest.cpp) as cpp:
         Doctest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
     with Cpp(fUTcxxtest.h) as cpp:

@@ -418,6 +418,11 @@ class Assign(Op):
       raise ValueError(
         f'Cannot assign to "{lhs.name()}": it is passed by value. '
         f'Use a rank-0 tensor if you need to compute the value inside a kernel.')
+    if not lhs.tensor.hasStorage():
+      raise ValueError(
+        f'Cannot assign to "{lhs.name()}": it is addressed as '
+        f'{lhs.tensor.addressing}, so its data is part of the generated code '
+        f'and there is nothing for a kernel to write to.')
 
   def leftTerm(self):
     return self._children[0]
@@ -666,6 +671,12 @@ class IfThenElse(Op):
     indices = self.indices if self.indices is not None else '<not deduced>'
     return f'{type(self).__name__}[{indices}]'
 
+def literalSparsityPattern(value, shape):
+  """The pattern of an operand written as a number rather than as a tensor."""
+  if value == 0:
+    return aspp.general(np.zeros(shape, dtype=bool))
+  return aspp.dense(shape)
+
 class Elementwise(NAryOp, Op):
   def __init__(self, optype: ops.Operation, *terms):
     optype.checkArity(len(terms))
@@ -753,7 +764,14 @@ class Elementwise(NAryOp, Op):
     # operation only has to combine patterns of equal shape
     aligned = [self.broadcast(self[i].indices, self.permute(self[i].indices, spps[i], strict=False))
                for i in range(len(spps))]
-    return self.optype.sparsityResult(aligned)
+    # A literal operand is not a child, and the operation reads its operands by
+    # position -- asking the children alone shifts every operand after a
+    # literal into the wrong slot. A literal patterns the way its value does:
+    # everywhere, or, for a zero, nowhere.
+    shape = aligned[0].shape
+    operands = [aligned[index] if template is None else literalSparsityPattern(template, shape)
+                for template, index in zip(self.termTemplate, self.nodeTermIndices)]
+    return self.optype.sparsityResult(operands)
 
   def __str__(self):
     indices = self.indices if self.indices is not None else '<not deduced>'

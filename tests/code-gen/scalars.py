@@ -65,3 +65,14 @@ def add(g):
   # 11: a scalar factor under a guard
   flag = Tensor('flag', (), datatype=Datatype.BOOL)
   _(yf.assignIf(flag[''], C['ij'], (alpha / beta) * A['ij']))
+
+  # 12: a scalar as an operand rather than a factor: handed over by value, and
+  #     read by the reference from a buffer holding that value
+  _(C['ij'] <= yf.maximum(A['ij'], alpha))
+  _(C['ij'] <= yf.where(yf.greater(A['ij'], beta), A['ij'], B['ij']))
+
+  # 13: one scalar as a factor and as an operand in one kernel
+  _([
+    C['ij'] <= gamma * A['ij'],
+    C['ij'] <= yf.add(C['ij'], yf.minimum(B['ij'], gamma)),
+  ])

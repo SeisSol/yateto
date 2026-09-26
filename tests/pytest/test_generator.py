@@ -125,6 +125,47 @@ class TestKernelPreparation:
         # value we pinned down in test_ast_visitor.
         assert kernel.nonZeroFlops == 960
 
+    def test_statements_shared_by_two_kernels_are_optimized_once_each(self, arch):
+        # The same statements added to two kernels -- as for one kernel per
+        # target -- must not be optimized twice: the passes rewrite the AST in
+        # place, and the second kernel would permute the operand of the GEMM
+        # the first one built, leaving its transposition flag stale.
+        import numpy as np
+        import yateto.functions as yf
+        from yateto.ast.cost import BoundingBoxCostEstimator
+        from yateto.ast.node import LoopOverGEMM
+
+        N = 35
+        Q = Tensor("Q", (N, 11), alignStride=True)
+        epsInit = Tensor("epsInit", (6,))
+        voigt = Tensor("voigt", (6,), np.array([1.0, 1.0, 1.0, 2.0, 2.0, 2.0]))
+        eps = Tensor("eps", (N, 6), alignStride=True, temporary=True)
+        i2 = Tensor("i2", (N,), alignStride=True, temporary=True)
+        statements = [
+            eps["lc"] <= yf.add(Q["lc"].subslice("c", 0, 6), epsInit["c"]),
+            i2["l"] <= yf.mul(eps["lc"], eps["lc"]) * voigt["c"],
+        ]
+        kernels = [Kernel("first", statements), Kernel("second", statements)]
+        # the order Generator.generate prepares them in
+        for kernel in kernels:
+            kernel.prepareUntilUnitTest(arch)
+        for kernel in kernels:
+            kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, enableFusedGemm=False)
+
+        def nodes(node):
+            yield node
+            for child in node:
+                yield from nodes(child)
+
+        owned = [{id(n) for ast in kernel.ast for n in nodes(ast)} for kernel in kernels]
+        assert not owned[0] & owned[1]
+        gemms = [n for kernel in kernels for ast in kernel.ast for n in nodes(ast)
+                 if isinstance(n, LoopOverGEMM)]
+        assert len(gemms) == 2
+        for gemm in gemms:
+            A = gemm.leftTerm().indices
+            assert gemm.transA() == (A.find(gemm._m[0]) > A.find(gemm._k[0]))
+
 
 # ---------------------------------------------------------------------------
 # Prefetch argument
@@ -286,3 +327,58 @@ class TestGeneratorGenerateSmoke:
         # The generator emits a ``struct matmul`` in a ``namespace kernel``.
         assert "matmul" in kernel_h
         assert "namespace kernel" in kernel_h or "kernel::" in kernel_h
+
+
+class TestGroupedTemporaries:
+    """A temporary that belongs to a group is a local pointer like any other.
+
+    Its name was its tensor's -- `T(0)` -- which reads a member of a group
+    where the tensor is handed to the kernel, but declares a function where it
+    is a local: `double* T(0);`. Kernel and unit test failed to compile alike.
+    """
+
+    N = 4
+
+    def generate(self, tmp_path, build):
+        from yateto.arch import useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        g = Generator(useArchitectureIdentifiedBy('dhsw'))
+        build(g)
+        g.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return {p.name: p.read_text() for p in tmp_path.iterdir() if p.is_file()}
+
+    def tensors(self):
+        N = self.N
+        A = Tensor('A', (N, N))
+        C = Tensor('C', (N, N))
+        M = [Tensor(f'M({i})', (N, N)) for i in range(2)]
+        T = [Tensor(f'T({i})', (N, N), temporary=True) for i in range(2)]
+        return A, C, M, T
+
+    def test_the_group_is_part_of_the_local_name(self, tmp_path):
+        A, C, M, T = self.tensors()
+        files = self.generate(tmp_path, lambda g: g.add('k', [
+            T[0]['ij'] <= M[0]['ik'] * A['kj'],
+            T[1]['ij'] <= M[1]['ik'] * A['kj'],
+            C['ij'] <= T[0]['ik'] * T[1]['kj']]))
+        for name in ('kernel.cpp', 'KernelTest.t.h'):
+            assert 'double* T_0;' in files[name], name
+            assert 'double* T_1;' in files[name], name
+            assert 'T(0)' not in files[name] and 'T(1)' not in files[name], name
+        # a group handed to the kernel keeps its accessor
+        assert 'M(0)[' in files['kernel.cpp']
+
+    def test_in_a_family_too(self, tmp_path):
+        A, C, M, T = self.tensors()
+        files = self.generate(tmp_path, lambda g: g.addFamily(
+            'fam', simpleParameterSpace(2),
+            lambda i: [T[i]['ij'] <= M[i]['ik'] * A['kj'], C['ij'] <= T[i]['ik'] * A['kj']]))
+        assert 'double* T_0;' in files['kernel.cpp']
+        assert 'double* T_1;' in files['kernel.cpp']
+
+    def test_a_tensor_called_what_the_temporary_is_called_is_refused(self, tmp_path):
+        A, C, M, T = self.tensors()
+        clash = Tensor('T_0', (self.N, self.N))
+        with pytest.raises(ValueError, match='"T_0" is used with two different kinds'):
+            self.generate(tmp_path, lambda g: g.add('k', [
+                T[0]['ij'] <= A['ik'] * clash['kj'], C['ij'] <= T[0]['ij']]))

@@ -272,3 +272,48 @@ class TestPack:
         packed = layout.pack({(0, 0): 'nan'})
 
         assert packed[0] == 'nan'
+
+
+# ---------------------------------------------------------------------------
+# addressesIn -- what clearing a layout, or a window of one, has to clear
+# ---------------------------------------------------------------------------
+
+
+class TestAddressesIn:
+    def test_the_whole_layout_in_entry_order(self):
+        ml = DenseMemoryLayout((3, 2))
+        assert ml.addressesIn() == [0, 1, 2, 3, 4, 5]
+
+    def test_a_box_restricts_per_dimension(self):
+        ml = DenseMemoryLayout((3, 2))
+        assert ml.addressesIn([Range(1, 3), None]) == [1, 2, 4, 5]
+
+    def test_a_view_answers_for_its_window_only(self):
+        from yateto.memory import MemoryLayoutView
+
+        view = MemoryLayoutView(DenseMemoryLayout((3, 4)), 1, 1, 3)
+        # columns 1 and 2 of a 3x4 column-major block
+        assert view.addressesIn() == [3, 4, 5, 6, 7, 8]
+
+    def test_a_box_on_a_view_is_in_the_view_s_coordinates(self):
+        from yateto.memory import MemoryLayoutView
+
+        view = MemoryLayoutView(DenseMemoryLayout((3, 4)), 1, 1, 3)
+        assert view.addressesIn([None, Range(1, 2)]) == [6, 7, 8]
+
+    def test_a_view_of_a_view_composes_the_shifts(self):
+        from yateto.memory import MemoryLayoutView
+
+        outer = MemoryLayoutView(DenseMemoryLayout((3, 4)), 1, 1, 4)
+        inner = MemoryLayoutView(outer, 1, 1, 2)
+        # column 1 of columns 1..3 is column 2 of the tensor
+        assert inner.addressesIn() == [6, 7, 8]
+
+    def test_a_sparse_base_names_its_non_zeros(self):
+        from yateto.memory import CSCMemoryLayout, MemoryLayoutView
+
+        pattern = np.zeros((3, 4), dtype=bool)
+        pattern[0, 0] = pattern[2, 1] = pattern[1, 2] = pattern[2, 3] = True
+        base = CSCMemoryLayout.fromSpp(aspp_general(pattern))
+        view = MemoryLayoutView(base, 1, 1, 3)
+        assert view.addressesIn() == sorted([base.address((2, 1)), base.address((1, 2))])

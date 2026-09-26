@@ -240,3 +240,150 @@ class TestSparseOperands:
         assert 'C[0] = (A[0]) + (B[0]);' in kernel
         assert 'C[5] = (A[1]) + (0.0);' in kernel
         assert 'C[7] = (0.0) + (B[1]);' in kernel
+
+
+class TestNarrowOperands:
+    """A constant with zeros in it patterns narrower than the axis it sits on,
+    and so does anything computed from it. Past its own end such an operand has
+    no value stored, so the range is split and the structural zero goes into
+    the expression as a literal."""
+
+    TRACE = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+
+    def emit(self, arch, statement, tmp_path):
+        generator = Generator(arch)
+        generator.add('k', statement)
+        generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return (tmp_path / 'kernel.cpp').read_text()
+
+    def test_a_summand_stopping_early_is_read_as_zero(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        v = Tensor('v', (N,))
+        A = Tensor('A', (N, 6))
+        out = Tensor('out', (N, 6))
+        code = self.emit(arch, out['ic'] <= yf.add(yf.mul(v['i'], trace['c']), A['ic']),
+                         tmp_path)
+        assert 'for (int _c = 0; _c < 3; ++_c)' in code
+        assert 'for (int _c = 3; _c < 6; ++_c)' in code
+        assert '(0.0)' in code
+
+    def test_a_broadcast_summand_covers_the_whole_axis(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        v = Tensor('v', (N,))
+        out = Tensor('out', (N, 6))
+        code = self.emit(arch, out['ic'] <= yf.add(v['i'], trace['c']), tmp_path)
+        # the other summand is non-zero throughout, so the tail is computed and
+        # not left to a memset
+        assert 'out[1*_i + 6*_c] = (v[1*_i]) + (0.0);' in code
+        assert 'memset(out' not in code
+
+    def test_a_function_of_zero_is_computed_in_the_tail(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        out = Tensor('out', (6,))
+        code = self.emit(arch, out['c'] <= yf.exp(trace['c']), tmp_path)
+        assert 'std::exp(0.0)' in code
+
+    def test_a_product_stops_where_a_factor_does(self, arch, tmp_path):
+        trace = Tensor('trace', (6,), self.TRACE)
+        v = Tensor('v', (N,))
+        out = Tensor('out', (N, 6))
+        code = self.emit(arch, out['ic'] <= yf.mul(v['i'], trace['c']), tmp_path)
+        # nothing to compute past the factor's end, so the tail is a memset
+        assert 'for (int _c = 3; _c < 6; ++_c)' not in code
+        assert 'memset(out' in code
+
+    def test_an_index_letter_carrying_two_extents_is_still_an_error(self, arch, tmp_path):
+        # the narrower bounds above are a matter of sparsity; an index letter
+        # used for two different axes is caught while the indices are deduced
+        wide = Tensor('wide', (N, 11))
+        narrow = Tensor('narrow', (N, 6))
+        out = Tensor('out', (N, 11))
+        with pytest.raises(Exception, match='Index merge failed'):
+            self.emit(arch, out['ic'] <= yf.add(wide['ic'], narrow['ic']), tmp_path)
+
+
+class TestZeroScale:
+    """A zero scale factor is a zero fill, and nothing at all where the result
+    is accumulated into."""
+
+    def emit(self, arch, statement, tmp_path):
+        generator = Generator(arch)
+        generator.add('k', statement)
+        generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return (tmp_path / 'kernel.cpp').read_text()
+
+    def test_scaling_by_zero_fills_with_zero(self, arch, tmp_path):
+        A = Tensor('A', (N, N))
+        out = Tensor('out', (N, N))
+        code = self.emit(arch, out['ij'] <= 0.0 * A['ij'], tmp_path)
+        assert 'memset(out' in code
+        assert 'A[' not in code[code.index('k::execute'):]
+
+    def test_accumulating_a_zero_scale_is_nothing(self, arch, tmp_path):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        code = self.emit(arch, [out['ij'] <= B['ij'], out['ij'] <= out['ij'] + 0.0 * A['ij']],
+                         tmp_path)
+        body = code[code.index('k::execute'):]
+        assert 'A[' not in body
+
+    def test_a_zero_scale_inside_an_operation_stays_a_zero_operand(self, arch, tmp_path):
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        code = self.emit(arch, out['ij'] <= yf.maximum(B['ij'], 0.0 * A['ij']), tmp_path)
+        body = code[code.index('k::execute'):]
+        # max(b, 0) is not b: the operand is gone, the operation is not
+        assert 'yateto::max(' in body
+        assert ', 0.0)' in body
+        assert 'A[' not in body
+
+
+class TestSlicedOperandsOfASparseProduct:
+    """A product with a sparse factor narrows its other operands to the
+    factor's pattern, and a sliced operand has to keep that narrowing through
+    the passes after it. Recomputed from the tensor under the slice, it was
+    the whole window again: wider than the result, which the element-wise
+    generator refuses."""
+
+    def emit(self, arch, statement, tmp_path):
+        generator = Generator(arch)
+        generator.add('k', statement)
+        generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return (tmp_path / 'kernel.cpp').read_text()
+
+    @pytest.fixture
+    def tensors(self):
+        table = np.zeros((N, N))
+        table[1, 2] = -1.0
+        table[4, 3] = 2.0
+        return Tensor('T', (N, N), table), Tensor('Q', (N, N)), Tensor('P', (N, N))
+
+    def test_a_sliced_dense_operand_is_narrowed_with_the_product(self, arch, tmp_path,
+                                                                 tensors):
+        T, Q, P = tensors
+        code = self.emit(arch, P['kc'].subslice('c', 3, 5)
+                         <= T['kc'].subslice('c', 2, 4) * Q['kc'].subslice('c', 3, 5), tmp_path)
+        body = code[code.index('k::execute'):]
+        # the product is non-zero in rows 1..4 of the window only
+        assert re.search(r'for \(int _k = 1; _k < 5; \+\+_k\)', body)
+
+    def test_the_narrowing_holds_for_the_eqspp_of_the_slice(self, arch, tensors):
+        from yateto.ast.indices import BoundingBox
+        from yateto.ast.node import SliceView
+        T, Q, P = tensors
+        kernel = Kernel('k', P['kc'].subslice('c', 3, 5)
+                        <= T['kc'].subslice('c', 2, 4) * Q['kc'].subslice('c', 3, 5))
+        kernel.prepareUntilUnitTest(arch)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, False)
+
+        def slices(node):
+            if isinstance(node, SliceView) and node.term().name() == 'Q':
+                yield node
+            for child in node:
+                yield from slices(child)
+
+        (view,) = list(slices(kernel.ast[0]))
+        # T's two non-zeros in the window are in rows 1 and 4
+        assert str(BoundingBox.fromSpp(view.eqspp())) == 'BoundingBox(Range(1, 5), Range(0, 2))'

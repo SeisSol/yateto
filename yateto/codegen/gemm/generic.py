@@ -186,8 +186,148 @@ class Generic(object):
     return (m.size() * n.size() * (self._flopInit(d.beta) + 2 * k.size())
             + n.size() * k.size() * (0 if d.alpha == 1.0 else 1))
 
+  def _immediateEntries(self, term, rows, cols, trans):
+    """(row, column, number) of an immediate operand within rows x cols.
+
+    Relative to the corner, in the orientation the GEMM reads the operand in,
+    and without its zeros: an entry that holds none is one no statement has
+    to mention. The address is formed exactly as `_accessFun` would form it
+    for a load, and the number is the one found there.
+    """
+    ml = term.memoryLayout
+    numbers = term.immediate
+    if ml.isSparse():
+      stored = (cols, rows) if trans else (rows, cols)
+      for idx, entry in ml.entriesRel(*stored):
+        i, j = entry[::-1] if trans else entry
+        if i < rows.size() and j < cols.size():
+          yield i, j, numbers[idx]
+      return
+    corner = (cols.start, rows.start) if trans else (rows.start, cols.start)
+    offset = ml.subtensorOffset(corner)
+    stride = ml.stride()[::-1] if trans else ml.stride()
+    for i in range(rows.size()):
+      for j in range(cols.size()):
+        address = offset + stride[0] * i + stride[1] * j
+        if 0 <= address < len(numbers):
+          yield i, j, numbers[address]
+
+  def _nonzero(self, term, rows, cols, trans):
+    datatype = term.datatype
+    return [(i, j, datatype.asnumber(value))
+            for i, j, value in self._immediateEntries(term, rows, cols, trans)
+            if datatype.asnumber(value) != 0]
+
+  def _sum(self, terms):
+    """`c1 * x1 + c2 * x2 ...` with the numbers folded into the scale factor.
+
+    A one is not a multiplication and a minus one is a sign, so a selector --
+    one entry, holding one -- reads its operand and does nothing else.
+    Returns the expression and its flops.
+    """
+    d = self._descr
+    datatype = d.result.datatype
+    text = ''
+    flops = 0
+    for n, (value, operand) in enumerate(terms):
+      if isinstance(d.alpha, (int, float)):
+        factor = d.alpha * value
+        negative = factor < 0
+        magnitude = abs(factor)
+        scale = '' if magnitude == 1 else f'{datatype.literal(magnitude)} * '
+      else:
+        negative = value < 0
+        magnitude = abs(value)
+        scale = f'{d.alpha} * ' if magnitude == 1 else f'{d.alpha} * {datatype.literal(magnitude)} * '
+      flops += scale.count('*')
+      if n == 0:
+        text = f'{"-" if negative else ""}{scale}{operand}'
+      else:
+        text += f' {"-" if negative else "+"} {scale}{operand}'
+        flops += 1
+    return text, flops
+
+  def _assign(self, target, expression, flops):
+    """`target` is `expression`, under whatever beta says about its old value."""
+    d = self._descr
+    if d.beta == 0.0:
+      return f'{target} = {expression};', flops
+    if d.beta == 1.0:
+      return f'{target} += {expression};', flops + 1
+    return f'{target} = {d.beta} * {target} + {expression};', flops + 2
+
+  def _generateImmediate(self, cpp):
+    """A GEMM with an operand whose numbers are written into the code.
+
+    One loop per column of the result (per row, where the immediate is the
+    left operand) over the other operand, and in it the sum of that column's
+    entries -- the loop over k is gone, and so are the operand and its
+    zeros. For a selector the sum is one term: the column of the other
+    operand the one points at.
+    """
+    d = self._descr
+    m, n, k = d.mnk()
+    Caccess = self._accessFun(d.result, (m.start, n.start), False, False)
+    zero = d.result.datatype.literal(0)
+    flops = 0
+
+    if d.leftTerm.immediate is not None and d.rightTerm.immediate is not None:
+      # a product of two tables of numbers is a table of numbers
+      A = self._nonzero(d.leftTerm, m, k, d.transA)
+      B = self._nonzero(d.rightTerm, k, n, d.transB)
+      entries = dict()
+      for i, ka, a in A:
+        for kb, j, b in B:
+          if ka == kb:
+            entries[(i, j)] = entries.get((i, j), 0) + a * b
+      for j in range(n.size()):
+        for i in range(m.size()):
+          value = entries.get((i, j), 0)
+          if value == 0 and d.beta == 1.0:
+            continue
+          if isinstance(d.alpha, (int, float)):
+            expression, cost = d.result.datatype.literal(d.alpha * value), 0
+          else:
+            expression, cost = f'{d.alpha} * {d.result.datatype.literal(value)}', 1
+          statement, cost = self._assign(Caccess(i, j), expression, cost)
+          cpp(statement)
+          flops += cost
+      return flops
+
+    if d.rightTerm.immediate is not None:
+      assert not d.isACsc, 'an immediate operand meets a dense one'
+      Aaccess = self._accessFun(d.leftTerm, (m.start, k.start), False, d.transA)
+      B = self._nonzero(d.rightTerm, k, n, d.transB)
+      for j in range(n.size()):
+        terms = [(value, Aaccess('m', kk)) for kk, jj, value in B if jj == j]
+        if not terms and d.beta == 1.0:
+          continue
+        expression, cost = self._sum(terms) if terms else (zero, 0)
+        with cpp.For(f'int m = 0; m < {m.size()}; ++m'):
+          statement, cost = self._assign(Caccess('m', j), expression, cost)
+          cpp(statement)
+        flops += m.size() * cost
+      return flops
+
+    assert not d.isBCsc, 'an immediate operand meets a dense one'
+    Baccess = self._accessFun(d.rightTerm, (k.start, n.start), False, d.transB)
+    A = self._nonzero(d.leftTerm, m, k, d.transA)
+    for i in range(m.size()):
+      terms = [(value, Baccess(kk, 'n')) for ii, kk, value in A if ii == i]
+      if not terms and d.beta == 1.0:
+        continue
+      expression, cost = self._sum(terms) if terms else (zero, 0)
+      with cpp.For(f'int n = 0; n < {n.size()}; ++n'):
+        statement, cost = self._assign(Caccess(i, 'n'), expression, cost)
+        cpp(statement)
+      flops += n.size() * cost
+    return flops
+
   def generate(self, cpp, routineCache):
     d = self._descr
+
+    if d.leftTerm.immediate is not None or d.rightTerm.immediate is not None:
+      return self._generateImmediate(cpp)
 
     if d.isACsc and d.isBCsc:
       return self._generateSparseSparse(cpp)

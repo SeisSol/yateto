@@ -14,11 +14,17 @@ class Description(object):
     self.result = result
     self.term = term
 
-    assert self.alpha != 0.0, 'copyscaleadd does not support alpha=0.0 at the moment.'
     assert self.beta == 1.0 or self.beta == 0.0, 'copyscaleadd supports only beta=0.0 or beta=1.0 at the moment.'
 
-    rA = loopRanges(self.term, self.term.indices)
     rB = loopRanges(self.result, self.result.indices)
+
+    if self.alpha == 0.0:
+      # A zero factor makes the term irrelevant, and with it everything about
+      # where the term reaches: what is left is the zero it scales to.
+      self.loopRanges = rB
+      return
+
+    rA = loopRanges(self.term, self.term.indices)
     assert testLoopRangesAContainedInB(rA, rB)
     assert self.term.indices <= self.result.indices
 
@@ -35,6 +41,10 @@ class Description(object):
 
 def generator(arch, descr, gemm_cfg, target, attrs=None):
   if target == 'gpu':
+      if descr.alpha == 0.0:
+          raise NotImplementedError(
+              'A scale factor of zero is a zero fill, which the device '
+              'generators do not express; scale by a non-zero factor.')
       hasTinytc = any([isinstance(tool, tinytc) for tool in gemm_cfg.gemmTools])
       if hasTinytc:
           return CopyScaleAddTinytc(arch, descr)

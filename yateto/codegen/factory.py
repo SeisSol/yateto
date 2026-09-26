@@ -1,14 +1,39 @@
+import contextlib
 import inspect
 import string
 from ..ast.indices import BoundingBox, Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
-from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
+from .common import forLoops, zeroFill, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
 from . import copyscaleadd, log, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
 from ..ops import Add, Mul
+
+def _differences(mine, theirs, path=''):
+  """(path, mine, theirs) for every field in which two descriptions differ."""
+  if isinstance(mine, dict) and isinstance(theirs, dict):
+    for key in sorted(set(mine) | set(theirs), key=str):
+      sub = f'{path}.{key}' if path else str(key)
+      yield from _differences(mine.get(key), theirs.get(key), sub)
+  elif mine != theirs:
+    yield path, mine, theirs
+
+def _brief(value, limit=60):
+  """A value as it reads in a message: whole where short, cut where not."""
+  text = repr(value)
+  return text if len(text) <= limit else text[:limit - 3] + '...'
+
+def _indexedTensors(node):
+  """Every occurrence of a tensor in `node`, the node itself included."""
+  if node is None:
+    return
+  if isinstance(node, IndexedTensor):
+    yield node
+    return
+  for child in node:
+    yield from _indexedTensors(child)
 
 class KernelFactory(object):
   ERROR_NAME = '_error'
@@ -22,11 +47,67 @@ class KernelFactory(object):
     #: emits a call into an external kernel needs them, because the flags
     #: member such a call would name only exists when the kernel declares it.
     self._attrs = attrs if attrs is not None else KernelAttributes()
+    #: Immediate operands read from memory after all, by name, with the
+    #: operations that could not take them. See `_immediatesFromMemory`.
+    self.inMemory = dict()
 
   def create(self, node, *args):
     method = 'create_' + node.__class__.__name__
     factory = getattr(self, method, self.generic_create)
-    return factory(node, *args)
+    result, arguments = args[0], args[1]
+    with self._immediatesFromMemory(method, node.__class__.__name__,
+                                    node, [result] + list(arguments)):
+      return factory(node, *args)
+
+  def assign(self, result, term, condition, add, scalar, routineCache, gemm_cfg):
+    """`simple`, for a statement that is not an operation but a copy."""
+    with self._immediatesFromMemory('simple', 'copy', None, [result, term]):
+      return self.simple(result, term, condition, add, scalar, routineCache, gemm_cfg)
+
+  def acceptsImmediate(self, method, node=None):
+    """Whether `method`'s generator can read an operand with no storage.
+
+    Two ways to be able to: spell the numbers out where the operand is read,
+    or read a buffer of one's own that was filled from them. A generator
+    doing neither forms an address for every operand, and an operand
+    addressed as `immediate` has none -- so it gets the tensor from memory
+    instead, see `_immediatesFromMemory`.
+
+    No by default, because that is the answer for a generator that has not
+    been taught either way.
+    """
+    return False
+
+  @contextlib.contextmanager
+  def _immediatesFromMemory(self, method, operation, node, variables):
+    """Hands `method` a memory operand for every immediate it cannot take.
+
+    The capability is the generator's, so the choice is made here, per
+    occurrence: the tensor stated that its numbers may go into the code, and
+    this generator reads through an address. So it reads the tensor from
+    memory -- the same name, numbers and layout, which is the pool entry --
+    for the length of this one operation, and `inMemory` records it, so that
+    the kernel declares the member, the pool holds the entry and
+    `bindGlobals` binds it.
+    """
+    if self.acceptsImmediate(method, node):
+      yield
+      return
+    holders = [occurrence for occurrence in _indexedTensors(node)]
+    holders += [var.viewed() for var in variables if var is not None]
+    swapped = []
+    for holder in holders:
+      tensor = holder.tensor
+      if tensor is None or tensor.isPassedAsArgument():
+        continue
+      self.inMemory.setdefault(tensor.nameWithNamespace(), set()).add(operation)
+      swapped.append((holder, tensor))
+      holder.tensor = tensor.inMemory()
+    try:
+      yield
+    finally:
+      for holder, tensor in reversed(swapped):
+        holder.tensor = tensor
 
   def generic_create(self, node, *args):
     raise NotImplementedError
@@ -138,6 +219,39 @@ class OptimizedKernelFactory(KernelFactory):
   def __init__(self, cpp, arch, target, attrs=None):
     super().__init__(cpp, arch, target, attrs)
 
+  def acceptsImmediate(self, method, node=None):
+    """The element-wise generator, and the host GEMM where it can.
+
+    The element-wise one already unrolls: a sparse operand has no address
+    expression either, so the entries are written out one statement at a
+    time and each of them can name a number instead of a load.
+
+    A GEMM on the host goes to the generic generator, which writes one loop
+    per column of the result with that column's numbers in it -- provided the
+    immediate operand is the same matrix in every iteration of the loops
+    around the GEMM, which is to say it has none of their indices, and that
+    what it meets is dense. Everything else here reads its operands through
+    an address, or hands them to a routine that does.
+    """
+    if method == 'create_Elementwise':
+      return True
+    if method == 'create_LoopOverGEMM' and self._target == 'cpu' and node is not None:
+      return self._gemmTakesImmediates(node)
+    return False
+
+  @staticmethod
+  def _gemmTakesImmediates(node):
+    loopIndices = set(node.loopIndices())
+    immediate = [not operand.viewed().tensor.isPassedAsArgument()
+                 if isinstance(operand.viewed(), IndexedTensor) else False
+                 for operand in (node[0], node[1])]
+    for operand, isImmediate in zip((node[0], node[1]), immediate):
+      if isImmediate and loopIndices & set(operand.indices):
+        return False
+      if not isImmediate and any(immediate) and operand.memoryLayout().isSparse():
+        return False
+    return True
+
   def create_LoopOverGEMM(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
     assert len(arguments) == 2
     description = log.Description(
@@ -220,6 +334,15 @@ class UnitTestFactory(KernelFactory):
     self._rand = 0
     self._testFramework = testFramework
 
+  def acceptsImmediate(self, method, node=None):
+    """Always: the reference implementation reads buffers of its own.
+
+    The test fills one for every tensor, from the same values, so it can
+    compute the reference for an operand the kernel writes into its code --
+    and comparing the two is what the test is for.
+    """
+    return True
+
   def _formatTerm(self, var, indices):
     address = var.memoryLayout().addressString(indices)
     return f'{self._name(var)}[{address}]'
@@ -234,11 +357,13 @@ class UnitTestFactory(KernelFactory):
     resultTerm = self._formatTerm(result, node.indices)
     terms = [self._formatTerm(arguments[i], child.indices) for i,child in enumerate(node)]
 
-    if scalar and scalar != 1.0:
+    # `is not None`, not truthiness: a factor of zero is a factor, and the one
+    # the kernel applies -- dropping it made the reference compute B for 0 * B
+    if scalar is not None and scalar != 1.0:
       terms.insert(0, str(scalar))
 
     if not add:
-      self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
+      zeroFill(self._cpp, self._name(result), result.memoryLayout(), result.datatype)
 
     class EinsumBody(object):
       def __call__(s):
@@ -310,7 +435,7 @@ class UnitTestFactory(KernelFactory):
   def _simpleBody(self, resultTerm, termTerm, add, scalar, indices, reduceIdx = None):
     ranges = {idx: Range(0, indices.indexSize(idx)) for idx in indices}
 
-    if scalar and scalar != 1.0:
+    if scalar is not None and scalar != 1.0:
       # parenthesised: `*` binds tighter than the operators an operation may
       # spell itself with, so the factor would otherwise land on one operand
       termTerm = f'{scalar} * ({termTerm})'
@@ -452,6 +577,16 @@ class ExportGenerator:
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
+  #: 7: a tensor states its `residence`: `memory`, `argument` or `code`.
+  #:    `code` means its data is nowhere at run time -- the exporter writes
+  #:    the `values` the description carries into the kernel, nothing is
+  #:    passed for the operand and no pool entry is bound for it. Its
+  #:    `addressing` is `null`, so an exporter ignoring the field falls off
+  #:    the end of its formula table, or addresses a parameter that no
+  #:    kernel declares. And `alignment` is the storage's in every
+  #:    occurrence, as version 2 states it: a slice along the leading axis
+  #:    used to state its own, and two occurrences of one name disagreed.
+  #:
   #: 6: a scale factor is stated once, as `linear.alpha`, for every kind of
   #:    operation. A multilinear one also listed it among its operands, so an
   #:    exporter honouring both -- which is the only way to be right about an
@@ -479,7 +614,7 @@ class ExportGenerator:
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 6
+  INTERFACE_VERSION = 7
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -498,6 +633,15 @@ class ExportGenerator:
     pass
 
 class ExportFactory(KernelFactory):
+  def acceptsImmediate(self, method, node=None):
+    """Always: the description states the values, so the far side decides.
+
+    Whether it can materialise them is its own question and it is asked
+    there. Refusing here would answer it for every exporter, including the
+    ones that can.
+    """
+    return True
+
   @classmethod
   def makeFactory(cls, generator):
     return lambda cpp, arch, target, attrs=None: cls(
@@ -600,8 +744,29 @@ class ExportFactory(KernelFactory):
       return 'n&+o&'
     elif addressing == AddressingMode.SCALAR:
       return ''
+    elif not addressing.isPassedAsArgument():
+      # There is no parameter to start from, so there is no formula. `null`
+      # rather than the empty string: the empty string is a formula, the one
+      # that says the parameter is the value.
+      return None
 
     raise NotImplementedError(addressing)
+
+  @staticmethod
+  def _residence(desc):
+    """Where the operand's data is while the kernel runs.
+
+    Not the same question as how it is addressed, which is why it is not the
+    same field: `memory` leaves every address formula open, while `argument`
+    and `code` each admit only one thing and it is not an address. Stated
+    outright rather than left to be read off the formula, because a reader
+    that has to infer it will infer it differently from the next one.
+    """
+    if desc.addressing is None or desc.addressing.hasStorage():
+      return 'memory'
+    if desc.addressing.isPassedAsArgument():
+      return 'argument'
+    return 'code'
 
   def _handleTensorDesc(self, tensorIndexed: IndexedTensorDescription):
     """Describe one occurrence of a tensor.
@@ -652,12 +817,12 @@ class ExportFactory(KernelFactory):
         f'{tensorIndexed.name} has a {ml.__class__.__name__}, which the '
         f'description has no storage kind for.')
 
-    values = (None if tensorIndexed.values is None
-              else {'kind': 'flat', 'data': [float(v) for v in tensorIndexed.values]})
+    values = self._values(tensorIndexed.values)
 
     tensor = {
       'name': tensorIndexed.name,
       'addressing': self._handleAddressing(tensorIndexed),
+      'residence': self._residence(tensorIndexed),
       #'eqspp': spp,
       'datatype': str(tensorIndexed.datatype),
       'storage': storage,
@@ -665,7 +830,10 @@ class ExportFactory(KernelFactory):
       # What the layout guarantees about the address of a column, in bytes.
       # Zero is not "unaligned", it is "no promise" -- the receiving side
       # decides what to do with a promise, and can make none out of nothing.
-      'alignment': self._alignment(tensorIndexed.memoryLayout),
+      # The storage's promise, like everything else in here: a slice is an
+      # occurrence, and its shift arrives with the reference. Asking the view
+      # made the field differ between two occurrences of one tensor.
+      'alignment': self._alignment(ml),
       'flags': {
         'temporary': tensorIndexed.is_temporary,
         'constant': tensorIndexed.is_compute_constant
@@ -674,6 +842,27 @@ class ExportFactory(KernelFactory):
 
     return self._handleTensor(tensor, tensorIndexed.indices,
                               self._logicalBox(tensorIndexed), offset, sliced)
+
+  @classmethod
+  def _values(cls, values):
+    """The constant data a tensor carries, as coordinate-value pairs.
+
+    A coordinate comes with every number because it is the only thing that
+    says which entry the number belongs to. The description states a
+    logical shape and a storage kind, and the receiving side is free to lay
+    the entries out however it addresses them -- so a bare run of numbers
+    would only be readable by someone who reproduces this side's packing.
+
+    Only the entries the sparsity pattern admits are listed; everything else
+    is zero by the pattern alone. Sorted by coordinate, because a
+    description that is read back, recorded or hashed has to come out the
+    same twice.
+    """
+    if values is None:
+      return None
+    return {'kind': 'entries',
+            'data': [[cls._ints(index), float(value)]
+                     for index, value in sorted(values.items())]}
 
   @staticmethod
   def _ints(values):
@@ -720,6 +909,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': name,
         'addressing': '',
+        'residence': 'argument',
         'datatype': str(self._arch.datatype),
         'storage': {
           'shape': [],
@@ -737,6 +927,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': scalar.name(),
         'addressing': '',
+        'residence': 'argument',
         'datatype': str(scalar.getDatatype(self._arch)),
         'storage': {
           'shape': [],
@@ -759,8 +950,18 @@ class ExportFactory(KernelFactory):
                     sliced=False, offsetFrom=None):
     if tensor['name'] not in self.tensors:
       self.tensors[tensor['name']] = tensor
-    else:
-      assert tensor == self.tensors[tensor['name']]
+    elif tensor != self.tensors[tensor['name']]:
+      # One name is one declaration on the far side, so two occurrences have
+      # to describe the same tensor. That they do not is a real ambiguity --
+      # and a message that does not say which tensor and which field leaves
+      # the one who has to resolve it to instrument this line.
+      known = self.tensors[tensor['name']]
+      differences = '; '.join(f'{path}: {_brief(mine)} here, {_brief(theirs)} before'
+                              for path, mine, theirs in _differences(tensor, known))
+      raise ValueError(
+        f"Two occurrences of {tensor['name']!r} describe different tensors "
+        f"({differences}). A name is one tensor to the exporter; give the "
+        f"second its own name, or make the two agree.")
 
     # `bbox`, `offset` and `sliced` belong to this occurrence, not to the
     # tensor: two operands may name two different slices of the same thing.

@@ -300,6 +300,12 @@ class SetSparsityPattern(Transformer):
   def visit_IndexedTensor(self, node):
     return node
 
+  def visit_SliceView(self, node):
+    # An operand like an IndexedTensor, and its pattern is the one the
+    # operation reading it narrowed it to (EquivalentSparsityPattern). Worked
+    # out again from the tensor underneath, it would be the whole window.
+    return node
+
 class ComputeMemoryLayout(Transformer):
   def generic_visit(self, node):
     super().generic_visit(node)
@@ -308,6 +314,15 @@ class ComputeMemoryLayout(Transformer):
     return node
 
   def visit_IndexedTensor(self, node):
+    return node
+
+  def visit_SliceView(self, node):
+    # The layout is the window's; the pattern stays the narrowed one, as it
+    # does for an IndexedTensor. Recomputing it from the tensor underneath
+    # widened a sliced operand past the result of a product with a sparse
+    # factor, and the element-wise generator refused the operation.
+    super().generic_visit(node)
+    node.computeMemoryLayout()
     return node
 
 class SetDatatype(Transformer):

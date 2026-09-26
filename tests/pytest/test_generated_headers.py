@@ -8,8 +8,12 @@ family index from a silent out-of-bounds read into a failing assert.
 """
 from __future__ import annotations
 
+import pathlib
 import re
+import shutil
+import subprocess
 
+import numpy as np
 import pytest
 
 from yateto import Generator, Tensor, useArchitectureIdentifiedBy
@@ -180,6 +184,66 @@ class TestDeviceMarkers:
         kernel_h = generate(tmp_path, build, arch)['kernel.h']
         line = next(l for l in kernel_h.splitlines() if 'void execute(unsigned i0)' in l)
         assert 'YATETO_HOSTDEVICE' not in line
+
+
+class TestDeviceMarkersOnData:
+    """The marker is an execution space, and only code has one.
+
+    nvcc refuses it on a variable -- "memory qualifier on data member is not
+    allowed" -- so a header that marks its constexpr data compiles with
+    clang and g++ and stops every CUDA translation unit that includes it.
+    A constexpr datum needs no marker to be read on either side.
+    """
+
+    @staticmethod
+    def build(g):
+        from yateto.memory import CSCMemoryLayout
+        dq = [Tensor('dQ({})'.format(i), (5, 5)) for i in range(3)]
+        a = Tensor('a', (5, 5), spp=np.eye(5))
+        s = Tensor('s', (5, 5), spp=np.eye(5), memoryLayoutClass=CSCMemoryLayout)
+        for i in range(1, 3):
+            g.add('fam({})'.format(i), dq[0]['ij'] <= dq[i]['ik'] * a['kj'])
+        g.add('k', dq[0]['ij'] <= dq[1]['ij'] + dq[2]['ij'])
+        g.add('sparse', dq[0]['ij'] <= dq[1]['ik'] * s['kj'])
+
+    @staticmethod
+    def factories(init_h, tensor):
+        """The `create` lines of one tensor's view struct."""
+        block = init_h.split(f'struct {tensor} : ')[1].split('    };\n')[0]
+        return [line.strip() for line in block.splitlines() if ' create(' in line]
+
+    def test_a_sparse_view_s_factory_stays_on_the_host(self, tmp_path, arch):
+        """Its index arrays are host data, which device code may not name."""
+        init_h = generate(tmp_path, self.build, arch)['init.h']
+        sparse = self.factories(init_h, 's')
+        dense = self.factories(init_h, 'a')
+        assert len(sparse) == 2 and len(dense) == 2
+        assert all(line.startswith('static inline') for line in sparse)
+        assert all(line.startswith('YATETO_HOSTDEVICE static inline') for line in dense)
+
+    def test_no_datum_is_marked(self, tmp_path, arch):
+        files = generate(tmp_path, self.build, arch)
+        for name in ('tensor.h', 'init.h', 'kernel.h'):
+            for line in files[name].splitlines():
+                declaration = line.strip()
+                if 'YATETO_HOSTDEVICE' in declaration and declaration.endswith(';') \
+                   and ' = ' in declaration:
+                    pytest.fail(f'{name} marks a datum: {declaration}')
+
+    @pytest.mark.skipif(shutil.which('nvcc') is None, reason='needs nvcc')
+    def test_the_headers_compile_as_cuda(self, tmp_path, arch):
+        gen = tmp_path / 'gen'
+        gen.mkdir()
+        generate(gen, self.build, arch)
+        source = tmp_path / 'device.cu'
+        source.write_text(
+            '#include "tensor.h"\n#include "init.h"\n#include "kernel.h"\n'
+            '__global__ void touch(unsigned* out) {\n'
+            '  out[0] = yateto::tensor::dQ::size(1) + yateto::tensor::a::size();\n'
+            '}\n')
+        include = pathlib.Path(__file__).resolve().parents[2] / 'include'
+        subprocess.run(['nvcc', '-std=c++17', '-c', str(source), '-o', str(tmp_path / 'device.o'),
+                        f'-I{include}', f'-I{gen}'], check=True, capture_output=True, text=True)
 
 
 class TestHeaderGuards:

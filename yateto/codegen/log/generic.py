@@ -13,6 +13,10 @@ class Generic(object):
     self._attrs = attrs
 
   def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True):
+    if isImmediate(term):
+      # nothing to point at: the GEMM writes its numbers into the code, and
+      # it has no loop index, so they are the same in every iteration
+      return
     indices = term.indices & loopIndices
     addressStr = term.memoryLayout.addressString(term.indices, indices, fixed) if len(indices) > 0 else ''
     if len(addressStr) > 0:
@@ -83,9 +87,10 @@ class Generic(object):
     Beqspp = self._reduce(d.rightTerm, B, BmemLayout, fixed)
     Ceqspp = self._reduce(d.result, C, CmemLayout, fixed)
 
+    immediate = lambda term: immediateByAddress(term) if isImmediate(term) else None
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, datatype=d.leftTerm.datatype),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, datatype=d.rightTerm.datatype),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, datatype=d.leftTerm.datatype, immediate=immediate(d.leftTerm)),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, datatype=d.rightTerm.datatype, immediate=immediate(d.rightTerm)),
       result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary, datatype=d.result.datatype),
       transA = d.transA,
       transB = d.transB,

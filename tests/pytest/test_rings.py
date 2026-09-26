@@ -194,7 +194,7 @@ class TestGeneratedRings:
         code = self.emit(arch, [t['C']['ij'] <= yf.min(
             yf.add(t['A']['ik'], t['B']['kj']), 'k')])
         assert 'std::numeric_limits<double>::infinity()' in code
-        assert 'std::min' in code
+        assert 'yateto::min' in code
 
     def test_a_scale_factor_folds_into_the_contraction(self, arch, tensors):
         t = tensors

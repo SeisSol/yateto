@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 
+import numpy as np
 import pytest
 
 from yateto import Generator, GeneratorCollection, Tensor
@@ -302,3 +303,107 @@ class TestTheDescriptionIsData:
         for operation in collector.operations:
             for ref in [operation['result']] + operation['args']:
                 assert ref['name'] in known
+
+
+class TestConstantValues:
+    """A tensor whose data is known states it in the description."""
+
+    @staticmethod
+    def _constant():
+        data = np.zeros((N, N))
+        data[0, 0] = 0.5
+        data[1, 2] = -1.0
+        return Tensor('C', (N, N), spp=data)
+
+    def _exported(self, tensors):
+        C = self._constant()
+        collector = export([tensors['out']['ij'] <= C['ik'] * tensors['B']['kj']])
+        return next(d for d in collector.tensors if d['name'] == 'C')
+
+    def test_the_values_reach_the_exporter(self, tensors):
+        assert self._exported(tensors)['values'] is not None
+
+    def test_a_value_comes_with_the_entry_it_belongs_to(self, tensors):
+        values = self._exported(tensors)['values']
+        assert values['kind'] == 'entries'
+        assert values['data'] == [[[0, 0], 0.5], [[1, 2], -1.0]]
+
+    def test_a_tensor_without_values_states_none(self, tensors):
+        C = self._constant()
+        collector = export([tensors['out']['ij'] <= C['ik'] * tensors['B']['kj']])
+        B = next(d for d in collector.tensors if d['name'] == 'B')
+        assert B['values'] is None
+
+    def test_the_values_survive_a_json_round_trip(self, tensors):
+        C = self._constant()
+        collector = export([tensors['out']['ij'] <= C['ik'] * tensors['B']['kj']])
+        assert json.loads(json.dumps(collector.kernel)) == collector.kernel
+
+
+class TestConflictingOccurrences:
+    """Two occurrences of one name that describe two different tensors.
+
+    A real ambiguity, and the exporter cannot resolve it: it declares a name
+    once. The message has to say which name and which field, because finding
+    that out is otherwise most of the work.
+    """
+
+    @pytest.fixture
+    def factory(self):
+        from yateto.codegen.factory import ExportFactory
+        factory = ExportFactory.__new__(ExportFactory)
+        factory.tensors = {}
+        return factory
+
+    @staticmethod
+    def description(datatype='f64', sizes=(4, 4)):
+        return {'name': 'damageGrowing', 'datatype': datatype, 'flags': {'constant': False},
+                'storage': {'shape': [4, 4], 'type': 'bbox', 'sizes': list(sizes)}}
+
+    def test_the_same_description_twice_is_fine(self, factory):
+        factory._handleTensor(self.description(), ['i', 'j'])
+        factory._handleTensor(self.description(), ['i', 'j'])
+
+    def test_the_message_names_the_tensor_and_the_field(self, factory):
+        factory._handleTensor(self.description(datatype='f64'), ['i', 'j'])
+        with pytest.raises(ValueError) as raised:
+            factory._handleTensor(self.description(datatype='bool'), ['i', 'j'])
+        message = str(raised.value)
+        assert "'damageGrowing'" in message
+        assert "datatype: 'bool' here, 'f64' before" in message
+        assert 'storage' not in message
+
+    def test_a_nested_field_is_named_by_its_path(self, factory):
+        factory._handleTensor(self.description(sizes=(4, 4)), ['i', 'j'])
+        with pytest.raises(ValueError, match=r'storage\.sizes: \[4, 2\] here, \[4, 4\] before'):
+            factory._handleTensor(self.description(sizes=(4, 2)), ['i', 'j'])
+
+
+class TestAlignmentIsTheStorages:
+    """`alignment` is stated for the tensor, so it is the storage's promise.
+
+    Asked of the occurrence, a slice along the leading axis of a width that is
+    not a multiple of the vector length promised nothing while the whole
+    tensor promised its alignment -- two descriptions of one name, and the
+    exporter refused the kernel. The shift of a slice arrives with its
+    reference; what it means for the alignment is the far side's to derive.
+    """
+
+    @pytest.fixture
+    def aligned(self):
+        from yateto.memory import DenseMemoryLayout
+        arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+        previous = DenseMemoryLayout.ALIGNMENT_ARCH
+        DenseMemoryLayout.setAlignmentArch(arch)
+        yield arch
+        DenseMemoryLayout.ALIGNMENT_ARCH = previous
+
+    def test_a_slice_and_the_whole_describe_one_tensor(self, aligned):
+        X = Tensor('X', (N, N), alignStride=True)
+        out = Tensor('out', (N, N))
+        part = Tensor('part', (N - 1, N))
+        collector = export([[out['ij'] <= X['ij'],
+                             part['ij'] <= X['ij'].subslice('i', 1, N)]])
+        described = [t for t in collector.tensors if t['name'] == 'X']
+        assert len(described) == 1
+        assert described[0]['alignment'] == aligned.alignment

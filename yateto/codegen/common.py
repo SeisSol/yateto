@@ -5,11 +5,12 @@ from .. import aspp
 from ..type import AddressingMode, Datatype
 from ..ast.indices import BoundingBox
 from ..ast.log import splitByDistance
+from ..memory import MemoryLayoutView
 from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, FloatingType, MemrefType, GroupType, IntImmValue, FloatImmValue, DYNAMIC, SubviewInst, LoadInst
 import hashlib
 
 class TensorDescription(object):
-  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
+  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, immediate=None):
     """
 
     Args:
@@ -23,6 +24,8 @@ class TensorDescription(object):
       values (Union[np.ndarray, None]): the values of the compute_constant tensor, if they are known at compile time
       datatype (Datatype): the datatype of the tensor elements
       addressing (AddressingMode): the addressing mode for the tensor
+      immediate (Union[list, None]): for an operand whose numbers are written
+          into the code, the numbers by the address the layout gives them
     """
     self.name = name
     self.memoryLayout = memoryLayout
@@ -32,6 +35,7 @@ class TensorDescription(object):
     self.values = values
     self.datatype = datatype
     self.addressing = addressing
+    self.immediate = immediate
 
   @classmethod
   def fromNode(cls, name, node):
@@ -73,6 +77,51 @@ class IndexedTensorDescription(TensorDescription):
         addressing = var.tensor.addressing
     return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
+def hasStorage(term):
+  """Whether an operand is read through its memory layout.
+
+  An operand that states no mode gets one of the memory modes deduced for
+  it, and all of them are storage, so the question is answerable without
+  deducing which one.
+  """
+  return term.addressing is None or term.addressing.hasStorage()
+
+
+def isImmediate(term):
+  """Whether the generated code has to spell this operand's data out."""
+  return term.addressing is not None and not term.addressing.isPassedAsArgument()
+
+
+def immediateValue(term, entry):
+  """The number an immediate operand holds at `entry`.
+
+  The entry is in the operand's own index space, which is the tensor's own
+  only where the operand is not a slice; a view knows the shift it imposes
+  and is asked for it. An entry the values do not mention is one the
+  sparsity pattern excludes, and answers zero.
+  """
+  layout = term.memoryLayout
+  while isinstance(layout, MemoryLayoutView):
+    entry = layout.relidx(entry)
+    layout = layout.base
+  return term.values.get(tuple(entry), 0)
+
+
+def immediateByAddress(term):
+  """An immediate operand's numbers, indexed by the address its layout gives.
+
+  What a generator that forms addresses can look an immediate operand up by:
+  it computes the address it would have read and takes the number found
+  there. A slice shares the addresses of the tensor it is cut from, and the
+  values are keyed by that tensor's entries, so the tensor's own layout packs
+  them.
+  """
+  layout = term.memoryLayout
+  while isinstance(layout, MemoryLayoutView):
+    layout = layout.base
+  return layout.pack(term.values)
+
+
 def operand(term):
   """How the generated code reads an operand.
 
@@ -80,7 +129,7 @@ def operand(term):
   signature and no storage to address. Everything else is read through its
   memory layout.
   """
-  if term.addressing == AddressingMode.SCALAR:
+  if not hasStorage(term):
     return term.name
   return f'{term.name}[{term.memoryLayout.addressString(term.indices)}]'
 
@@ -199,17 +248,27 @@ def boundingBoxFromLoopRanges(indices, loopRanges):
 def reduceSpp(spp, sourceIndices, targetIndices, fixedIndices):
   return spp.indexSum(sourceIndices, targetIndices, fixedIndices)
 
-def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
+def zeroFill(cpp, name, memoryLayout, datatype, writeBB=None):
+  """Zero what a statement is about to write, except the box it writes itself.
+
+  A view is a window into a tensor that other statements write as well. The
+  statement owns the window and nothing else, so the window is what it
+  clears: the whole of the tensor would take the neighbours with it -- and a
+  view has no size of its own to clear it by.
+  """
   if writeBB:
-    addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))
-    if len(addresses) > 0:
-      regions = splitByDistance(addresses)
-      for region in regions:
-        m, M = min(region), max(region)
-        initialAddress = f'{result.name} + {m}'
-        cpp.memset(initialAddress, M-m+1, result.datatype.ctype())
+    addresses = sorted(memoryLayout.notWrittenAddresses(writeBB))
+  elif isinstance(memoryLayout, MemoryLayoutView):
+    addresses = memoryLayout.addressesIn()
   else:
-    cpp.memset(result.name, result.memoryLayout.requiredReals(), result.datatype.ctype())
+    cpp.memset(name, memoryLayout.requiredReals(), datatype.ctype())
+    return
+  for region in splitByDistance(addresses) if addresses else []:
+    m, M = min(region), max(region)
+    cpp.memset(f'{name} + {m}', M-m+1, datatype.ctype())
+
+def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
+  zeroFill(cpp, result.name, result.memoryLayout, result.datatype, writeBB)
 
 
 class KernelAttributes:

@@ -30,7 +30,8 @@ from yateto import Generator, Tensor, simpleParameterSpace
 from yateto.codegen.cache import RoutineCache
 from yateto.codegen.code import Cpp
 from yateto.codegen.common import BatchedOperationsAux, KernelAttributes
-from yateto.codegen.factory import ExportFactory, OptimizedKernelFactory
+from yateto.codegen.factory import (ExportFactory, ExportGenerator,
+                                    OptimizedKernelFactory)
 from yateto.codegen.visitor import OptimizedKernelGenerator
 
 
@@ -201,7 +202,7 @@ class TestExporterHandover:
         seen = {}
 
         class Exporter:
-            INTERFACE_VERSION = 6
+            INTERFACE_VERSION = ExportGenerator.INTERFACE_VERSION
 
             def __init__(self, arch, attrs=None):
                 seen["attrs"] = attrs
@@ -239,7 +240,7 @@ class TestExporterHandover:
         """A factory function is a fine way to register one, and it carries
         no version of its own."""
         class Exporter:
-            INTERFACE_VERSION = 6
+            INTERFACE_VERSION = ExportGenerator.INTERFACE_VERSION
 
             def __init__(self, arch, attrs=None):
                 pass

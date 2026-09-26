@@ -7,8 +7,6 @@ class Generic(object):
 
   def _formatTerm(self, alpha, term, entry, datatype=None):
     prefix = ''
-    if alpha == 0.0:
-      return ''
     if alpha == 1.0:
       prefix = term.name
     else:
@@ -29,6 +27,14 @@ class Generic(object):
 
   def generate(self, cpp, routineCache):
     d = self._descr
+
+    # A zero scale factor makes the term irrelevant: what is left is either the
+    # zero it scales to, or -- where the result is accumulated into -- nothing
+    # at all.
+    if d.alpha == 0.0:
+      if d.beta == 0.0:
+        initializeWithZero(cpp, d.result)
+      return 0
 
     if d.beta == 0.0:
       if d.term.memoryLayout.isSparse():

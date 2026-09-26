@@ -54,6 +54,7 @@ def add(g):
   # test's own pattern before and after, and the comparison covers them
   _(A['kc'].subslice('c', 1, 3) <= e0['k'] * v['c'].subslice('c', 0, 2))
   _(A['kc'].subslice('c', 5, 8) <= T['kc'].subslice('c', 2, 5) * v['k'])
+  _(A['kc'].subslice('c', 5, 8) <= T['kc'].subslice('c', 2, 5) * B['kc'].subslice('c', 5, 8))
 
   # GEMMs on the host: one loop per column (or row) with the numbers in it;
   # a selector is the column it selects

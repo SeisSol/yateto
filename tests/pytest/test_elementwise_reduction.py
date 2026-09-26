@@ -338,3 +338,52 @@ class TestZeroScale:
         assert 'yateto::max(' in body
         assert ', 0.0)' in body
         assert 'A[' not in body
+
+
+class TestSlicedOperandsOfASparseProduct:
+    """A product with a sparse factor narrows its other operands to the
+    factor's pattern, and a sliced operand has to keep that narrowing through
+    the passes after it. Recomputed from the tensor under the slice, it was
+    the whole window again: wider than the result, which the element-wise
+    generator refuses."""
+
+    def emit(self, arch, statement, tmp_path):
+        generator = Generator(arch)
+        generator.add('k', statement)
+        generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return (tmp_path / 'kernel.cpp').read_text()
+
+    @pytest.fixture
+    def tensors(self):
+        table = np.zeros((N, N))
+        table[1, 2] = -1.0
+        table[4, 3] = 2.0
+        return Tensor('T', (N, N), table), Tensor('Q', (N, N)), Tensor('P', (N, N))
+
+    def test_a_sliced_dense_operand_is_narrowed_with_the_product(self, arch, tmp_path,
+                                                                 tensors):
+        T, Q, P = tensors
+        code = self.emit(arch, P['kc'].subslice('c', 3, 5)
+                         <= T['kc'].subslice('c', 2, 4) * Q['kc'].subslice('c', 3, 5), tmp_path)
+        body = code[code.index('k::execute'):]
+        # the product is non-zero in rows 1..4 of the window only
+        assert re.search(r'for \(int _k = 1; _k < 5; \+\+_k\)', body)
+
+    def test_the_narrowing_holds_for_the_eqspp_of_the_slice(self, arch, tensors):
+        from yateto.ast.indices import BoundingBox
+        from yateto.ast.node import SliceView
+        T, Q, P = tensors
+        kernel = Kernel('k', P['kc'].subslice('c', 3, 5)
+                        <= T['kc'].subslice('c', 2, 4) * Q['kc'].subslice('c', 3, 5))
+        kernel.prepareUntilUnitTest(arch)
+        kernel.prepareUntilCodeGen(BoundingBoxCostEstimator, False)
+
+        def slices(node):
+            if isinstance(node, SliceView) and node.term().name() == 'Q':
+                yield node
+            for child in node:
+                yield from slices(child)
+
+        (view,) = list(slices(kernel.ast[0]))
+        # T's two non-zeros in the window are in rows 1 and 4
+        assert str(BoundingBox.fromSpp(view.eqspp())) == 'BoundingBox(Range(1, 5), Range(0, 2))'

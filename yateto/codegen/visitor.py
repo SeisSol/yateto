@@ -26,6 +26,10 @@ CONSTEXPR = 'constexpr'
 STATIC = 'static'
 INLINE = 'inline'
 MODIFIERS = '{} {} {}'.format(HOSTDEVICE, CONSTEXPR, STATIC)
+# For data, not functions. An execution space is a property of code: nvcc
+# refuses one on a variable ("memory qualifier on data member is not
+# allowed"), and a constexpr datum needs none to be read on either side.
+DATA_MODIFIERS = '{} {}'.format(CONSTEXPR, STATIC)
 STATIC_INLINE = '{} {} {}'.format(HOSTDEVICE, STATIC, INLINE)
 HOSTDEVICE_INLINE = '{} {}'.format(HOSTDEVICE, INLINE)
 #: Alignment floor, for the image and for every entry in it.
@@ -378,7 +382,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       with header.Struct(name):
         def addConst(name, attrcall):
           header('{} {} const {}{} = {};'.format(
-            MODIFIERS,
+            DATA_MODIFIERS,
             self._arch.ulongTypename,
             name,
             brackets,
@@ -393,13 +397,13 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         # tmp mem required by a kernel(s)
         tmp_mem_list = [kernelOutline.tmp_mem_size if kernelOutline else 0 for kernelOutline in kernelOutlines]
-        header('{} {} const {}{} = {};'.format(MODIFIERS,
+        header('{} {} const {}{} = {};'.format(DATA_MODIFIERS,
                                                self._arch.ulongTypename,
                                                self.TEMP_MEM_REQUIRED_NAME,
                                                brackets,
                                                formatArray(tmp_mem_list)))
 
-        header('{} {} const {} = {};'.format(MODIFIERS,
+        header('{} {} const {} = {};'.format(DATA_MODIFIERS,
                                              self._arch.ulongTypename,
                                              self.TEMP_MAX_MEM_REQUIRED_NAME,
                                              max(tmp_mem_list)))
@@ -511,7 +515,7 @@ class OptimizedKernelGenerator(KernelGenerator):
         if familyStride is not None:
           header('using {} = void ({}::*)();'.format(self.MEMBER_FUNCTION_PTR_NAME, name))
           header('{} {} {}[] = {};'.format(
-            MODIFIERS,
+            DATA_MODIFIERS,
             self.MEMBER_FUNCTION_PTR_NAME,
             self.EXECUTE_ARRAY_NAME,
             formatArray(['&{}::{}'.format(name, executeName(index)) if kernelOutline else 'nullptr' for index, kernelOutline in enumerate(kernelOutlines)])
@@ -911,9 +915,18 @@ class InitializerGenerator(object):
 
   class TensorView(object):
     ARGUMENT_NAME = 'values'
+    #: Whether the factory can be called from device code, which it can as
+    #: long as it names nothing but its argument and literals. A sparse view
+    #: is built on index arrays that are constexpr data of the host: device
+    #: code may not refer to them, and a marked factory that does stops every
+    #: CUDA translation unit including init.h, called or not.
+    DEVICE_CALLABLE = True
 
     def __init__(self, datatype):
       self._datatype = datatype
+
+    def factoryModifiers(self):
+      return STATIC_INLINE if self.DEVICE_CALLABLE else f'{STATIC} {INLINE}'
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
@@ -935,7 +948,7 @@ class InitializerGenerator(object):
       lhs = f'{numberType} {name}[]'
       if declarationOnly:
         return ''
-      return f'{MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
+      return f'{DATA_MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
 
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
@@ -958,6 +971,7 @@ class InitializerGenerator(object):
   class CSCMatrixView(TensorView):
     ROWIND_NAME = 'RowInd'
     COLPTR_NAME = 'ColPtr'
+    DEVICE_CALLABLE = False
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
@@ -978,6 +992,7 @@ class InitializerGenerator(object):
 
   class PatternTensorView(TensorView):
     PATTERN_NAME = 'Pattern'
+    DEVICE_CALLABLE = False
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
@@ -1329,9 +1344,9 @@ class InitializerGenerator(object):
           with cpp.Struct(self.VIEW_STRUCT_NAME):
             cpp(f'using {self.VIEW_TYPE_NAME} = {tv.typename(len(ml.shape()), self._arch, False)};')
             cpp(f'using {self.VIEW_TYPE_NAME_CONST} = {tv.typename(len(ml.shape()), self._arch, True)};')
-            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(tv.factoryModifiers(), self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, None, False)
-            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME_CONST)):
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(tv.factoryModifiers(), self.VIEW_TYPE_NAME_CONST)):
               tv.generate(cpp, ml, self._arch, None, True)
         else:
           typedArgs = typedNdArgs(len(groupSize), self._arch.uintTypename)
@@ -1350,9 +1365,9 @@ class InitializerGenerator(object):
           with cpp.Struct('{}::{}<{}>'.format(baseNameWithoutNamespace, self.VIEW_STRUCT_NAME, special)):
             cpp(f'using {self.VIEW_TYPE_NAME} = {typename};')
             cpp(f'using {self.VIEW_TYPE_NAME_CONST} = {typenameConst};')
-            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME)):
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgs, returnType='{} {}'.format(tv.factoryModifiers(), self.VIEW_TYPE_NAME)):
               tv.generate(cpp, ml, self._arch, index(group), False)
-            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(STATIC_INLINE, self.VIEW_TYPE_NAME_CONST)):
+            with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(tv.factoryModifiers(), self.VIEW_TYPE_NAME_CONST)):
               tv.generate(cpp, ml, self._arch, index(group), True)
 
   def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True, constexpr=True, static=True):

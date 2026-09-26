@@ -333,4 +333,8 @@ class TestZeroScale:
         B = Tensor('B', (N, N))
         out = Tensor('out', (N, N))
         code = self.emit(arch, out['ij'] <= yf.maximum(B['ij'], 0.0 * A['ij']), tmp_path)
-        assert 'std::max' in code
+        body = code[code.index('k::execute'):]
+        # max(b, 0) is not b: the operand is gone, the operation is not
+        assert 'yateto::max(' in body
+        assert ', 0.0)' in body
+        assert 'A[' not in body

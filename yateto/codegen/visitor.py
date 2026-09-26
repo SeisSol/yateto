@@ -210,7 +210,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                  layouts,
                  target,
                  attrs,
-                 inMemory=None):
+                 inMemory=None,
+                 reads=None):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
@@ -235,6 +236,10 @@ class OptimizedKernelGenerator(KernelGenerator):
       #: Immediate operands this kernel reads from memory, by name, with the
       #: operations that could not take them as they are addressed.
       self.inMemory = inMemory if inMemory is not None else {}
+      #: Per family, the groups this kernel reads. What the arrangement says
+      #: about the others is the family's own layout, not a claim of this
+      #: kernel's, which is what lets its variants be put together.
+      self.reads = reads if reads is not None else {}
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -373,12 +378,6 @@ class OptimizedKernelGenerator(KernelGenerator):
       layouts[baseName] = layouts[baseName].withMember(
         group, self._grantOffering(offeredName, layout, offered))
 
-    # Recorded once the arrangements are settled, so that the pool holds what
-    # the kernel reads and not what it was going to read on the way there.
-    for baseName, arrangement in layouts.items():
-      self._arrangements.setdefault(baseName, collections.OrderedDict())[
-        arrangement.tag()] = arrangement
-
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
                               inConstBytes,
@@ -395,7 +394,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                               layouts,
                               target,
                               attrs,
-                              inMemory)
+                              inMemory,
+                              {baseName: frozenset(byGroup) for baseName, byGroup in members.items()})
 
   def arrangements(self):
     """Per tensor, the arrangements the kernels actually read it in."""
@@ -457,7 +457,8 @@ class OptimizedKernelGenerator(KernelGenerator):
     is_compute_constant_tensors = dict()
     datatype = dict()
     layouts = dict()
-    for ko in kernelOutlines:
+    readers = dict()
+    for index, ko in enumerate(kernelOutlines):
       if ko:
         self._addFromKO(ko.scalars, scalars)
         self._addFromKO(ko.tensors, tensors)
@@ -465,15 +466,38 @@ class OptimizedKernelGenerator(KernelGenerator):
         self._addFromKO(ko.prefetch, prefetch)
         self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
         self._addFromKO(ko.datatype, datatype)
-        # The variants of one kernel share its members, so a constant they
-        # arrange differently has no one member to be bound to.
+        # The variants of one kernel share its members, so the arrangement a
+        # constant is bound in has to serve all of them. Each variant speaks
+        # only for the members it reads -- one reading plusFluxMatrices(0)
+        # rearranged and another plusFluxMatrices(1) is one arrangement with
+        # both rearranged -- and two that read one member differently leave
+        # no member to bind.
         for baseName, arrangement in ko.layouts.items():
-          if baseName in layouts \
-             and is_compute_constant_tensors.get(baseName) and not writable.get(baseName) \
-             and layouts[baseName] != arrangement:
-            raise ValueError('The variants of this kernel lay {} out differently '
-                             'and cannot share a pool entry.'.format(baseName))
-          layouts[baseName] = arrangement
+          constant = is_compute_constant_tensors.get(baseName) and not writable.get(baseName)
+          if baseName not in layouts or not constant:
+            layouts[baseName] = arrangement
+            readers[baseName] = {group: index for group in ko.reads.get(baseName, ())}
+            continue
+          merged = layouts[baseName]
+          for group in ko.reads.get(baseName, ()):
+            layout = arrangement.layoutOf(group)
+            if group in readers[baseName]:
+              if layoutTag(merged.layoutOf(group)) != layoutTag(layout):
+                member = baseName + ('({})'.format(','.join(map(str, group))) if group else '')
+                raise ValueError(
+                  'Variants {} and {} of {} read {} laid out differently, and '
+                  'they share one member to bind it to.'.format(
+                    readers[baseName][group], index, name, member))
+              continue
+            merged = merged.withMember(group, layout)
+            readers[baseName][group] = index
+          layouts[baseName] = merged
+
+    # Recorded once the variants agree, so that the pool holds what the kernel
+    # reads and not what one variant of it was going to read on the way there.
+    for baseName, arrangement in layouts.items():
+      self._arrangements.setdefault(baseName, collections.OrderedDict())[
+        arrangement.tag()] = arrangement
 
     target = kernelOutlines[-1].target
     is_same_target = True

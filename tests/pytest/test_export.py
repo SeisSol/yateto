@@ -12,7 +12,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from yateto import Generator, GeneratorCollection, Tensor
+from yateto import Generator, GeneratorCollection, Tensor, simpleParameterSpace
 from yateto.arch import useArchitectureIdentifiedBy
 from yateto.codegen.factory import ExportGenerator
 from yateto.type import Datatype
@@ -730,3 +730,79 @@ class TestFlopCount:
 
         assert not FlopCount()
         assert FlopCount() == 0
+
+
+class ReadOfferer(Collector):
+    """Asks for an order for every constant it was described that `wants`.
+
+    Like a real exporter, it speaks only about what the kernel in hand reads,
+    so the variants of one family each speak for their own members.
+    """
+
+    wants = staticmethod(lambda name, described: False)
+
+    def layout_offerings(self):
+        described = [t['name'] for t in self.tensors]
+        return {t['name']: {'order': [1, 0]} for t in self.tensors
+                if t['flags']['constant'] and self.wants(t['name'], described)}
+
+
+def exportFamily(build, wants):
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+
+    def make(a, attrs=None):
+        it = ReadOfferer(a, attrs)
+        it.wants = wants
+        return it
+
+    generator = Generator(arch)
+    build(generator)
+    out = tempfile.mkdtemp()
+    generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                       routine_exporters={'gpu': make})
+    return out
+
+
+class TestOfferingsAcrossVariants:
+    """The variants of one family share its members, so what they ask for has
+    to fit into one arrangement: each speaks for the members it reads."""
+
+    @staticmethod
+    def constants(name, count):
+        import numpy as np
+
+        tensors = []
+        for k in range(count):
+            values = np.zeros((N, N))
+            for i in range(N):
+                values[i, (i + k + 1) % N] = float(i + 1)
+            tensors.append(Tensor('{}({})'.format(name, k), (N, N), values))
+        return tensors
+
+    def test_variants_rearranging_different_members_share_one_arrangement(self):
+        F = self.constants('F', 2)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily('fam', simpleParameterSpace(2),
+                                      lambda i: out['ij'] <= F[i]['ik'] * B['kj'], target='gpu')
+        plain = exportFamily(build, lambda name, described: False)
+        offered = exportFamily(build, lambda name, described: name.startswith('F('))
+
+        plain_h = open(os.path.join(plain, 'pool.h')).read()
+        offered_h = open(os.path.join(offered, 'pool.h')).read()
+        # one member for the family, bound by the family, and a different
+        # arrangement than without the offerings -- not one per variant
+        assert len(re.findall(r'Container<double const\*> F_\w+', offered_h)) == 1
+        assert offered_h != plain_h
+        member = re.search(r'Container<double const\*> (F_\w+)', offered_h).group(1)
+        assert 'F = pool.{};'.format(member) in open(os.path.join(offered, 'kernel.h')).read()
+
+    def test_variants_reading_one_member_differently_are_refused_by_name(self):
+        F = self.constants('F', 1)
+        G = self.constants('G', 2)
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily('fam', simpleParameterSpace(2),
+                                      lambda i: out['ij'] <= F[0]['ik'] * G[i]['kj'], target='gpu')
+        # only the variant that reads G(0) asks for F(0) rearranged
+        with pytest.raises(ValueError, match=r'Variants 0 and 1 of fam read F\(0\)'):
+            exportFamily(build, lambda name, described: name == 'F(0)' and 'G(0)' in described)

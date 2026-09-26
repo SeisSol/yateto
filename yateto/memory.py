@@ -327,6 +327,23 @@ class DenseMemoryLayout(MemoryLayout):
     newBB = BoundingBox([copy.copy(originalBB[p]) for p in permutation])
     return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None, alignmentArch=self._alignmentArch)
 
+  def realigned(self, alignment):
+    """The same tensor, its stride aligned to a different width.
+
+    Rebuilt from the extent the tensor really occupies rather than from the
+    one it was widened to, so that a narrower width narrows: widening an
+    already widened box again would keep whatever the first width decided,
+    since one width is a multiple of the other.
+
+    A layout that aligns to nothing has nothing to realign, and says so by
+    returning itself.
+    """
+    if self._range0 is None:
+      return self
+    bbox = BoundingBox([self._range0] + [rng for rng in self._bbox[1:]])
+    return DenseMemoryLayout(self._shape, bbox, alignStride=True,
+                             alignmentArch=alignment)
+
   def reordered(self, order):
     """The same tensor, its axes laid out in the given order.
 

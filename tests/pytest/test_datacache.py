@@ -20,7 +20,7 @@ from yateto import Tensor, useArchitectureIdentifiedBy
 from yateto.codegen.code import Cpp
 from yateto.codegen.arrangement import Arrangement
 from yateto.codegen.datacache import DataCache
-from yateto.memory import CSCMemoryLayout
+from yateto.memory import CSCMemoryLayout, DenseMemoryLayout
 from yateto.codegen.visitor import POOL_ALIGNMENT, InitializerGenerator, PoolGenerator
 from yateto.type import Datatype
 
@@ -648,3 +648,73 @@ class TestTwoArrangementsOfOneTensor:
         assert len(pool) == 1
         assert len(cache) == 1
         assert len(set(PoolGenerator.assignMembers(pool).values())) == 1
+
+
+class TestATensorCanBeHeldAtTheHostsWidth:
+    """A run configured for a device pads to the device's width.
+
+    That is right for what the device reads. The same matrix read on the host
+    carries the padding along, and the host has no use for it: the rows are
+    dead, they are loaded, and they are multiplied. Which width a tensor is
+    held at is the caller's to say, because it is the caller who knows which
+    machine reads it -- and a kernel reads a constant at the width the tensor
+    was declared with, so the two cannot drift apart.
+    """
+
+    @staticmethod
+    def _generate(tmp_path, alignmentArch=None, archNames=('shsw', 'sgfx90a', 'hip')):
+        from yateto import Generator
+        from yateto.gemm_configuration import GeneratorCollection
+
+        arch = useArchitectureIdentifiedBy(*archNames)
+        # 35 rows: padded to 40 at the host's width and to 64 at the device's.
+        values = np.zeros((35, 3))
+        values[0, 0] = values[17, 1] = values[34, 2] = 1.0
+        A = Tensor('A', (35, 3), values, alignStride=True)
+        if alignmentArch is not None:
+            A.setMemoryLayout(DenseMemoryLayout, alignStride=True,
+                              alignmentArch=alignmentArch)
+        B = Tensor('B', (3, 3))
+        C = Tensor('C', (35, 3))
+        g = Generator(arch)
+        g.add('krnl', C['ij'] <= A['ik'] * B['kj'])
+        g.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return ((tmp_path / 'pool.h').read_text(),
+                (tmp_path / 'kernel.cpp').read_text())
+
+    def test_the_run_s_width_is_what_a_tensor_takes(self, tmp_path):
+        pool_h, _ = self._generate(tmp_path)
+
+        assert '[192]' in pool_h
+        assert '[120]' not in pool_h
+
+    def test_a_tensor_can_be_declared_at_the_host_s_width(self, tmp_path):
+        arch = useArchitectureIdentifiedBy('shsw', 'sgfx90a', 'hip')
+        pool_h, _ = self._generate(tmp_path, alignmentArch=arch.hostAlignment)
+
+        assert '[120]' in pool_h
+        assert '[192]' not in pool_h
+
+    def test_the_kernel_reads_it_at_the_width_it_is_held_at(self, tmp_path):
+        """Whatever the tensor was declared with, the strides follow it."""
+        arch = useArchitectureIdentifiedBy('shsw', 'sgfx90a', 'hip')
+        _, kernel_cpp = self._generate(tmp_path, alignmentArch=arch.hostAlignment)
+
+        assert '40*k' in kernel_cpp
+        assert '64*k' not in kernel_cpp
+
+
+class TestTheHostsWidth:
+    """An architecture says what the host aligns to, apart from the run's width."""
+
+    @staticmethod
+    def _arch(archNames):
+        return useArchitectureIdentifiedBy(*archNames)
+
+    def test_a_device_run_still_knows_the_host_s_width(self):
+        assert self._arch(('shsw', 'sgfx90a', 'hip')).hostAlignment.alignment == 32
+
+    def test_a_host_only_run_aligns_to_the_same_width_either_way(self):
+        arch = self._arch(('shsw',))
+
+        assert arch.hostAlignment.alignment == arch.alignment

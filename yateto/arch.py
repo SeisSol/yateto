@@ -43,6 +43,40 @@ from collections import namedtuple
 from typing import Union
 import re
 
+class Alignment(object):
+  """What a layout aligns to: a width, in bytes and in elements.
+
+  A layout needs no more of a machine than this. Saying so is what lets one
+  be laid out for a width the run was not configured for -- a kernel on the
+  host reading a constant padded for a device would otherwise have to take
+  the device's padding along with it.
+  """
+
+  def __init__(self, alignment, elementSize):
+    assert alignment % elementSize == 0
+    self.alignment = alignment
+    self.alignedReals = alignment // elementSize
+
+  def alignedLower(self, index):
+    return index - index % self.alignedReals
+
+  def alignedUpper(self, index):
+    return index + (self.alignedReals - index % self.alignedReals) % self.alignedReals
+
+  def checkAlignment(self, offset):
+    return offset % self.alignedReals == 0
+
+  def __eq__(self, other):
+    return (isinstance(other, Alignment) and self.alignment == other.alignment
+            and self.alignedReals == other.alignedReals)
+
+  def __hash__(self):
+    return hash((self.alignment, self.alignedReals))
+
+  def __repr__(self):
+    return 'Alignment({} B, {} reals)'.format(self.alignment, self.alignedReals)
+
+
 class Architecture(object):
   def __init__(self,
                name,
@@ -51,7 +85,8 @@ class Architecture(object):
                enablePrefetch=False,
                backend='cpp',
                host_name=None,
-               cacheline=None):
+               cacheline=None,
+               host_alignment=None):
     """
 
     Args:
@@ -84,6 +119,11 @@ class Architecture(object):
     self.alignment = alignment
     assert self.alignment % self.datatype.size() == 0
     self.alignedReals = self.alignment // self.datatype.size()
+    #: What the host would align to, where that is not what this architecture
+    #: aligns to. A kernel that runs on the host can ask for its constants at
+    #: this width instead, and read them without the device's padding.
+    self.hostAlignment = Alignment(host_alignment or alignment,
+                                   self.datatype.size())
     self.enablePrefetch = enablePrefetch
 
     self.uintTypename = 'unsigned'
@@ -247,7 +287,10 @@ def getHeterogeneousArchitectureIdentifiedBy(host_arch, device_arch, device_back
     print(f'Unknown device arch: {device_arch}. Setting alignment to 32.')
     alignment = 32
 
-  return Architecture(device_arch, device_precision, alignment, False, device_backend, host_name)
+  host_alignment, _ = getHostArchProperties(host_name)
+  return Architecture(device_arch, device_precision, alignment, False,
+                      device_backend, host_name,
+                      host_alignment=host_alignment)
 
 
 def useArchitectureIdentifiedBy(host_arch, device_arch=None, device_backend=None):
@@ -282,6 +325,8 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
   if prefetch is None:
     raise NotImplementedError(f'The architecture {host_def.archname} is unknown to Yateto, and no custom prefetching info was given')
 
+  host_alignment = alignment
+
   if device_def is not None:
     assert host_def.precision == device_def.precision
     alignment = device_def.alignment
@@ -298,7 +343,9 @@ def deriveArchitecture(host_def: HostArchDefinition, device_def: Union[DeviceArc
 
     cacheline = max(alignment, alignment_given)
 
-    return Architecture(device_def.archname, device_def.precision, alignment, False, device_def.backend, host_def.archname, cacheline)
+    return Architecture(device_def.archname, device_def.precision, alignment,
+                        False, device_def.backend, host_def.archname, cacheline,
+                        host_alignment=host_alignment)
   else:
     cacheline = max(getHostCacheline(host_def.archname) or alignment, alignment)
     return Architecture(host_def.archname,

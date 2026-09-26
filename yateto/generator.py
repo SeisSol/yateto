@@ -82,11 +82,12 @@ class Kernel(object):
     self.cfg = LivenessAnalysis().visit(self.cfg)
 
   def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool):
+    estimator = costEstimatorFor(cost_estimator, self.target)
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
       ast = EquivalentSparsityPattern(groupSpp=False).visit(ast)
-      ast = StrengthReduction(cost_estimator).visit(ast)
+      ast = StrengthReduction(estimator).visit(ast)
       ast = SetSparsityPattern().visit(ast)
       self.nonZeroFlops += ComputeOptimalFlopCount().visit(ast)
 
@@ -94,7 +95,7 @@ class Kernel(object):
     prefetch = copy.copy(self._prefetch)
     for ast in self.ast:
       ast = EquivalentSparsityPattern().visit(ast)
-      ast = StrengthReduction(cost_estimator).visit(ast)
+      ast = StrengthReduction(estimator).visit(ast)
       ast = FindContractions().visit(ast)
       ast = ComputeMemoryLayout().visit(ast)
       permutationVariants = FindIndexPermutations().visit(ast)
@@ -201,6 +202,27 @@ class KernelFamily(object):
   def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
       kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
+
+def costEstimatorFor(costEstimator, target):
+  """Which estimator a kernel for this target is reassociated with.
+
+  One estimator covers every target. A mapping from target to estimator
+  covers them apart, for where what is worth reassociating differs: a machine
+  that runs one contraction at a time and one that runs thousands of them do
+  not agree about which of two orderings is cheaper, and there is no reason
+  they should be made to.
+
+  A mapping that names targets and not the one in hand is refused rather than
+  filled in: the caller has said the targets differ, so which one this is
+  cannot be guessed.
+  """
+  if not isinstance(costEstimator, dict):
+    return costEstimator
+  if target not in costEstimator:
+    raise ValueError('No cost estimator given for target {}; there are ones for '
+                     '{}.'.format(target, ', '.join(sorted(costEstimator))))
+  return costEstimator[target]
+
 
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
@@ -316,6 +338,8 @@ class Generator(object):
                outputDir: str,
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
+               # One estimator, or a mapping from target to estimator where
+               # what is worth reassociating differs between them.
                cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set(),
                routine_cache=None,

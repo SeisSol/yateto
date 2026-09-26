@@ -27,11 +27,15 @@ class PreparedImage(object):
   """
 
   def __init__(self, images, parts=1, planar=False):
-    """``images`` maps a group's flattened index to the numbers for it.
+    """``images`` maps a member's name to the numbers prepared for it.
 
     One image per member, because the members of a family hold different
     numbers; what they share is the shape of the preparation, and that is
     what makes them one arrangement.
+
+    By name rather than by position, because the name is what both sides
+    already say: it is what the tensor was described under, so neither has to
+    work out the other's way of counting.
     """
     if not images:
       raise ValueError('A prepared image has to carry numbers.')
@@ -65,11 +69,13 @@ class PreparedImage(object):
   def alignmentArch(self):
     return None
 
-  def imageFor(self, index):
-    """The numbers for one member of the group, by its flattened index."""
-    if index not in self._images:
-      raise ValueError('The arrangement carries no image for member {}.'.format(index))
-    return list(self._images[index])
+  def imageFor(self, *names):
+    """The numbers prepared for a member, under any of the names it goes by."""
+    for name in names:
+      if name in self._images:
+        return list(self._images[name])
+    raise ValueError('The arrangement carries no image for {}.'.format(
+      ' or '.join(str(name) for name in names)))
 
   def identity(self):
     """What makes this one arrangement rather than another.

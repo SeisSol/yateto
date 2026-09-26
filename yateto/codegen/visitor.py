@@ -415,7 +415,7 @@ class OptimizedKernelGenerator(KernelGenerator):
       if order is not None:
         raise ValueError('Offering for {} asks both for an order and for numbers '
                          'of its own; the numbers already carry one.'.format(baseName))
-      images = data if isinstance(data, dict) else {0: data}
+      images = data if isinstance(data, dict) else {baseName: data}
       return PreparedImage(images,
                            parts=int(offering.get('parts', 1)),
                            planar=bool(offering.get('planar', False)))
@@ -1463,7 +1463,8 @@ class InitializerGenerator(object):
         alignment = max(POOL_ALIGNMENT, layoutAlignment)
         # A prepared image is stored as it was handed over; anything this
         # side laid out is packed from the tensor's own numbers.
-        image = (memLayout.imageFor(index) if isinstance(memLayout, PreparedImage)
+        image = (memLayout.imageFor(tensor.nameWithNamespace(), tensor.name())
+                 if isinstance(memLayout, PreparedImage)
                  else memLayout.pack(values))
         symbols[group] = dataCache.add(hint,
                                        [groupDatatype.literal(value) for value in image],

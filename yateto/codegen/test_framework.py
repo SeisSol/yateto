@@ -30,6 +30,10 @@ class TestFramework(ABC):
         cpp.include(kernelsInclude)
         cpp.include(initInclude)
         cpp.include('yateto.h')
+        # what the test bodies call themselves: sqrt, posix_memalign/free, memset
+        cpp.includeSys('cmath')
+        cpp.includeSys('cstdlib')
+        cpp.includeSys('cstring')
         for header in self.arch.headers():
             cpp.includeSys(header)
         with cpp.PPIfndef('NDEBUG'):

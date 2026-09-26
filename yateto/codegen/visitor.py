@@ -567,6 +567,8 @@ class UnitTestGenerator(KernelGenerator):
   STREAM = '_stream'
   TMP_MEM = '_tmpMem'
   TMP_SIZE = 128 * 8
+  FLAGS_MEM = '_flags'
+  DEV_FLAGS_MEM = '_dev_flags'
 
   def __init__(self, arch):
     super().__init__(arch)
@@ -624,6 +626,41 @@ class UnitTestGenerator(KernelGenerator):
   def _viewName(self, var):
     return '_view_' + self._name(var)
 
+  def _cmpName(self, var):
+    return '_cmp_' + self._tensorName(var)
+
+  def _cmpViewName(self, var):
+    return '_view_' + self._cmpName(var)
+
+  def _emitUnpack(self, cpp, var, packedName, denseName, viewName):
+    """Copies a tensor out of the layout the kernel stores it in into a dense
+    buffer, through the view the initializer generates for it."""
+    shape = var.memoryLayout().shape()
+    cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({denseName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
+        supportNS = SUPPORT_LIBRARY_NAMESPACE,
+        dim=len(shape),
+        datatype=var.datatype.ctype(),
+        arch = self._arch,
+        denseName=denseName,
+        viewName=viewName,
+        shape=', '.join([str(s) for s in shape]),
+        start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
+        stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
+      )
+    )
+    prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
+    cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({packedName}).copyToView({viewName});'.format(
+        initNS = InitializerGenerator.INIT_NAMESPACE,
+        groupTemplate=self._groupTemplate(var.tensor),
+        prefix=prefix,
+        baseName=var.tensor.baseName(),
+        packedName=packedName,
+        viewName=viewName,
+        viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
+        createFun=InitializerGenerator.VIEW_FUN_NAME
+      )
+    )
+
   def _groupStr(self, var):
     group = var.group()
     return ','.join([str(g) for g in group])
@@ -662,7 +699,7 @@ class UnitTestGenerator(KernelGenerator):
       return 1
     return min(2 ** len(conditions), cls.MAX_CASES)
 
-  def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None):
+  def generate(self, cpp, namespace, testName, kernelClass, cfg, target, gemm_cfg, testFramework, index=None, attrs=None):
     if target == 'gpu':
       if self._arch.backend in ['oneapi', 'acpp', 'hipsycl']:
         # (name queue_op "stream_op" for consistency with the existing C++ interface)
@@ -695,6 +732,8 @@ class UnitTestGenerator(KernelGenerator):
     else:
       device_test = False
 
+    use_flags = device_test and attrs is not None and attrs.flags
+
     scalars = ScalarsSet().visit(cfg)
     scalars = sorted(scalars, key=str)
     variables = SortedGlobalsList().visit(cfg)
@@ -725,32 +764,8 @@ class UnitTestGenerator(KernelGenerator):
                         caseVar=self.CASE_VAR if (bit is not None and cases > 1) else None,
                         caseBit=bit)
          factory.temporary(self._name(var), var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
-
-         shape = var.memoryLayout().shape()
-         cpp('{supportNS}::DenseTensorView<{dim},{datatype},{arch.uintTypename}> {viewName}({utName}, {{{shape}}}, {{{start}}}, {{{stop}}});'.format(
-             supportNS = SUPPORT_LIBRARY_NAMESPACE,
-             dim=len(shape),
-             datatype=var.datatype.ctype(),
-             arch = self._arch,
-             utName=self._name(var),
-             viewName=self._viewName(var),
-             shape=', '.join([str(s) for s in shape]),
-             start=', '.join([str(s.start) for s in var.memoryLayout().bbox()]),
-             stop=', '.join([str(s.stop) for s in var.memoryLayout().bbox()])
-           )
-         )
-         prefix = '{}::'.format(var.tensor.namespace) if var.tensor.namespace else ''
-         cpp( '{prefix}{initNS}::{baseName}::{viewStruct}{groupTemplate}::{createFun}({name}).copyToView({viewName});'.format(
-             initNS = InitializerGenerator.INIT_NAMESPACE,
-             groupTemplate=self._groupTemplate(var.tensor),
-             prefix=prefix,
-             baseName=var.tensor.baseName(),
-             name=self._tensorName(var),
-             viewName=self._viewName(var),
-             viewStruct=InitializerGenerator.VIEW_STRUCT_NAME,
-             createFun=InitializerGenerator.VIEW_FUN_NAME
-           )
-         )
+         self._emitUnpack(cpp, var, self._tensorName(var), self._name(var),
+                          self._viewName(var))
          cpp.emptyline()
 
        kernelTensorName = self._tensorName
@@ -764,12 +779,23 @@ class UnitTestGenerator(KernelGenerator):
 
          stream_new(self.STREAM)
          data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{Datatype.I8.ctype()}*', self.STREAM)
+         if use_flags:
+           # A kernel that declares the batch flags reads one per element and
+           # skips the ones that are off. The member defaults to a null
+           # pointer, so leaving it unset is not a kernel that computes
+           # everything -- it is a null dereference on the device, and the
+           # context it kills takes every kernel launched after it with it.
+           # The reference computes unconditionally, so the one element is on.
+           cpp(f'unsigned {self.FLAGS_MEM}[1] = {{1}};')
+           data_malloc(self.DEV_FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', 'unsigned*', self.STREAM)
          for var in variables:
            data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
            data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)
          for var in variables:
            data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
            data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({var.datatype.ctype()}*)', self.STREAM)
+         if use_flags:
+           data_memcpy(self.DEV_FLAGS_MEM, self.FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', self.STREAM)
          stream_wait(self.STREAM)
          cpp.emptyline()
 
@@ -783,6 +809,8 @@ class UnitTestGenerator(KernelGenerator):
          cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
          cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
          cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
+         if use_flags:
+           cpp( f'{self.KERNEL_VAR}.{BatchedOperationsAux.FLAGS_NAME} = {self.DEV_FLAGS_MEM};' )
 
        cpp( '{}.{}();'.format(self.KERNEL_VAR, OptimizedKernelGenerator.EXECUTE_NAME + (str(index) if index is not None else '')) )
        cpp.emptyline()
@@ -794,6 +822,8 @@ class UnitTestGenerator(KernelGenerator):
              data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
          stream_wait(self.STREAM)
          data_free(self.TMP_MEM, self.STREAM)
+         if use_flags:
+           data_free(self.DEV_FLAGS_MEM, self.STREAM)
          for var in variables:
            data_free(self._devPtrTensorName(var), self.STREAM)
            data_free(self._devTensorName(var), self.STREAM)
@@ -805,7 +835,21 @@ class UnitTestGenerator(KernelGenerator):
 
        for var in variables:
          if var.writable:
-           factory.compare(var, Variable(self._tensorName(var), False, var.tensor.memoryLayout(), datatype=var.datatype))
+           layout = var.tensor.memoryLayout()
+           if isinstance(layout, DenseMemoryLayout):
+             factory.compare(var, Variable(self._tensorName(var), False, layout, datatype=var.datatype))
+           else:
+             # A tensor the kernel stores packed has no address for the entries
+             # its pattern leaves out, so the comparison cannot walk it the way
+             # it walks the reference. Unpack what the kernel wrote, the same
+             # way the inputs are unpacked on the way in, and compare dense
+             # against dense -- which also checks that the entries outside the
+             # pattern are the zeros the reference computes for them.
+             unpacked = self._cmpName(var)
+             factory.temporary(unpacked, var.memoryLayout().requiredReals(), var.datatype, iniZero=True)
+             self._emitUnpack(cpp, var, self._tensorName(var), unpacked,
+                              self._cmpViewName(var))
+             factory.compare(var, Variable(unpacked, False, var.memoryLayout(), datatype=var.datatype))
 
        factory.freeTmp()
 

@@ -338,3 +338,42 @@ class TestConstantValues:
         C = self._constant()
         collector = export([tensors['out']['ij'] <= C['ik'] * tensors['B']['kj']])
         assert json.loads(json.dumps(collector.kernel)) == collector.kernel
+
+
+class TestConflictingOccurrences:
+    """Two occurrences of one name that describe two different tensors.
+
+    A real ambiguity, and the exporter cannot resolve it: it declares a name
+    once. The message has to say which name and which field, because finding
+    that out is otherwise most of the work.
+    """
+
+    @pytest.fixture
+    def factory(self):
+        from yateto.codegen.factory import ExportFactory
+        factory = ExportFactory.__new__(ExportFactory)
+        factory.tensors = {}
+        return factory
+
+    @staticmethod
+    def description(datatype='f64', sizes=(4, 4)):
+        return {'name': 'damageGrowing', 'datatype': datatype, 'flags': {'constant': False},
+                'storage': {'shape': [4, 4], 'type': 'bbox', 'sizes': list(sizes)}}
+
+    def test_the_same_description_twice_is_fine(self, factory):
+        factory._handleTensor(self.description(), ['i', 'j'])
+        factory._handleTensor(self.description(), ['i', 'j'])
+
+    def test_the_message_names_the_tensor_and_the_field(self, factory):
+        factory._handleTensor(self.description(datatype='f64'), ['i', 'j'])
+        with pytest.raises(ValueError) as raised:
+            factory._handleTensor(self.description(datatype='bool'), ['i', 'j'])
+        message = str(raised.value)
+        assert "'damageGrowing'" in message
+        assert "datatype: 'bool' here, 'f64' before" in message
+        assert 'storage' not in message
+
+    def test_a_nested_field_is_named_by_its_path(self, factory):
+        factory._handleTensor(self.description(sizes=(4, 4)), ['i', 'j'])
+        with pytest.raises(ValueError, match=r'storage\.sizes: \[4, 2\] here, \[4, 4\] before'):
+            factory._handleTensor(self.description(sizes=(4, 2)), ['i', 'j'])

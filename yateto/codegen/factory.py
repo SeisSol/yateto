@@ -11,6 +11,20 @@ from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
 from ..ops import Add, Mul
 
+def _differences(mine, theirs, path=''):
+  """(path, mine, theirs) for every field in which two descriptions differ."""
+  if isinstance(mine, dict) and isinstance(theirs, dict):
+    for key in sorted(set(mine) | set(theirs), key=str):
+      sub = f'{path}.{key}' if path else str(key)
+      yield from _differences(mine.get(key), theirs.get(key), sub)
+  elif mine != theirs:
+    yield path, mine, theirs
+
+def _brief(value, limit=60):
+  """A value as it reads in a message: whole where short, cut where not."""
+  text = repr(value)
+  return text if len(text) <= limit else text[:limit - 3] + '...'
+
 def _indexedTensors(node):
   """Every occurrence of a tensor in `node`, the node itself included."""
   if node is None:
@@ -907,8 +921,18 @@ class ExportFactory(KernelFactory):
                     sliced=False, offsetFrom=None):
     if tensor['name'] not in self.tensors:
       self.tensors[tensor['name']] = tensor
-    else:
-      assert tensor == self.tensors[tensor['name']]
+    elif tensor != self.tensors[tensor['name']]:
+      # One name is one declaration on the far side, so two occurrences have
+      # to describe the same tensor. That they do not is a real ambiguity --
+      # and a message that does not say which tensor and which field leaves
+      # the one who has to resolve it to instrument this line.
+      known = self.tensors[tensor['name']]
+      differences = '; '.join(f'{path}: {_brief(mine)} here, {_brief(theirs)} before'
+                              for path, mine, theirs in _differences(tensor, known))
+      raise ValueError(
+        f"Two occurrences of {tensor['name']!r} describe different tensors "
+        f"({differences}). A name is one tensor to the exporter; give the "
+        f"second its own name, or make the two agree.")
 
     # `bbox`, `offset` and `sliced` belong to this occurrence, not to the
     # tensor: two operands may name two different slices of the same thing.

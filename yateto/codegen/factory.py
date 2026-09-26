@@ -435,19 +435,21 @@ class UnitTestFactory(KernelFactory):
       self._rand += 1
       return
 
-    if not node.isPassedAsArgument():
-      # The kernel writes these numbers into its own code, so the reference
-      # has to compute with the same ones. A filling pattern would put a
-      # different operand on each side and the comparison would fail by
-      # construction.
-      memory = [datatype.literal(value) for value in ml.pack(node.values())]
-      self.temporary(resultName, size, datatype, memory=memory)
-      self._rand += 1
-      return
-
+    values = node.values()
     spp = node.spp()
     isDense = spp.count_nonzero() == size
-    if isDense:
+    if values is not None:
+      # The numbers a tensor carries are the same in every kernel that reads
+      # it, so a generator is free to take them from the description instead
+      # of the buffer -- as literals, or as an argument passed by value. Such
+      # a kernel never looks at what the test put there, and testing it
+      # against a pattern would compare two different operators: the reference
+      # computes with the pattern, the kernel with the numbers. Filling the
+      # buffer with those same numbers is the only way the two agree, and it
+      # is what production passes anyway.
+      memory = [datatype.literal(value) for value in ml.pack(values)]
+      self.temporary(resultName, size, datatype, memory=memory)
+    elif isDense:
       self.temporary(resultName, size, datatype)
       with self._cpp.For(f'int i = 0; i < {size}; ++i'):
         self._cpp(f'{resultName}[i] = {self._valueExpression(datatype, "i", span, scale)};')

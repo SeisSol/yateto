@@ -230,17 +230,27 @@ def boundingBoxFromLoopRanges(indices, loopRanges):
 def reduceSpp(spp, sourceIndices, targetIndices, fixedIndices):
   return spp.indexSum(sourceIndices, targetIndices, fixedIndices)
 
-def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
+def zeroFill(cpp, name, memoryLayout, datatype, writeBB=None):
+  """Zero what a statement is about to write, except the box it writes itself.
+
+  A view is a window into a tensor that other statements write as well. The
+  statement owns the window and nothing else, so the window is what it
+  clears: the whole of the tensor would take the neighbours with it -- and a
+  view has no size of its own to clear it by.
+  """
   if writeBB:
-    addresses = sorted(result.memoryLayout.notWrittenAddresses(writeBB))
-    if len(addresses) > 0:
-      regions = splitByDistance(addresses)
-      for region in regions:
-        m, M = min(region), max(region)
-        initialAddress = f'{result.name} + {m}'
-        cpp.memset(initialAddress, M-m+1, result.datatype.ctype())
+    addresses = sorted(memoryLayout.notWrittenAddresses(writeBB))
+  elif isinstance(memoryLayout, MemoryLayoutView):
+    addresses = memoryLayout.addressesIn()
   else:
-    cpp.memset(result.name, result.memoryLayout.requiredReals(), result.datatype.ctype())
+    cpp.memset(name, memoryLayout.requiredReals(), datatype.ctype())
+    return
+  for region in splitByDistance(addresses) if addresses else []:
+    m, M = min(region), max(region)
+    cpp.memset(f'{name} + {m}', M-m+1, datatype.ctype())
+
+def initializeWithZero(cpp, result: TensorDescription, writeBB = None):
+  zeroFill(cpp, result.name, result.memoryLayout, result.datatype, writeBB)
 
 
 class KernelAttributes:

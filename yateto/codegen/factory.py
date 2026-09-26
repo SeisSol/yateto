@@ -5,7 +5,7 @@ from ..ast.node import IndexedTensor
 from ..ast.visitor import FindTensors
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
-from .common import forLoops, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
+from .common import forLoops, zeroFill, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
 from . import copyscaleadd, log, fused_gemms, elementwise, reduction
 from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
@@ -288,7 +288,7 @@ class UnitTestFactory(KernelFactory):
       terms.insert(0, str(scalar))
 
     if not add:
-      self._cpp.memset(self._name(result), result.memoryLayout().requiredReals(), result.datatype.ctype())
+      zeroFill(self._cpp, self._name(result), result.memoryLayout(), result.datatype)
 
     class EinsumBody(object):
       def __call__(s):

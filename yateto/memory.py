@@ -91,6 +91,17 @@ class MemoryLayout(ABC):
       stop -= B*s
     return ranges
 
+  def addressesIn(self, box=None):
+    """The addresses of the entries stored within `box`, in address order.
+
+    `box` gives a range per dimension, or None for a dimension it does not
+    restrict; no box at all is the whole layout. Only what the layout
+    stores is answered for, so a sparse layout names its non-zeros.
+    """
+    box = box if box is not None else [None] * len(self.bbox())
+    ranges = [r if b is None else r & b for r, b in zip(self.bbox(), box)]
+    return sorted(int(self.address(e)) for e in itertools.product(*ranges) if self.hasValue(e))
+
   def notWrittenAddresses(self, writeBB):
     if writeBB == self._bbox:
       return []
@@ -895,6 +906,20 @@ class MemoryLayoutView(MemoryLayout):
   def stridei(self, dim):
     # pass through
     return self.base.stridei(dim)
+
+  def addressesIn(self, box=None):
+    """The addresses of the entries the window stores within `box`.
+
+    `box` is in the view's own coordinates and restricted to the window; the
+    base, which may be a view itself, knows what it stores.
+    """
+    box = box if box is not None else [None] * len(self._shape)
+    window = Range(self.start, self.end)
+    shifted = [b if i != self.index
+               else window if b is None
+               else Range(b.start + self.start, b.stop + self.start) & window
+               for i, b in enumerate(box)]
+    return self.base.addressesIn(shifted)
 
   def notWrittenAddresses(self, writeBB):
     # focus only on the subview

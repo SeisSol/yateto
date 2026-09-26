@@ -212,3 +212,27 @@ class TestSlicedOperand:
         Term.memoryLayout = MemoryLayoutView(base, 1, 2, N)
         assert immediateValue(Term, (1, 0)) == '-1.0'
         assert immediateValue(Term, (1, 2)) == 0
+
+
+class TestSlicedResult:
+    """A result cut out of a larger tensor owns its window and nothing else.
+
+    An immediate operand sends the element-wise generator down the unrolled
+    path, which clears its result before it writes the non-zeros. A result
+    that is a view has no size of its own to clear by -- and clearing the
+    tensor behind it would take the neighbouring columns with it.
+    """
+
+    def test_only_the_window_is_cleared(self, tmp_path):
+        unit = np.zeros(N)
+        unit[0] = 1.0
+        c = Tensor('c', (N,), spp=unit, addressing=AddressingMode.IMMEDIATE)
+        v = Tensor('v', (2,))
+        out = Tensor('out', (N, N))
+        code = generate(tmp_path, [out['kc'].subslice('c', 1, 3) <= c['k'] * v['c']])
+        body = code['kernel.cpp'].split('k0::execute')[1]
+        # columns 1 and 2 of a 4x4 column-major block are addresses 4..11
+        assert 'memset(out + 4, 0, 8 * sizeof(double));' in body
+        assert 'memset(out, ' not in body
+        assert 'out[4] = (1.0) * (v[0]);' in body
+        assert 'out[8] = (1.0) * (v[1]);' in body

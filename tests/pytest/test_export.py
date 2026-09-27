@@ -6,7 +6,10 @@ for that target.
 
 import json
 import os
+import pathlib
 import re
+import shutil
+import subprocess
 import tempfile
 
 import numpy as np
@@ -747,25 +750,83 @@ class ReadOfferer(Collector):
                 if t['flags']['constant'] and self.wants(t['name'], described)}
 
 
-def exportFamily(build, wants):
+class ProbingOfferer(ReadOfferer):
+    """A ReadOfferer whose kernels report the address of each constant they read.
+
+    The kernel it writes is one call per constant, to a function the program
+    that runs it defines: which member a variant reads is then something that
+    program can check, rather than something read off the generated text.
+    """
+
+    PROBE = 'yatetoProbe'
+    #: Declared for the program that runs the kernel; any object pointer
+    #: converts to it, whatever the member's type.
+    DECLARATION = 'void yatetoProbe(char const* name, void const* address);\n'
+
+    def generate(self, cpp, cache):
+        # A name with a leading underscore is the generator's own -- a scalar
+        # it introduced -- and no member of the kernel.
+        for t in self.tensors:
+            if not t['name'].startswith('_') and t['name'] != 'out':
+                cpp('{}("{}", {});'.format(self.PROBE, t['name'], t['name']))
+
+
+def exportFamily(build, wants, exporter=ReadOfferer, out=None):
     arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
 
     def make(a, attrs=None):
-        it = ReadOfferer(a, attrs)
+        it = exporter(a, attrs)
         it.wants = wants
         return it
 
     generator = Generator(arch)
     build(generator)
-    out = tempfile.mkdtemp()
+    out = tempfile.mkdtemp() if out is None else str(out)
     generator.generate(out, gemm_cfg=GeneratorCollection([]),
                        routine_exporters={'gpu': make})
     return out
 
 
+def runProbed(tmp_path, out, body):
+    """Compiles the generated kernels with `body` as main and runs them.
+
+    Every kernel written by a ProbingOfferer reports the address it reads each
+    operand at into `seen`, by the name the operand was described under.
+    """
+    include = pathlib.Path(__file__).resolve().parents[2] / 'include'
+    (tmp_path / 'probe.h').write_text(ProbingOfferer.DECLARATION)
+    (tmp_path / 'main.cpp').write_text(
+        '#include "kernel.h"\n'
+        '#include "init.h"\n'
+        '#include <algorithm>\n'
+        '#include <map>\n'
+        '#include <numeric>\n'
+        '#include <string>\n'
+        'static std::map<std::string, void const*> seen;\n'
+        'void ' + ProbingOfferer.PROBE + '(char const* name, void const* address) {\n'
+        '  seen[name] = address;\n'
+        '}\n'
+        'int main() {\n' + body + '  return 0;\n}\n')
+    sources = [str(tmp_path / 'main.cpp')] + [str(pathlib.Path(out) / name) for name in
+                                              ('kernel.cpp', 'pool.cpp', 'init.cpp', 'tensor.cpp')]
+    # Warnings as errors, and with asserts both ways: the aliases a variant
+    # reads its own arrangement through are meant to shadow the member and may
+    # be named in nothing but the asserts.
+    for flags in (['-DNDEBUG'], []):
+        built = subprocess.run(['c++', '-std=c++17', *flags, '-Wall', '-Wextra', '-Wshadow',
+                                '-Werror', '-Wno-unused-parameter', f'-isystem{include}',
+                                f'-I{out}', '-include', str(tmp_path / 'probe.h'), *sources,
+                                '-o', str(tmp_path / 'probed')],
+                               capture_output=True, text=True)
+        assert built.returncode == 0, built.stderr
+        ran = subprocess.run([str(tmp_path / 'probed')], capture_output=True, text=True)
+        assert ran.returncode == 0, (ran.returncode, ran.stderr)
+
+
 class TestOfferingsAcrossVariants:
-    """The variants of one family share its members, so what they ask for has
-    to fit into one arrangement: each speaks for the members it reads."""
+    """The variants of one family share its members. Those that agree share
+    one arrangement of a constant, each speaking for the members it reads; a
+    variant that disagrees gets an arrangement and a member of its own."""
 
     @staticmethod
     def constants(name, count):
@@ -797,14 +858,147 @@ class TestOfferingsAcrossVariants:
         member = re.search(r'Container<double const\*> (F_\w+)', offered_h).group(1)
         assert 'F = pool.{};'.format(member) in open(os.path.join(offered, 'kernel.h')).read()
 
-    def test_variants_reading_one_member_differently_are_refused_by_name(self):
+    def disagreeing(self):
+        """A family whose variants read F(0) laid out differently.
+
+        Only the variant that reads G(0) asks for F(0) rearranged; the other
+        reads it as it lays itself out.
+        """
         F = self.constants('F', 1)
         G = self.constants('G', 2)
         out = Tensor('out', (N, N))
         build = lambda g: g.addFamily('fam', simpleParameterSpace(2),
                                       lambda i: out['ij'] <= F[0]['ik'] * G[i]['kj'], target='gpu')
-        # only the variant that reads G(0) asks for F(0) rearranged
-        with pytest.raises(ValueError, match=r'Variants 0 and 1 of fam read F\(0\)'):
+        wants = lambda name, described: name == 'F(0)' and 'G(0)' in described
+        return build, wants
+
+    def test_variants_reading_one_member_differently_get_a_member_each(self):
+        build, wants = self.disagreeing()
+        out = exportFamily(build, wants)
+        pool_h = open(os.path.join(out, 'pool.h')).read()
+        init_h = open(os.path.join(out, 'init.h')).read()
+        kernel_h = open(os.path.join(out, 'kernel.h')).read()
+        kernel_cpp = open(os.path.join(out, 'kernel.cpp')).read()
+
+        # the pool holds F twice, once per arrangement read
+        pooled = re.findall(r'Container<double const\*> (F_[0-9a-f]{8})\{\};', pool_h)
+        assert len(pooled) == 2
+        # F keeps the family's own arrangement, which variant 1 reads and which
+        # init::F::PoolMember names; the one variant 0 asked for is bound to a
+        # member of its own, named after its entry in the pool
+        bound = dict(re.findall(r'\b(F\w*) = pool\.(F_[0-9a-f]{8});', kernel_h))
+        assert set(bound.values()) == set(pooled)
+        own = re.search(r'struct F : tensor::F \{.*?PoolMember = &Pool::(F_[0-9a-f]{8});', init_h, re.S).group(1)
+        assert bound['F'] == own
+        other = next(member for member in bound if member != 'F')
+        assert other == bound[other]
+        assert re.search(r'Container<double const\*> {};'.format(other), kernel_h)
+        # both say who reads them
+        assert '//! F as variant 1 reads it; the others read the members further down.' in kernel_h
+        assert '//! F as variant 0 reads it; bound by bindGlobals only.' in kernel_h
+        # and variant 0 reads its member under the name its code uses
+        execute0 = kernel_cpp.split('fam::execute0()')[1].split('fam::execute1()')[0]
+        execute1 = kernel_cpp.split('fam::execute1()')[1]
+        assert '[[maybe_unused]] auto const& F = this->{};'.format(other) in execute0
+        assert 'this->' not in execute1
+
+    def test_variants_that_agree_still_share_one_member(self):
+        build, _ = self.disagreeing()
+        out = exportFamily(build, lambda name, described: name == 'F(0)')
+        kernel_h = open(os.path.join(out, 'kernel.h')).read()
+        assert re.findall(r'\b(F\w*) = pool\.F_[0-9a-f]{8};', kernel_h) == ['F']
+        assert 'auto const&' not in open(os.path.join(out, 'kernel.cpp')).read()
+
+    @pytest.mark.skipif(shutil.which('c++') is None, reason='needs a C++ compiler')
+    def test_each_variant_reads_the_arrangement_it_was_generated_against(self, tmp_path):
+        build, wants = self.disagreeing()
+        (tmp_path / 'gen').mkdir()
+        out = exportFamily(build, wants, exporter=ProbingOfferer, out=tmp_path / 'gen')
+        runProbed(tmp_path, out,
+                  '  auto pool = yateto::Pool::host();\n'
+                  '  double* out[1] = {nullptr};\n'
+                  '  yateto::kernel::fam krnl;\n'
+                  '  krnl.bindGlobals(pool);\n'
+                  '  krnl.out = out;\n'
+                  '  krnl.numElements = 1;\n'
+                  '  double const* read[2] = {nullptr, nullptr};\n'
+                  '  for (unsigned i = 0; i < 2; ++i) {\n'
+                  '    krnl.streamPtr = &krnl;\n'
+                  '    krnl.execute(i);\n'
+                  '    read[i] = static_cast<double const*>(seen.at("F(0)"));\n'
+                  '  }\n'
+                  '  auto const* own = (pool.*yateto::init::F::PoolMember)(0);\n'
+                  '  auto const size = yateto::tensor::F::size(0);\n'
+                  '  // variant 1 reads F(0) as it lays itself out ...\n'
+                  '  if (read[1] != own) return 1;\n'
+                  '  if (!std::equal(own, own + size, yateto::init::F::Values0)) return 2;\n'
+                  '  // ... and variant 0 the same numbers in the order it asked for\n'
+                  '  if (read[0] == nullptr || read[0] == own) return 3;\n'
+                  '  if (std::equal(read[0], read[0] + size, own)) return 4;\n'
+                  '  if (std::accumulate(read[0], read[0] + size, 0.0)\n'
+                  '      != std::accumulate(own, own + size, 0.0)) return 5;\n'
+                  '  // F, filled by hand, reaches the variant that reads F as it lays\n'
+                  '  // itself out, and not the one that reads its own arrangement\n'
+                  '  double const byHand[16] = {};\n'
+                  '  krnl.F(0) = byHand;\n'
+                  '  for (unsigned i = 0; i < 2; ++i) {\n'
+                  '    krnl.streamPtr = &krnl;\n'
+                  '    krnl.execute(i);\n'
+                  '    read[i] = static_cast<double const*>(seen.at("F(0)"));\n'
+                  '  }\n'
+                  '  if (read[1] != byHand) return 6;\n'
+                  '  if (read[0] == byHand || read[0] == own) return 7;\n')
+
+    @pytest.mark.skipif(shutil.which('c++') is None, reason='needs a C++ compiler')
+    def test_a_member_without_values_reaches_a_variant_of_its_own_arrangement(self, tmp_path):
+        # F(0) has no values, so the pool holds nothing for it: the caller
+        # fills it in, in F, and the variant that reads F(1) in an
+        # arrangement of its own still has to see what the caller put there.
+        F = [Tensor('F(0)', (N, N))] + self.constants('F', 2)[1:]
+        G = self.constants('G', 2)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily(
+            'fam', simpleParameterSpace(2),
+            lambda i: out['ij'] <= F[1]['ik'] * G[i]['kj'] + F[0]['ik'] * B['kj'], target='gpu')
+        wants = lambda name, described: name == 'F(1)' and 'G(0)' in described
+        (tmp_path / 'gen').mkdir()
+        out = exportFamily(build, wants, exporter=ProbingOfferer, out=tmp_path / 'gen')
+        execute0 = open(os.path.join(out, 'kernel.cpp')).read().split('fam::execute0()')[1]
+        assert re.search(r'\[\[maybe_unused\]\] auto F = this->F;\n\s*F\(1\) = this->F_[0-9a-f]{8}\(1\);',
+                         execute0)
+        runProbed(tmp_path, out,
+                  '  auto pool = yateto::Pool::host();\n'
+                  '  double* out[1] = {nullptr};\n'
+                  '  double const* b[1] = {nullptr};\n'
+                  '  double const byHand[16] = {};\n'
+                  '  yateto::kernel::fam krnl;\n'
+                  '  krnl.bindGlobals(pool);\n'
+                  '  krnl.F(0) = byHand;\n'
+                  '  krnl.B = b;\n'
+                  '  krnl.out = out;\n'
+                  '  krnl.numElements = 1;\n'
+                  '  auto const* own = (pool.*yateto::init::F::PoolMember)(1);\n'
+                  '  for (unsigned i = 0; i < 2; ++i) {\n'
+                  '    krnl.streamPtr = &krnl;\n'
+                  '    krnl.execute(i);\n'
+                  '    if (seen.at("F(0)") != byHand) return 1 + i;\n'
+                  '    if ((seen.at("F(1)") == own) != (i == 1)) return 3 + i;\n'
+                  '    if (seen.at("F(1)") == nullptr) return 5 + i;\n'
+                  '  }\n')
+
+    def test_an_arrangement_a_variant_asked_for_is_not_dropped_for_a_writer(self):
+        # Variant 1 writes F(0), so the kernel does not bind F; variant 0
+        # asked for F(0) rearranged, which nothing but the pool could hand it.
+        F = self.constants('F', 1)
+        G = self.constants('G', 1)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily(
+            'fam', simpleParameterSpace(2),
+            lambda i: out['ij'] <= F[0]['ik'] * G[0]['kj'] if i == 0 else F[0]['ij'] <= B['ij'],
+            target='gpu')
+        with pytest.raises(ValueError, match=r'Variant 0 of fam reads F in an arrangement'):
             exportFamily(build, lambda name, described: name == 'F(0)' and 'G(0)' in described)
 
     def test_an_offering_names_a_namespaced_tensor_as_it_was_described(self):

@@ -211,7 +211,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                  target,
                  attrs,
                  inMemory=None,
-                 reads=None):
+                 reads=None,
+                 offered=None):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
@@ -240,6 +241,9 @@ class OptimizedKernelGenerator(KernelGenerator):
       #: about the others is the family's own layout, not a claim of this
       #: kernel's, which is what lets its variants be put together.
       self.reads = reads if reads is not None else {}
+      #: Per family, the members this kernel reads in an arrangement its
+      #: generator asked for, which only the pool holds.
+      self.offered = offered if offered is not None else {}
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -362,6 +366,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     # The description names a tensor as the kernel does, without its
     # namespace, and an offering answers in those names.
     described = collections.defaultdict(set)
+    offeredMembers = collections.defaultdict(set)
     for bn in members:
       described[Tensor.splitBasename(bn)[1]].add(bn)
     for offeredName, offered in factory.layoutOfferings().items():
@@ -390,6 +395,7 @@ class OptimizedKernelGenerator(KernelGenerator):
                          'read.'.format(type(factory).__name__, offeredName))
       layouts[baseName] = layouts[baseName].withMember(
         group, self._grantOffering(offeredName, layout, offered))
+      offeredMembers[baseName].add(group)
 
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
@@ -408,7 +414,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                               target,
                               attrs,
                               inMemory,
-                              {baseName: frozenset(byGroup) for baseName, byGroup in members.items()})
+                              {baseName: frozenset(byGroup) for baseName, byGroup in members.items()},
+                              {baseName: frozenset(groups) for baseName, groups in offeredMembers.items()})
 
   def arrangements(self):
     """Per tensor, the arrangements the kernels actually read it in."""
@@ -469,8 +476,12 @@ class OptimizedKernelGenerator(KernelGenerator):
     scalars = collections.OrderedDict()
     is_compute_constant_tensors = dict()
     datatype = dict()
-    layouts = dict()
-    readers = dict()
+    #: Per family, the arrangements the variants read it in, each with the
+    #: members read that way and the variant that read each first. One, as a
+    #: rule; the first is bound to the member named after the family.
+    bindings = dict()
+    #: Per variant, which of those arrangements it reads each family in.
+    positions = collections.defaultdict(dict)
     for index, ko in enumerate(kernelOutlines):
       if ko:
         self._addFromKO(ko.scalars, scalars)
@@ -479,38 +490,101 @@ class OptimizedKernelGenerator(KernelGenerator):
         self._addFromKO(ko.prefetch, prefetch)
         self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
         self._addFromKO(ko.datatype, datatype)
-        # The variants of one kernel share its members, so the arrangement a
-        # constant is bound in has to serve all of them. Each variant speaks
-        # only for the members it reads -- one reading plusFluxMatrices(0)
-        # rearranged and another plusFluxMatrices(1) is one arrangement with
-        # both rearranged -- and two that read one member differently leave
-        # no member to bind.
+        # The variants of one kernel share its members, so a constant is bound
+        # in one arrangement for all of them wherever that is possible. Each
+        # variant speaks only for the members it reads -- one reading
+        # plusFluxMatrices(0) rearranged and another plusFluxMatrices(1) is one
+        # arrangement with both rearranged. Two that read one member
+        # differently cannot share it, and the one that disagrees with every
+        # arrangement so far gets one of its own, bound to a member of its own.
         for baseName, arrangement in ko.layouts.items():
           constant = is_compute_constant_tensors.get(baseName) and not writable.get(baseName)
-          if baseName not in layouts or not constant:
-            layouts[baseName] = arrangement
-            readers[baseName] = {group: index for group in ko.reads.get(baseName, ())}
+          reads = ko.reads.get(baseName, ())
+          if baseName not in bindings or not constant:
+            bindings[baseName] = [(arrangement, {group: index for group in reads})]
+            for which in positions.values():
+              which.pop(baseName, None)
+            positions[index][baseName] = 0
             continue
-          merged = layouts[baseName]
-          for group in ko.reads.get(baseName, ()):
-            layout = arrangement.layoutOf(group)
-            if group in readers[baseName]:
-              if layoutTag(merged.layoutOf(group)) != layoutTag(layout):
-                member = baseName + ('({})'.format(','.join(map(str, group))) if group else '')
-                raise ValueError(
-                  'Variants {} and {} of {} read {} laid out differently, and '
-                  'they share one member to bind it to.'.format(
-                    readers[baseName][group], index, name, member))
-              continue
-            merged = merged.withMember(group, layout)
-            readers[baseName][group] = index
-          layouts[baseName] = merged
+          held = bindings[baseName]
+          for position, (merged, readers) in enumerate(held):
+            if all(group not in readers
+                   or layoutTag(merged.layoutOf(group)) == layoutTag(arrangement.layoutOf(group))
+                   for group in reads):
+              break
+          else:
+            position = len(held)
+            held.append((arrangement, {group: index for group in reads}))
+          merged, readers = held[position]
+          for group in reads:
+            if group not in readers:
+              merged = merged.withMember(group, arrangement.layoutOf(group))
+              readers[group] = index
+          held[position] = (merged, readers)
+          positions[index][baseName] = position
 
-    # Recorded once the variants agree, so that the pool holds what the kernel
-    # reads and not what one variant of it was going to read on the way there.
-    for baseName, arrangement in layouts.items():
-      self._arrangements.setdefault(baseName, collections.OrderedDict())[
-        arrangement.tag()] = arrangement
+    #: Whether bindGlobals binds the family, for the kernel as a whole.
+    isBound = lambda baseName: is_compute_constant_tensors.get(baseName) and not writable.get(baseName)
+
+    # Only bindGlobals can hand a variant an arrangement its generator asked
+    # for, and it binds constants only. A family another variant writes, or
+    # one that is not a constant for the kernel as a whole, is filled by the
+    # caller as it lays itself out -- which is not what that variant reads.
+    for index, ko in enumerate(kernelOutlines):
+      if ko:
+        for baseName, groups in ko.offered.items():
+          if groups and not isBound(baseName):
+            raise ValueError(
+              'Variant {} of {} reads {} in an arrangement its generator asked for, '
+              'but the kernel does not bind {} from the pool: another variant writes '
+              'it, or it is not a constant for all of them.'.format(
+                index, name, baseName, Tensor.splitBasename(baseName)[1]))
+
+    # The member named after the family keeps the family's own arrangement
+    # wherever some variant reads it that way, so that it means what
+    # init::X::Values means to whoever fills it by hand; the arrangements a
+    # generator asked for are the ones that get members of their own.
+    for baseName, held in bindings.items():
+      if len(held) < 2 or baseName not in self._families:
+        continue
+      own = Arrangement.of(self._families[baseName]).tag()
+      first = next((position for position, (arrangement, _) in enumerate(held)
+                    if arrangement.tag() == own), 0)
+      if first:
+        order = [first] + [position for position in range(len(held)) if position != first]
+        bindings[baseName] = [held[position] for position in order]
+        for which in positions.values():
+          if baseName in which:
+            which[baseName] = order.index(which[baseName])
+
+    #: Per variant, the families it reads in an arrangement other than the
+    #: first, and which one.
+    alternates = collections.defaultdict(collections.OrderedDict)
+    for index, which in positions.items():
+      for baseName, position in which.items():
+        if position > 0 and isBound(baseName):
+          alternates[index][baseName] = position
+
+    # Recorded once the variants are put together, so that the pool holds what
+    # the kernel reads and not what one variant of it was going to read on the
+    # way there.
+    for baseName, held in bindings.items():
+      for arrangement, _ in held:
+        self._arrangements.setdefault(baseName, collections.OrderedDict())[
+          arrangement.tag()] = arrangement
+
+    # The member a further arrangement is bound to. Named after the pool entry
+    # it points at, so that the two can be found from one another.
+    def alternateName(baseName, position):
+      _, memberName = Tensor.splitBasename(baseName)
+      return '{}_{}'.format(memberName, bindings[baseName][position][0].tag())
+    taken = {Tensor.splitBasename(baseName)[1] for baseName in list(tensors) + list(scalars)}
+    for baseName, held in bindings.items():
+      for position in range(1, len(held)):
+        if alternateName(baseName, position) in taken:
+          raise ValueError('{} needs a member {} for the variants that read it laid out '
+                           'differently, and a tensor of that name is already one.'.format(
+                             name, alternateName(baseName, position)))
 
     target = kernelOutlines[-1].target
     is_same_target = True
@@ -591,8 +665,10 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         header.emptyline()
 
-        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, datatype, target):
+        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, datatype, target,
+                       member=None):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+          member = member if member is not None else base_name
           typ = datatype.ctype()
           ptr_type = '**' if not is_constant and target == 'gpu' else '*'
           if not writable:
@@ -600,9 +676,9 @@ class OptimizedKernelGenerator(KernelGenerator):
           if len(next(iter(groups))) > 0:
             class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
             container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
-            header(f'{class_name}::{container_type} {base_name};')
+            header(f'{class_name}::{container_type} {member};')
           else:
-            header(f'{typ}{ptr_type} {base_name}{"{"}nullptr{"}"};')
+            header(f'{typ}{ptr_type} {member}{"{"}nullptr{"}"};')
 
         def scalarArgs(base_name_with_namespace, datatype, groups):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
@@ -618,7 +694,22 @@ class OptimizedKernelGenerator(KernelGenerator):
           scalarArgs(baseName,
                      datatype[baseName],
                      groups)
+        # Which variants read a constant in which of its arrangements, where
+        # they do not all read it in one.
+        def readersOf(baseName, position):
+          return [index for index, ko in enumerate(kernelOutlines)
+                  if ko and baseName in ko.layouts
+                  and alternates.get(index, {}).get(baseName, 0) == position]
+
+        def variantList(indices):
+          return 'variant{} {}'.format('s' if len(indices) > 1 else '', ', '.join(map(str, indices)))
+
         for baseName, groups in tensors.items():
+          if isBound(baseName) and len(bindings[baseName]) > 1:
+            header('//! {} as {} read{} it; the others read the members further down.'.format(
+              Tensor.splitBasename(baseName)[1],
+              variantList(readersOf(baseName, 0)),
+              '' if len(readersOf(baseName, 0)) > 1 else 's'))
           kernelArgs(baseName,
                      groups,
                      writable[baseName],
@@ -632,6 +723,28 @@ class OptimizedKernelGenerator(KernelGenerator):
         # is a pointer to mutable memory and the pool hands out const.
         constants = [baseName for baseName in tensors
                      if is_compute_constant_tensors[baseName] and not writable[baseName]]
+
+        # A constant that variants read laid out differently, once more for
+        # each further arrangement. Only bindGlobals fills these: a variant
+        # reading one of them reads it in place of the member named after the
+        # family, so assigning that member by hand does not reach it.
+        for baseName in constants:
+          for position in range(1, len(bindings[baseName])):
+            readBy = readersOf(baseName, position)
+            header('//! {} as {} read{} it; bound by {} only.'.format(
+              Tensor.splitBasename(baseName)[1],
+              variantList(readBy),
+              '' if len(readBy) > 1 else 's',
+              self.BIND_GLOBALS_NAME))
+            kernelArgs(baseName,
+                       tensors[baseName],
+                       writable[baseName],
+                       is_compute_constant_tensors[baseName],
+                       datatype[baseName],
+                       target,
+                       member=alternateName(baseName, position))
+        if any(len(bindings[baseName]) > 1 for baseName in constants):
+          header.emptyline()
         # Emitted even when there is nothing to bind, so that "bind the globals
         # of every kernel" is a rule a caller can follow without knowing which
         # operands a kernel happens to have. The failure modes are not
@@ -646,9 +759,10 @@ class OptimizedKernelGenerator(KernelGenerator):
             header('static_cast<void>({});'.format(self.BIND_GLOBALS_ARGUMENT))
           for baseName in constants:
             _, memberName = Tensor.splitBasename(baseName)
-            header('{} = {}.{};'.format(memberName,
-                                        self.BIND_GLOBALS_ARGUMENT,
-                                        PoolGenerator.memberName(baseName, layouts[baseName])))
+            for position, (arrangement, _) in enumerate(bindings[baseName]):
+              header('{} = {}.{};'.format(alternateName(baseName, position) if position else memberName,
+                                          self.BIND_GLOBALS_ARGUMENT,
+                                          PoolGenerator.memberName(baseName, arrangement)))
         header.emptyline()
 
         # containers with extra offsets for GPU-like computations
@@ -732,6 +846,35 @@ class OptimizedKernelGenerator(KernelGenerator):
         continue
 
       with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
+        # This variant reads these constants laid out differently than the
+        # member named after them holds them, so it reads them from the member
+        # bound to its own arrangement -- under the name its code already
+        # uses, which is why the declaration shadows the member on purpose.
+        aliases = [(baseName, position) for baseName, position in alternates.get(index, {}).items()
+                   if baseName in constants]
+        if aliases:
+          cpp('#if defined(__GNUC__)')
+          cpp('#pragma GCC diagnostic push')
+          cpp('#pragma GCC diagnostic ignored "-Wshadow"')
+          cpp('#endif')
+          for baseName, position in aliases:
+            memberName = Tensor.splitBasename(baseName)[1]
+            alternate = alternateName(baseName, position)
+            family = self._families.get(baseName, {})
+            withValues = [group for group, tensor in family.items() if tensor.values() is not None]
+            if len(withValues) < len(family):
+              # The pool holds nothing for a member without values, so the
+              # caller fills that one in, and in the member named after the
+              # family: this variant takes it from there and the rest from
+              # its own arrangement.
+              cpp('[[maybe_unused]] auto {0} = this->{0};'.format(memberName))
+              for group in withValues:
+                cpp('{0}({1}) = this->{2}({1});'.format(memberName, ','.join(map(str, group)), alternate))
+            else:
+              cpp('[[maybe_unused]] auto const& {} = this->{};'.format(memberName, alternate))
+          cpp('#if defined(__GNUC__)')
+          cpp('#pragma GCC diagnostic pop')
+          cpp('#endif')
         for base_name_with_namespace, groups in kernelOutline.scalars.items():
           base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
           if len(next(iter(groups))) > 0:

@@ -933,7 +933,6 @@ class UnitTestGenerator(KernelGenerator):
 
     scalars = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
-    bindPool = any(not var.tensor.isPassedAsArgument() for var in variables)
     # A by-value operand is a scalar wherever it turns up, as it is in the
     # kernel's signature: the kernel takes its value, and there is no buffer,
     # no init view and no device copy of it. The reference reads it through a
@@ -945,6 +944,14 @@ class UnitTestGenerator(KernelGenerator):
       scalars.setdefault(var.tensor.name(), var.tensor)
     scalars = sorted(scalars.values(), key=str)
     conditions = self._conditionVariables(cfg)
+    # A constant the kernel binds is read in the arrangement it was generated
+    # against, which need not be the tensor's own, and only the pool holds it
+    # that way. A condition is not one of them even where it carries values:
+    # the test runs every case of it, and the kernel has to see each.
+    guards = {str(var) for var in conditions}
+    pooled = lambda var: (var.tensor.is_compute_constant() and not var.writable
+                          and str(var) not in guards)
+    bindPool = any(not var.tensor.isPassedAsArgument() or pooled(var) for var in variables)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
       # A guarded kernel is several kernels: which statements run depends on
@@ -1016,26 +1023,36 @@ class UnitTestGenerator(KernelGenerator):
          cpp.emptyline()
 
        cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
-       if bindPool:
-         # A generator that cannot write an immediate operand into its code
-         # reads it from the pool instead, and which ones do is decided when
-         # the kernel is generated -- after this test was. Binding the pool
-         # first covers them whichever they are; the members assigned below
-         # then point the rest at the test's own buffers, as they always do.
-         pool = (f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.CREATE_FUN_NAME}({self.DEV_POOL_MEM})'
-                 if device_test else
-                 f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.HOST_FUN_NAME}()')
-         cpp(f'{self.KERNEL_VAR}.{OptimizedKernelGenerator.BIND_GLOBALS_NAME}({pool});')
        for var in scalars:
          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
-       for var in variables:
+       # Constants first, then the pool, then everything else. Which
+       # arrangement of a constant the kernel reads, and whether a generator
+       # that cannot write an immediate operand into its code reads it from
+       # memory after all, are decided when the kernel is generated -- after
+       # this test was. The test's buffer holds a constant as the tensor lays
+       # itself out and the pool as the kernel reads it, so the pool has the
+       # last word on the constants it binds; the buffer stays for those it
+       # does not. bindGlobals hands out a family whole, and the pool holds
+       # nothing for a member without values, so those members come after it.
+       def assign(var):
          if not var.tensor.isPassedAsArgument():
            # The kernel has no member for it. The buffer above stays: the
            # reference implementation reads the tensor from memory, the
            # kernel spells it out, and the comparison between the two is
            # exactly what this test is for.
-           continue
+           return
          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
+       for var in variables:
+         if pooled(var):
+           assign(var)
+       if bindPool:
+         pool = (f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.CREATE_FUN_NAME}({self.DEV_POOL_MEM})'
+                 if device_test else
+                 f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.HOST_FUN_NAME}()')
+         cpp(f'{self.KERNEL_VAR}.{OptimizedKernelGenerator.BIND_GLOBALS_NAME}({pool});')
+       for var in variables:
+         if not pooled(var):
+           assign(var)
 
        if device_test:
          cpp( f'{self.KERNEL_VAR}.numElements = 1;' )

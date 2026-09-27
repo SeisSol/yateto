@@ -1,5 +1,6 @@
 from .ast.indices import BoundingBox, Range, Indices
 import copy
+import hashlib
 import itertools
 import warnings
 import numpy as np
@@ -80,11 +81,18 @@ class PreparedImage(object):
   def identity(self):
     """What makes this one arrangement rather than another.
 
-    Over the shape of the preparation and not over the numbers: two members
-    of a family hold different numbers and are still arranged alike, which is
-    what lets them share a pool member and stay interchangeable.
+    Over the shape of the preparation and over the numbers. The shape alone
+    would name two preparations of one member alike that a generator filled
+    differently -- two kernels, or two variants of one, asking for different
+    numbers -- and the pool would then store one of them for both. The numbers
+    are those of every member this carries, so the members of a family that
+    were prepared together still name the same arrangement.
     """
-    return ('prepared', self._length, self._parts, self._planar)
+    digest = hashlib.new('md5', usedforsecurity=False)
+    for name in sorted(self._images, key=str):
+      digest.update(str(name).encode())
+      digest.update(repr(list(self._images[name])).encode())
+    return ('prepared', self._length, self._parts, self._planar, digest.hexdigest())
 
 
 class MemoryLayout(ABC):

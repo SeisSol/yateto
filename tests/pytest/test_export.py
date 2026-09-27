@@ -1001,6 +1001,24 @@ class TestOfferingsAcrossVariants:
         with pytest.raises(ValueError, match=r'Variant 0 of fam reads F in an arrangement'):
             exportFamily(build, lambda name, described: name == 'F(0)' and 'G(0)' in described)
 
+    def test_variants_preparing_different_numbers_get_a_member_each(self):
+        F = self.constants('F', 1)
+        G = self.constants('G', 2)
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily('fam', simpleParameterSpace(2),
+                                      lambda i: out['ij'] <= F[0]['ik'] * G[i]['kj'], target='gpu')
+
+        class Preparing(ReadOfferer):
+            # one preparation of F(0) per variant, alike in shape only
+            def layout_offerings(self):
+                described = [t['name'] for t in self.tensors]
+                first = 1.0 if 'G(0)' in described else 2.0
+                return {'F(0)': {'data': [first] * (2 * N * N), 'parts': 2}}
+
+        out = exportFamily(build, lambda name, described: True, exporter=Preparing)
+        pool_h = open(os.path.join(out, 'pool.h')).read()
+        assert len(re.findall(r'Container<double const\*> F_[0-9a-f]{8}\{\};', pool_h)) == 2
+
     def test_an_offering_names_a_namespaced_tensor_as_it_was_described(self):
         import numpy as np
 

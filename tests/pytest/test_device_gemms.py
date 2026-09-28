@@ -244,3 +244,39 @@ class TestChains:
     chains = self.chains(device, [C['ij'] <= A['ik'] * B['kj'],
                                   D['ij'].subslice('j', 0, 4) <= C['ik'] * A['kj'].subslice('j', 0, 4)])
     assert all(len(chain) == 1 for chain in chains) and len(chains) == 1
+
+
+class TestUnitTestMemory:
+  """A device kernel's unit test hands it the temporary memory it asks for.
+
+  It handed every kernel a kibibyte. A kernel whose intermediates are in
+  global memory -- one generated for gemmforge, say -- outgrows that: the
+  free-surface-gravity kernel of SeisSol needs four times as much, wrote past
+  the block, and its unit test failed on the device while the kernel was
+  right.
+  """
+
+  def test_the_block_is_what_the_kernel_requires(self, tmp_path):
+    from yateto import Generator
+    from yateto.codegen.factory import ExportGenerator
+
+    class Exporter(ExportGenerator):
+      def add_kernel(self, description):
+        pass
+
+      def generate(self, cpp, cache):
+        cpp('// external kernel')
+
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+    try:
+      A, B, C = (Tensor(name, (4, 4)) for name in 'ABC')
+      generator = Generator(arch)
+      generator.add('k', C['ij'] <= A['ik'] * B['kj'], target='gpu')
+      generator.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]),
+                         routine_exporters={'gpu': lambda a, attrs=None: Exporter(a, attrs)})
+    finally:
+      MemoryLayout.DEFAULT_ALIGNMENT_ARCH = None
+    test = (tmp_path / 'test-kernel.cpp').read_text()
+    assert 'kernel::k::TmpMaxMemRequiredInBytes' in test
+    assert 'cudaMalloc(&_tmpMem, _tmpMemSize);' in test
+    assert 'krnl.linearAllocator.initialize(_tmpMem, _tmpMemSize);' in test

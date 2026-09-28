@@ -72,12 +72,12 @@ class CopyScaleAddGenerator(object):
       aux = BatchedOperationsAux()
       matrix_a = gf.YatetoInterface.produce_dense_matrix((m, n),
                                                          d.term.memoryLayout.bbox(),
-                                                         addressing=aux.deduce_addresing(d.term),
+                                                         addressing=aux.forge_addressing(d.term),
                                                          transpose=False)
 
       matrix_b = gf.YatetoInterface.produce_dense_matrix((m, n),
                                                          d.result.memoryLayout.bbox(),
-                                                         addressing=aux.deduce_addresing(d.result),
+                                                         addressing=aux.forge_addressing(d.result),
                                                          transpose=False)
 
       try:

@@ -308,7 +308,7 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
 
   def create_FusedGEMMs(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    description = fused_gemms.Description(node, result, arguments, condition, add, scalar)
+    description = fused_gemms.Description(node, result, arguments, add, scalar)
     generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target,
                                       self._attrs)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))

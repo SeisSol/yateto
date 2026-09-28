@@ -130,17 +130,17 @@ class GemmGen(object):
 
         matrix_a = gf.YatetoInterface.produce_dense_matrix((m, k),
                                                            d.leftTerm.memoryLayout.bbox(),
-                                                           addressing=aux.deduce_addresing(d.leftTerm),
+                                                           addressing=aux.forge_addressing(d.leftTerm),
                                                            transpose=d.transA)
 
         matrix_b = gf.YatetoInterface.produce_dense_matrix((k, n),
                                                            d.rightTerm.memoryLayout.bbox(),
-                                                           addressing=aux.deduce_addresing(d.rightTerm),
+                                                           addressing=aux.forge_addressing(d.rightTerm),
                                                            transpose=d.transB)
 
         matrix_c = gf.YatetoInterface.produce_dense_matrix((m, n),
                                                            d.result.memoryLayout.bbox(),
-                                                           addressing=aux.deduce_addresing(d.result),
+                                                           addressing=aux.forge_addressing(d.result),
                                                            transpose=False)
 
         try:
@@ -593,7 +593,7 @@ def tinytcGemmGen(arch, gd):
       return GroupType(MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld)), DYNAMIC)
     elif op.addr == AddressingMode.STRIDED:
       return MemrefType(scalar_ty, (op.rows, op.cols, DYNAMIC), (1, op.ld, op.dist))
-    elif op.addr == AddressingMode.NONE:
+    elif op.addr == AddressingMode.DIRECT:
       return MemrefType(scalar_ty, (op.rows, op.cols), (1, op.ld))
     else:
       raise NameError(op.addr)
@@ -604,7 +604,7 @@ def tinytcGemmGen(arch, gd):
       return LoadInst(batch, [gid])
     elif op.addr == AddressingMode.STRIDED:
       return SubviewInst(batch, [zero,zero,gid], [dyn,dyn,None])
-    elif op.addr == AddressingMode.NONE:
+    elif op.addr == AddressingMode.DIRECT:
       return SubviewInst(batch, [zero,zero], [dyn,dyn])
     else:
       raise NameError(op.addr)

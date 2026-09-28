@@ -351,6 +351,21 @@ class BatchedOperationsAux:
     else:
       return AddressingMode.INDIRECT
 
+  #: How gemmforge and chainforge spell the addressing modes they read.
+  FORGE_ADDRESSING = {
+    AddressingMode.DIRECT: 'none',
+    AddressingMode.STRIDED: 'strided',
+    AddressingMode.INDIRECT: 'pointer_based',
+  }
+
+  @classmethod
+  def forge_addressing(cls, term):
+    """The addressing of `term`, as gemmforge and chainforge name it."""
+    mode = cls.deduce_addresing(term)
+    if mode not in cls.FORGE_ADDRESSING:
+      raise ValueError(f'gemmforge and chainforge cannot read an operand addressed as {mode}.')
+    return cls.FORGE_ADDRESSING[mode]
+
   @classmethod
   def deduce_ptr_arg(cls, term, as_const=False):
     if as_const:

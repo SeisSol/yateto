@@ -103,3 +103,28 @@ class TestContractionOrder:
     plain = prepare(device, D['ij'] <= a['ik'] * b['kl'] * c['lj'], productsAsGemms=False)
     gemms = prepare(device, D['ij'] <= a['ik'] * b['kl'] * c['lj'])
     assert [str(ast) for ast in plain.ast] == [str(ast) for ast in gemms.ast]
+
+
+class TestForgeRegion:
+  """gemmforge reads a window into a tensor through the tensor's pointer."""
+
+  def test_a_window_is_shifted_to_where_it_lies(self):
+    view = DenseMemoryLayout((9, 9)).subslice(0, 3, 6)
+    bbox, region = BatchedOperationsAux.forge_region(view, (Range(0, 3), Range(0, 9)))
+    assert [(r.start, r.stop) for r in bbox] == [(0, 9), (0, 9)]
+    assert region == (Range(3, 6), Range(0, 9))
+
+  def test_so_is_a_transposed_one(self):
+    view = DenseMemoryLayout((9, 9)).subslice(0, 3, 6)
+    _, region = BatchedOperationsAux.forge_region(view, (Range(0, 9), Range(0, 3)), transpose=True)
+    assert region == (Range(0, 9), Range(3, 6))
+
+  def test_a_window_into_a_window_is_shifted_twice(self):
+    view = DenseMemoryLayout((9, 9)).subslice(1, 2, 8).subslice(1, 1, 3)
+    _, region = BatchedOperationsAux.forge_region(view, (Range(0, 9), Range(0, 2)))
+    assert region == (Range(0, 9), Range(3, 5))
+
+  def test_a_tensor_of_its_own_is_left_alone(self):
+    layout = DenseMemoryLayout((9, 9))
+    bbox, region = BatchedOperationsAux.forge_region(layout, (Range(1, 4), Range(2, 5)))
+    assert bbox is layout.bbox() and region == (Range(1, 4), Range(2, 5))

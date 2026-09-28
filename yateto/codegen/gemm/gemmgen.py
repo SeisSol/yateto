@@ -16,6 +16,18 @@ from ...type import Datatype
 import importlib.util
 gf_spec = importlib.util.find_spec('gemmforge')
 
+class _ForgeFactor(str):
+  """A scale factor gemmforge takes as an argument of the routine.
+
+  gemmforge takes a factor it is not given the value of by the name of that
+  argument, and it spells the name of the routine from the value -- which a
+  name has none of. Zero stands in for it there; the digest gemmforge adds to
+  the name still tells the routines apart.
+  """
+
+  def __int__(self):
+    return 0
+
 class GemmGen(object):
   def __init__(self, arch, descr, gemm_cfg, attrs=None):
     self._arch = arch
@@ -128,25 +140,23 @@ class GemmGen(object):
 
         aux = BatchedOperationsAux()
 
-        matrix_a = gf.YatetoInterface.produce_dense_matrix((m, k),
-                                                           d.leftTerm.memoryLayout.bbox(),
-                                                           addressing=aux.forge_addressing(d.leftTerm),
-                                                           transpose=d.transA)
+        def matrix(term, ranges, transpose):
+          bbox, region = aux.forge_region(term.memoryLayout, ranges, transpose)
+          return gf.YatetoInterface.produce_dense_matrix(region,
+                                                         bbox,
+                                                         addressing=aux.forge_addressing(term),
+                                                         transpose=transpose)
 
-        matrix_b = gf.YatetoInterface.produce_dense_matrix((k, n),
-                                                           d.rightTerm.memoryLayout.bbox(),
-                                                           addressing=aux.forge_addressing(d.rightTerm),
-                                                           transpose=d.transB)
-
-        matrix_c = gf.YatetoInterface.produce_dense_matrix((m, n),
-                                                           d.result.memoryLayout.bbox(),
-                                                           addressing=aux.forge_addressing(d.result),
-                                                           transpose=False)
+        matrix_a = matrix(d.leftTerm, (m, k), d.transA)
+        matrix_b = matrix(d.rightTerm, (k, n), d.transB)
+        matrix_c = matrix(d.result, (m, n), False)
 
         try:
           vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=ctype)
           forge_generator = gf.GemmGenerator(vm)
-          forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, d.alpha, d.beta)
+          # a factor known only at run time is an argument; the call hands it over
+          alpha = d.alpha if isinstance(d.alpha, float) else _ForgeFactor('alpha')
+          forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
           args = [aux.deduce_ptr_arg(d.leftTerm, as_const=True),

@@ -31,6 +31,13 @@ class MetaGenerator:
     generator gets a translation unit of its own that binds the views to its
     kernels -- their own values where they are in the layout the kernel was
     generated for, a copy otherwise -- and its constants from its pool.
+
+    A generator can keep a namespace and a directory of its own instead, so
+    that code which names its tensors and kernels directly, as a build with
+    one generator does, need not change to reach it through `runtime.h` as
+    well. Its code then cannot be named by key where it shares the namespace
+    of the typed headers; a metagen created with `typedHeaders=False` writes
+    none. `variant.h`, which has `runtime::variantOf`, is written either way.
     """
 
     #: Directory, and suffix of the namespace, a generator is generated into.
@@ -44,7 +51,11 @@ class MetaGenerator:
     ROUTINES_SOURCE = 'subroutine'
     DEVICE_ROUTINES_SOURCE = 'gpulike_subroutine'
     TEST_SOURCE = 'test-kernel'
-    #: What the metagen writes itself, next to the forwarding headers.
+    #: What the metagen writes itself: the headers that map a key to the
+    #: code of its generator, the one with the variant of a key, and those of
+    #: the generators reached by their variant.
+    TYPED_HEADERS = ('tensor', 'init', 'kernel')
+    VARIANT_NAME = 'variant'
     RUNTIME_NAME = 'runtime'
     RUNTIME_NAMESPACE = 'runtime'
     INIT_NAMESPACE = 'init'
@@ -62,16 +73,20 @@ class MetaGenerator:
     #: variant computes it in.
     SCALAR_TYPES = {'bool': 'bool', 'integer': 'std::int64_t', 'float': 'double'}
 
-    def __init__(self, templateType):
+    def __init__(self, templateType, typedHeaders=True):
+        """`typedHeaders` says whether to write the headers that map a key to
+        the tensors and kernels of its generator."""
         self.templateType = templateType
+        self.typedHeaders = typedHeaders
         self.generators = []
 
-    def add_generator(self, template, generator, *args, name=None, **kwargs):
+    def add_generator(self, template, generator, *args, name=None, namespace=None, directory=None, **kwargs):
         """Adds a generator under a template key.
 
         The remaining arguments are handed to `Generator.generate`. The name
         is the generator's own: it names the directory and the namespace its
-        code goes into, and is not passed on.
+        code goes into, and is not passed on. `namespace` and `directory`, the
+        latter relative to the output directory, put the code elsewhere.
         """
         if len(template) != len(self.templateType):
             raise ValueError('A template key needs {} arguments ({}), not {}.'.format(
@@ -81,16 +96,36 @@ class MetaGenerator:
             raise ValueError('A generator name has to be usable as part of an identifier: {}'.format(name))
         if any(gendata['name'] == name for gendata in self.generators):
             raise ValueError('There already is a generator named {}.'.format(name))
+        directory = self.DIRECTORY_PREFIX + name if directory is None else os.path.normpath(directory)
+        if os.path.isabs(directory) or directory == os.curdir or directory.split(os.sep)[0] == os.pardir:
+            # Its files are named like those the metagen writes into the output
+            # directory, and a build lists them relative to it.
+            raise ValueError('A generator is generated into a directory below the output directory, '
+                             'not into {}.'.format(directory))
+        if any(gendata['directory'] == directory for gendata in self.generators):
+            raise ValueError('There already is a generator in {}.'.format(directory))
         self.generators += [{
             'name': name,
             'template': template,
             'generator': generator,
+            'namespace': namespace,
+            'directory': directory,
             'args': args,
             'kwargs': kwargs
         }]
 
     def _directory(self, gendata, outputDir):
-        return os.path.join(outputDir, self.DIRECTORY_PREFIX + gendata['name'])
+        return os.path.join(outputDir, gendata['directory'])
+
+    def _namespace(self, gendata, namespace):
+        if gendata['namespace'] is not None:
+            return gendata['namespace']
+        return f'{namespace}::{self.NAMESPACE_PREFIX}{gendata["name"]}'
+
+    @staticmethod
+    def _includePath(path, start):
+        """`path` as an include relative to the directory `start`."""
+        return os.path.relpath(path, start or os.curdir).replace(os.sep, '/')
 
     def _paths(self, gendata, outputDir, names):
         directory = self._directory(gendata, outputDir)
@@ -135,6 +170,11 @@ class MetaGenerator:
         """The translation units that belong to no generator: those of `runtime.h`."""
         return [os.path.join(outputDir, '{}.cpp'.format(self.RUNTIME_NAME))]
 
+    def shared_headers(self, outputDir=''):
+        """The headers the metagen writes into the output directory."""
+        names = (self.TYPED_HEADERS if self.typedHeaders else ()) + (self.VARIANT_NAME, self.RUNTIME_NAME)
+        return [os.path.join(outputDir, '{}.h'.format(name)) for name in names]
+
     def generate_single(self, index, outputDir='', namespace='yateto'):
         """Generates one generator and reports what the metagen needs to know about it.
 
@@ -142,7 +182,7 @@ class MetaGenerator:
         in a process of its own can hand to `generate` as `precompiled`.
         """
         gendata = self.generators[index]
-        subnamespace = f'{namespace}::{self.NAMESPACE_PREFIX}{gendata["name"]}'
+        subnamespace = self._namespace(gendata, namespace)
         outdir = self._directory(gendata, outputDir)
         os.makedirs(outdir, exist_ok=True)
 
@@ -168,6 +208,15 @@ class MetaGenerator:
         return re.sub(r'\W', '_', f'METAGEN_{namespace}_{name}_H_'.upper())
 
     def generate(self, outputDir='', namespace='yateto', includes=[], declarationsTensors=[], declarationsKernels=[], precompiled=None):
+        spaces = [self._namespace(gendata, namespace) for gendata in self.generators]
+        for space in spaces:
+            if spaces.count(space) > 1:
+                raise ValueError('There is more than one generator in the namespace {}.'.format(space))
+            if self.typedHeaders and space == namespace:
+                raise ValueError('A generator in {0} defines the names the typed headers define for every '
+                                 'key there. Give it a namespace of its own, or create the metagen with '
+                                 '`typedHeaders=False`.'.format(space))
+
         tensors = {}
         kernels = {}
 
@@ -189,25 +238,31 @@ class MetaGenerator:
             for kernel in summary['kernels']:
                 kernels.setdefault(kernel, []).append((summary['namespace'], summary['template']))
 
-        def headerForward(name, data, extra=None):
+        def headerForward(name, data):
             with Cpp(os.path.join(outputDir, f'{name}.h')) as header:
                 with header.HeaderGuard(self._guard(namespace, name)):
-                    if extra is not None:
-                        header.includeSys('cstddef')
                     for path in includes:
                         header.include(path)
+                    if name == 'tensor':
+                        header.include(f'{self.VARIANT_NAME}.h')
                     for gendata in self.generators:
-                        outdirname = self.DIRECTORY_PREFIX + gendata['name']
-                        header.include(f'{outdirname}/{name}.h')
+                        header.include(self._includePath(
+                            os.path.join(self._directory(gendata, outputDir), f'{name}.h'), outputDir))
                     with header.Namespace(namespace):
                         for entry in data:
                             self.template(header, entry, data[entry], f'{name}')
-                        if extra is not None:
-                            extra(header)
 
-        headerForward('tensor', tensors, lambda header: self._variantOf(header, summaries))
-        headerForward('init', tensors)
-        headerForward('kernel', kernels)
+        if self.typedHeaders:
+            headerForward('tensor', tensors)
+            headerForward('init', tensors)
+            headerForward('kernel', kernels)
+        with Cpp(os.path.join(outputDir, f'{self.VARIANT_NAME}.h')) as header:
+            with header.HeaderGuard(self._guard(namespace, self.VARIANT_NAME)):
+                header.includeSys('cstddef')
+                for path in includes:
+                    header.include(path)
+                with header.Namespace(namespace):
+                    self._variantOf(header, summaries)
         self._runtime(outputDir, namespace, summaries)
 
     @staticmethod
@@ -340,7 +395,8 @@ class MetaGenerator:
                     # need not know which generators have such kernels.
                     cpp('// No kernel of {} takes views.'.format(gendata['name']))
                     continue
-                cpp.include(f'../{self.RUNTIME_NAME}.h')
+                cpp.include(self._includePath(os.path.join(outputDir, f'{self.RUNTIME_NAME}.h'),
+                                              self._directory(gendata, outputDir)))
                 cpp.include('init.h')
                 cpp.include('kernel.h')
                 cpp.include('pool.h')
@@ -495,21 +551,21 @@ class MetaGenerator:
             cpp.includeSys('initializer_list')
             cpp.includeSys('stdexcept')
             cpp.includeSys('string')
+            # What each generator defines, in whatever namespace it is in.
+            for variant, summary in enumerate(summaries):
+                with cpp.Namespace(summary['namespace']), cpp.Namespace(self.INIT_NAMESPACE):
+                    cpp.functionDeclaration('tensorTable', '', '::yateto::TensorTable const&')
+                for key, kernel in kernels.items():
+                    if variant not in kernel['variants']:
+                        continue
+                    runtime = '::{}::{}{}::{}::{}'.format(
+                        namespace, self.RUNTIME_NAMESPACE, f'::{kernel["namespace"]}' if kernel['namespace'] else '',
+                        self.KERNEL_NAMESPACE, kernel['name'])
+                    with cpp.Namespace(f'{summary["namespace"]}::{self.BINDING_NAMESPACE}'), \
+                            cpp.Namespace(kernel['namespace']), cpp.Namespace(self.KERNEL_NAMESPACE):
+                        cpp.functionDeclaration(kernel['name'], 'const {}& args{}'.format(
+                            runtime, ''.join(f', unsigned i{i}' for i in range(kernel['rank'] or 0))))
             with cpp.Namespace(namespace):
-                for variant, summary in enumerate(summaries):
-                    subspace = summary['namespace'][len(namespace) + 2:]
-                    with cpp.Namespace(subspace), cpp.Namespace(self.INIT_NAMESPACE):
-                        cpp.functionDeclaration('tensorTable', '', '::yateto::TensorTable const&')
-                    for key, kernel in kernels.items():
-                        if variant not in kernel['variants']:
-                            continue
-                        runtime = '::{}::{}{}::{}::{}'.format(
-                            namespace, self.RUNTIME_NAMESPACE, f'::{kernel["namespace"]}' if kernel['namespace'] else '',
-                            self.KERNEL_NAMESPACE, kernel['name'])
-                        with cpp.Namespace(f'{subspace}::{self.BINDING_NAMESPACE}'), \
-                                cpp.Namespace(kernel['namespace']), cpp.Namespace(self.KERNEL_NAMESPACE):
-                            cpp.functionDeclaration(kernel['name'], 'const {}& args{}'.format(
-                                runtime, ''.join(f', unsigned i{i}' for i in range(kernel['rank'] or 0))))
                 with cpp.Namespace(self.RUNTIME_NAMESPACE):
                     # Under a name no tensor can have, since a tensor may be
                     # named like any of these.

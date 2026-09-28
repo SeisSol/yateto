@@ -157,7 +157,9 @@ class TestSources:
     def test_nothing_includes_the_code_of_a_generator(self, tmp_path):
         m = metagen(tmp_path)
         assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == \
-            ['init.h', 'kernel.h', 'keys.h', 'runtime.cpp', 'runtime.h', 'tensor.h']
+            ['init.h', 'kernel.h', 'keys.h', 'runtime.cpp', 'runtime.h', 'tensor.h', 'variant.h']
+        assert m.shared_headers(str(tmp_path)) == \
+            [str(tmp_path / name) for name in ('tensor.h', 'init.h', 'kernel.h', 'variant.h', 'runtime.h')]
         for header in ('init.h', 'kernel.h', 'tensor.h'):
             assert '.cpp' not in (tmp_path / header).read_text()
         assert m.shared_sources(str(tmp_path)) == [str(tmp_path / 'runtime.cpp')]
@@ -178,7 +180,7 @@ class TestSources:
         reports = [json.loads(json.dumps(m.generate_single(i, str(apart), 'test')))
                    for i in range(len(m.generators))]
         m.generate(str(apart), namespace='test', includes=['keys.h'], precompiled=reports)
-        for name in ('init.h', 'kernel.h', 'tensor.h', 'runtime.h', 'runtime.cpp',
+        for name in ('init.h', 'kernel.h', 'tensor.h', 'variant.h', 'runtime.h', 'runtime.cpp',
                      'metagen_Wide/runtime.cpp', 'metagen_Narrow/runtime.cpp'):
             assert (at_once / name).read_text() == (apart / name).read_text(), name
 
@@ -194,9 +196,12 @@ class TestRuntimeHeader:
         assert 'constexpr std::size_t VariantCount = 2;' in runtime_h
         assert 'VariantNames[] = {"Wide", "Narrow"};' in runtime_h
         assert 'VariantKeys[] = {"test::Wide", "test::Narrow"};' in runtime_h
-        tensor_h = (out / 'tensor.h').read_text()
-        assert 'template<> struct VariantOf<test::Wide> { static constexpr std::size_t value = 0; };' in tensor_h
-        assert 'template<> struct VariantOf<test::Narrow> { static constexpr std::size_t value = 1; };' in tensor_h
+        variant_h = (out / 'variant.h').read_text()
+        assert 'template<> struct VariantOf<test::Wide> { static constexpr std::size_t value = 0; };' in variant_h
+        assert 'template<> struct VariantOf<test::Narrow> { static constexpr std::size_t value = 1; };' in variant_h
+        assert '#include "keys.h"' in variant_h
+        # Where code that holds a key reaches its generator, it reaches its variant as well.
+        assert '#include "variant.h"' in (out / 'tensor.h').read_text()
 
     def test_a_tensor_is_found_where_each_table_lists_it(self, out):
         runtime_cpp = (out / 'runtime.cpp').read_text()
@@ -248,6 +253,106 @@ class TestRuntimeHeader:
             m.add_generator([f'K{rank}'], g, gemm_cfg=GeneratorCollection([]))
         with pytest.raises(ValueError, match='1 indices in one generator and of 2'):
             m.generate(str(tmp_path), namespace='test')
+
+
+PLACED = """#include "equation/init.h"
+#include "equation/kernel.h"
+#include "equation/tensor.h"
+#include "runtime.h"
+#include "variant.h"
+#include <vector>
+
+int main() {
+  using namespace test;
+  constexpr std::size_t variant = runtime::variantOf<Only>();
+  static_assert(variant == 0, "");
+  std::vector<double> a(tensor::A::size()), c(tensor::C::size()), viewed(tensor::C::size());
+  for (unsigned i = 0; i < a.size(); ++i) {
+    a[i] = i;
+  }
+  // The kernel under its own name, as a build of one generator names it ...
+  kernel::add krnl;
+  krnl.bindGlobals(Pool::host());
+  krnl.A = a.data();
+  krnl.C = c.data();
+  krnl.execute();
+  // ... and the same kernel through runtime.h.
+  runtime::kernel::add views;
+  views.A = {runtime::init::A::descriptor(variant), a.data()};
+  views.C = {runtime::init::C::descriptor(variant), viewed.data()};
+  views.execute(variant);
+  return c == viewed ? 0 : 1;
+}
+"""
+
+
+class TestPlacement:
+    """A generator can keep the namespace and the directory it has always had."""
+
+    @staticmethod
+    def placed(tmp_path, typedHeaders=False, **placement):
+        (tmp_path / 'keys.h').write_text('#pragma once\nnamespace test { struct Only {}; }\n')
+        m = MetaGenerator(['typename'], typedHeaders=typedHeaders)
+        g = Generator(useArchitectureIdentifiedBy('dhsw'))
+        A = Tensor('A', (3, 3))
+        C = Tensor('C', (3, 3))
+        K = Tensor('K', (3, 3), np.arange(1.0, 10.0).reshape(3, 3))
+        g.add('add', C['ij'] <= A['ij'] + K['ij'], attrs={'operands': 'runtime'})
+        m.add_generator(['test::Only'], g, gemm_cfg=GeneratorCollection([]), **placement)
+        m.generate(str(tmp_path), namespace='test', includes=['keys.h'])
+        return m
+
+    def test_its_code_stays_where_it_was(self, tmp_path):
+        m = self.placed(tmp_path, namespace='test', directory='equation')
+        assert 'namespace test {\n  namespace kernel {' in (tmp_path / 'equation' / 'kernel.h').read_text()
+        assert [pathlib.Path(path).parent for path in m.sources(str(tmp_path))['0']] == [tmp_path / 'equation'] * 6
+        assert '#include "../runtime.h"' in (tmp_path / 'equation' / 'runtime.cpp').read_text()
+        assert 'void add(const ::test::runtime::kernel::add& args) {' in \
+            (tmp_path / 'equation' / 'runtime.cpp').read_text()
+
+    def test_without_typed_headers_only_those_of_the_variants_are_written(self, tmp_path):
+        m = self.placed(tmp_path, namespace='test', directory='equation')
+        assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == \
+            ['keys.h', 'runtime.cpp', 'runtime.h', 'variant.h']
+        assert m.shared_headers(str(tmp_path)) == [str(tmp_path / 'variant.h'), str(tmp_path / 'runtime.h')]
+
+    def test_a_directory_further_down_finds_the_runtime(self, tmp_path):
+        self.placed(tmp_path, directory='code/equation')
+        assert '#include "../../runtime.h"' in (tmp_path / 'code' / 'equation' / 'runtime.cpp').read_text()
+
+    @pytest.mark.parametrize('directory', ['../elsewhere', '/elsewhere', '.', ''])
+    def test_a_directory_is_one_below_the_output_directory(self, tmp_path, directory):
+        with pytest.raises(ValueError, match='below the output directory'):
+            MetaGenerator(['typename']).add_generator(['A'], Generator(useArchitectureIdentifiedBy('dhsw')),
+                                                      directory=directory)
+
+    def test_directories_and_namespaces_are_taken_once(self, tmp_path):
+        m = MetaGenerator(['typename'])
+        m.add_generator(['A'], Generator(useArchitectureIdentifiedBy('dhsw')), directory='code')
+        with pytest.raises(ValueError, match='already is a generator in code'):
+            m.add_generator(['B'], Generator(useArchitectureIdentifiedBy('dhsw')), directory='code')
+        m.add_generator(['B'], Generator(useArchitectureIdentifiedBy('dhsw')), namespace='test::yatetometagen_0')
+        with pytest.raises(ValueError, match='more than one generator in the namespace test::yatetometagen_0'):
+            m.generate(str(tmp_path), namespace='test')
+
+    def test_typed_headers_cannot_share_the_namespace_of_a_generator(self, tmp_path):
+        with pytest.raises(ValueError, match='typedHeaders=False'):
+            self.placed(tmp_path, typedHeaders=True, namespace='test', directory='equation')
+
+    @pytest.mark.skipif(shutil.which('c++') is None, reason='needs a C++ compiler')
+    def test_its_kernels_are_reached_both_ways(self, tmp_path):
+        out = tmp_path / 'gen'
+        out.mkdir()
+        m = self.placed(out, namespace='test', directory='equation')
+        (tmp_path / 'main.cpp').write_text(PLACED)
+        sources = [str(tmp_path / 'main.cpp')] + m.shared_sources(str(out)) + m.sources(str(out))['0']
+        built = subprocess.run(['c++', '-std=c++17', '-fopenmp-simd', '-Wall', '-Wextra', '-Werror',
+                                '-Wno-unused-parameter', f'-isystem{INCLUDE}', f'-I{out}', *sources,
+                                '-o', str(tmp_path / 'placed')],
+                               capture_output=True, text=True)
+        assert built.returncode == 0, built.stderr
+        ran = subprocess.run([str(tmp_path / 'placed')], capture_output=True, text=True)
+        assert ran.returncode == 0, (ran.returncode, ran.stderr)
 
 
 def body(code, name):

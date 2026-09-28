@@ -204,3 +204,43 @@ class TestForgeRegion:
     layout = DenseMemoryLayout((9, 9))
     bbox, region = BatchedOperationsAux.forge_region(layout, (Range(1, 4), Range(2, 5)))
     assert bbox is layout.bbox() and region == (Range(1, 4), Range(2, 5))
+
+
+class TestChains:
+  """Which GEMMs run as one chain of chainforge."""
+
+  N = 8
+
+  def chains(self, device, statements):
+    kernel = prepare(device, statements, fused=True)
+    return [[str(child) for child in pp.action.term.node.get_children()]
+            for pp in kernel.cfg
+            if pp.action and pp.action.isRHSExpression() and isinstance(pp.action.term.node, FusedGEMMs)]
+
+  def tensors(self, *names, temporary=()):
+    return [Tensor(name, (self.N, self.N), temporary=name in temporary) for name in names]
+
+  def test_gemms_that_feed_each_other_are_one_chain(self, device):
+    A, B, C, D = self.tensors('A', 'B', 'C', 'D')
+    chains = self.chains(device, D['ij'] <= A['ik'] * B['kl'] * C['lj'])
+    assert len(chains) == 1 and len(chains[0]) == 2
+
+  def test_a_temporary_read_after_the_chain_is_not_in_it(self, device):
+    # chainforge keeps it where nothing after the chain sees it
+    A, B, C, D, T = self.tensors('A', 'B', 'C', 'D', 'T', temporary=('T',))
+    chains = self.chains(device, [T['ij'] <= A['ik'] * B['kj'],
+                                  D['ij'] <= T['ij'] + C['ij']])
+    assert chains == []
+
+  def test_only_the_last_gemm_of_a_chain_is_scaled_at_run_time(self, device):
+    A, B, C, D, E = self.tensors('A', 'B', 'C', 'D', 'E')
+    s = Scalar('s')
+    chains = self.chains(device, [D['ij'] <= s * A['ik'] * B['kj'],
+                                  E['ij'] <= D['ik'] * C['kj']])
+    assert [len(chain) for chain in chains] == [1, 1]
+
+  def test_a_window_is_no_part_of_a_chain(self, device):
+    A, B, C, D = self.tensors('A', 'B', 'C', 'D')
+    chains = self.chains(device, [C['ij'] <= A['ik'] * B['kj'],
+                                  D['ij'].subslice('j', 0, 4) <= C['ik'] * A['kj'].subslice('j', 0, 4)])
+    assert all(len(chain) == 1 for chain in chains) and len(chains) == 1

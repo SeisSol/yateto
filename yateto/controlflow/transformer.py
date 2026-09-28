@@ -1,7 +1,7 @@
 from .graph import *
 from collections import deque
 from ..ast.node import LoopOverGEMM
-from .fused_gemm_automata import Context as FusedGemmsContext
+from .fused_gemm_automata import Context as FusedGemmsContext, readsAfter
 
 
 class MergeScalarMultiplications(object):
@@ -204,7 +204,7 @@ class DetermineLocalInitialization(object):
 
 class FindFusedGemms(object):
   def visit(self, cfg):
-    context = FusedGemmsContext.get_finite_automata()
+    context = FusedGemmsContext.get_finite_automata(readsAfter(cfg))
     try:
       for pp in cfg:
         context.process(pp)

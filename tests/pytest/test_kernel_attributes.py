@@ -1,6 +1,6 @@
 """
-Per-kernel attributes and the one thing they currently switch: the batch
-flags.
+Per-kernel attributes and what they switch: the batch flags, and whether a
+kernel takes its operands as views as well.
 
 ``flags`` is a mask of elements a batched GPU kernel should skip.  Every
 GPU kernel used to carry it -- a member on the kernel struct, a parameter
@@ -18,6 +18,10 @@ These tests stop before any external code generator runs (GemmForge and
 ChainForge are not installed in this suite), so the emitted *call sites*
 are covered indirectly, through ``BatchedOperationsAux.flags_arg``, which
 is what those generators put in the argument list.
+
+``operands`` does not change the kernel at all: a kernel that is to take
+views as well is generated like any other, and reported to the metagen,
+which binds the views to it (see test_metagen.py).
 """
 from __future__ import annotations
 
@@ -26,7 +30,9 @@ from io import StringIO
 
 import pytest
 
-from yateto import Generator, Tensor, simpleParameterSpace
+import numpy as np
+
+from yateto import Generator, Scalar, Tensor, simpleParameterSpace
 from yateto.codegen.cache import RoutineCache
 from yateto.codegen.datacache import DataCache
 from yateto.codegen.code import Cpp
@@ -34,6 +40,7 @@ from yateto.codegen.common import BatchedOperationsAux, KernelAttributes
 from yateto.codegen.factory import (ExportFactory, ExportGenerator,
                                     OptimizedKernelFactory)
 from yateto.codegen.visitor import OptimizedKernelGenerator
+from yateto.gemm_configuration import GeneratorCollection
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +78,20 @@ class TestKernelAttributes:
         attrs.as_dict()["flags"] = False
         source["flags"] = False
         assert attrs.flags is True
+
+    def test_operands_are_static_unless_asked_otherwise(self):
+        assert KernelAttributes().runtimeOperands is False
+        assert KernelAttributes({"operands": "static"}).runtimeOperands is False
+        assert KernelAttributes({"operands": "runtime"}).runtimeOperands is True
+
+    def test_an_unknown_binding_of_operands_is_rejected(self):
+        with pytest.raises(ValueError, match="'static', 'runtime'"):
+            KernelAttributes({"operands": "dynamic"})
+
+    def test_the_external_generators_are_not_told_how_operands_are_bound(self):
+        # What they generate is the same either way.
+        attrs = KernelAttributes({"operands": "runtime", "flags": True})
+        assert attrs.as_dict() == {"flags": True}
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +132,80 @@ class TestAttributesReachTheKernel:
         g = Generator(arch)
         with pytest.raises(ValueError):
             g.add("krnl", C["ij"] <= A["ik"] * B["kj"], attrs={"flag": True})
+
+    def test_views_are_for_the_host(self, arch):
+        A, B, C = self._tensors()
+        g = Generator(arch)
+        with pytest.raises(ValueError, match="host"):
+            g.add("krnl", C["ij"] <= A["ik"] * B["kj"], target="gpu",
+                  attrs={"operands": "runtime"})
+        # Named as the family was added, not as its first member.
+        with pytest.raises(ValueError, match="^fam .*host"):
+            g.addFamily("fam", simpleParameterSpace(2),
+                        lambda i: C["ij"] <= A["ik"] * B["kj"],
+                        target="gpu", attrs={"operands": "runtime"})
+
+    def test_views_cannot_say_what_to_prefetch(self, arch):
+        A, B, C = self._tensors()
+        g = Generator(arch)
+        with pytest.raises(ValueError, match="prefetch"):
+            g.add("krnl", C["ij"] <= A["ik"] * B["kj"], prefetch=B,
+                  attrs={"operands": "runtime"})
+
+
+class TestWhatAKernelTakingViewsReports:
+    """What `Generator.generate` tells the metagen about such a kernel."""
+
+    @staticmethod
+    def _generate(arch, tmp_path, build):
+        g = Generator(arch)
+        build(g)
+        return g.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))["runtime"]
+
+    def test_only_kernels_that_ask_are_reported(self, arch, tmp_path):
+        def build(g):
+            A, C = Tensor("A", (4,)), Tensor("C", (4,))
+            g.add("views", C["i"] <= A["i"], attrs={"operands": "runtime"})
+            g.add("pointers", C["i"] <= A["i"])
+
+        assert [interface["name"] for interface in self._generate(arch, tmp_path, build)] == ["views"]
+
+    def test_every_operand_with_what_a_caller_hands_over(self, arch, tmp_path):
+        def build(g):
+            A, B, C = Tensor("A", (4, 4)), Tensor("B", (4, 4)), Tensor("C", (4, 4))
+            K = Tensor("K", (4, 4), np.ones((4, 4)))
+            g.add("krnl", C["ij"] <= Scalar("s") * A["ik"] * B["kj"] + K["ij"],
+                  namespace="space", attrs={"operands": "runtime"})
+
+        [interface] = self._generate(arch, tmp_path, build)
+        assert (interface["name"], interface["namespace"], interface["family"]) == ("krnl", "space", None)
+        operands = {operand["name"]: operand for operand in interface["operands"]}
+        assert operands["A"] == {"name": "A", "member": "A", "rank": 0, "groups": [[]],
+                                 "writable": False, "bound": False, "datatype": "f64"}
+        assert operands["C"]["writable"] and not operands["C"]["bound"]
+        # The pool binds the constant, so there is nothing to hand over.
+        assert operands["K"]["bound"] and operands["K"]["groups"] == []
+        assert interface["scalars"] == [{"name": "s", "member": "s", "rank": 0, "groups": [[]],
+                                         "datatype": "f64"}]
+        assert interface["kernels"] == [{"position": 0, "uses": {"A": [[]], "B": [[]], "C": [[]]},
+                                         "writes": ["C"]}]
+
+    def test_a_family_of_kernels_with_what_its_members_read(self, arch, tmp_path):
+        def build(g):
+            T = [Tensor(f"T({i})", (4,), namespace="nodal") for i in range(3)]
+            C = Tensor("C", (4,))
+            # Members at 0, 2 and 4 of a family of 3 x 2.
+            g.addFamily("fam", [(0, 0), (2, 0), (1, 1)],
+                        lambda i, j: C["i"] <= T[i]["i"],
+                        attrs={"operands": "runtime"})
+
+        [interface] = self._generate(arch, tmp_path, build)
+        assert interface["family"] == {"stride": [1, 3], "size": 5}
+        [T] = [operand for operand in interface["operands"] if operand["member"] == "T"]
+        assert (T["name"], T["rank"], T["groups"]) == ("nodal::T", 1, [[0], [1], [2]])
+        # Each member with the one it uses.
+        assert [(kernel["position"], kernel["uses"]["nodal::T"]) for kernel in interface["kernels"]] == \
+            [(0, [[0]]), (2, [[2]]), (4, [[1]])]
 
 
 # ---------------------------------------------------------------------------

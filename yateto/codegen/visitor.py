@@ -456,6 +456,77 @@ class OptimizedKernelGenerator(KernelGenerator):
     return layout.reordered(list(order))
 
   @classmethod
+  def interface(cls, name, namespace, kernelOutlines, families, familyStride=None):
+    """What code outside the kernel sets on it, as plain data.
+
+    For the metagen, which writes a way into the kernel for operands whose
+    layout is only known at run time. Put together over the variants of a
+    family the way `generate` puts together the members of its struct, so that
+    both agree on which operand is a constant `bindGlobals` fills. Every
+    operand is listed with the groups a caller hands over: all the kernel
+    reads of it where the pool does not bind it, and where it does, the
+    members the pool holds no values for. `kernels` says, per variant, which
+    of those it uses and which operands it writes, so that a caller only
+    hands over what the variant it runs uses.
+    """
+    tensors = collections.OrderedDict()
+    writable = dict()
+    constant = dict()
+    datatype = dict()
+    scalars = collections.OrderedDict()
+    for ko in kernelOutlines:
+      if ko:
+        cls._addFromKO(ko.tensors, tensors)
+        cls._addFromKO(ko.writable, writable)
+        cls._addFromKO(ko.is_compute_constant_tensors, constant)
+        cls._addFromKO(ko.datatype, datatype)
+        cls._addFromKO(ko.scalars, scalars)
+
+    def rankOf(groups):
+      return len(next(iter(groups)))
+
+    def listed(groups):
+      return sorted(list(group) for group in groups)
+
+    operands = []
+    handed = dict()
+    for baseName, groups in tensors.items():
+      bound = bool(constant.get(baseName)) and not writable.get(baseName)
+      family = families.get(baseName, {})
+      handed[baseName] = {group for group in groups
+                          if not bound or family.get(group) is None or family[group].values() is None}
+      operands.append({'name': baseName,
+                       'member': Tensor.splitBasename(baseName)[1],
+                       'rank': rankOf(groups),
+                       'groups': listed(handed[baseName]),
+                       'writable': bool(writable.get(baseName)),
+                       'bound': bound,
+                       'datatype': str(datatype[baseName])})
+    kernels = []
+    for position, ko in enumerate(kernelOutlines):
+      if ko:
+        uses = {baseName: listed(groups & handed[baseName]) for baseName, groups in ko.tensors.items()}
+        kernels.append({'position': position,
+                        'uses': {baseName: groups for baseName, groups in uses.items() if groups},
+                        'writes': sorted(baseName for baseName, written in ko.writable.items() if written)})
+    return {
+      'name': name,
+      'namespace': namespace,
+      'family': None if familyStride is None else {
+        'stride': list(familyStride),
+        'size': len(kernelOutlines),
+      },
+      'operands': operands,
+      'scalars': [{'name': baseName,
+                   'member': Tensor.splitBasename(baseName)[1],
+                   'rank': rankOf(groups),
+                   'groups': listed(groups),
+                   'datatype': str(datatype[baseName])}
+                  for baseName, groups in scalars.items()],
+      'kernels': kernels,
+    }
+
+  @classmethod
   def _addFromKO(cls, koEntries, entries):
     for key, value in koEntries.items():
       if key not in entries:

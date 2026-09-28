@@ -536,7 +536,7 @@ class Generator(object):
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
     initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key),
-                                   inMemory=set(inMemory))
+                                   inMemory=set(inMemory), namespace=namespace)
 
     # Before the initialisation code, not after: init binds references into the
     # pool where it can, so it has to know which entries exist.
@@ -563,11 +563,13 @@ class Generator(object):
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):
           initGen.generateInitH(header)
+          initGen.generateTableH(header)
     with Cpp(fInit.cpp) as cpp:
       cpp.includeSys('limits')
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
+        initGen.generateTableCpp(cpp)
 
     poolGen = PoolGenerator(self._arch, dataCache, poolMap)
     with Cpp(fPool.h) as header:
@@ -589,7 +591,10 @@ class Generator(object):
     return {
       'namespace': namespace,
       'tensors': set(tensor.baseNameWithNamespace() for tensor in tensors.values()) | set(scalar.baseNameWithNamespace() for scalar in scalars),
-      'kernels': set(prefixnsp(kernel) for kernel in self._kernels) | set(prefixnsp(family) for family in self._kernelFamilies.values())
+      'kernels': set(prefixnsp(kernel) for kernel in self._kernels) | set(prefixnsp(family) for family in self._kernelFamilies.values()),
+      # What init::tensorTable() lists, in its order: name and number of
+      # group indices of every tensor that has a descriptor.
+      'tensorTable': initGen.tableEntries()
     }
 
 class NamespacedGenerator(object):

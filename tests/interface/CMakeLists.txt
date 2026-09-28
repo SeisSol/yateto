@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 enable_testing()
 
-set(TEST_HEADERS TensorView.t.h Type.t.h)
+set(TEST_HEADERS Descriptor.t.h TensorView.t.h Type.t.h)
 set(TEST_HEADER_PATHS)
 foreach(header ${TEST_HEADERS})
     list(APPEND TEST_HEADER_PATHS ${CMAKE_SOURCE_DIR}/${header})

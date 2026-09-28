@@ -161,15 +161,18 @@ class DetermineLocalInitialization(object):
       ua = cfg[i].action
       # assign buffer
       if ua and not ua.isCompound() and not ua.result.isGlobal():
-        if ua.result in usedBuffers:
-          buf = usedBuffers[ua.result]
+        # The buffer belongs to the variable, not to the window a store
+        # writes: the windows of one temporary are parts of one buffer.
+        local = ua.result.viewed()
+        if local in usedBuffers:
+          buf = usedBuffers[local]
         elif len(freeBuffers) > 0:
           buf = freeBuffers.pop()
         else:
           buf = numBuffers
           numBuffers += 1
-        cfg[i].bufferMap[ua.result] = buf
-        usedBuffers[ua.result] = buf
+        cfg[i].bufferMap[local] = buf
+        usedBuffers[local] = buf
 
         # size in bytes
         datatype = ua.result.datatype

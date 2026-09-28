@@ -59,6 +59,11 @@ class Description(object):
     self.alignedA = alignedStartA and not transA and self.leftTerm.memoryLayout.alignedStride()
     self.alignedC = alignedStartC and self.result.memoryLayout.alignedStride()
 
+    #: The extents the operands really occupy, before any of them is widened
+    #: to sit on a vector boundary. What a generator is asked about, since
+    #: widening is a property of the arrangement and not of the operation.
+    self._logicalMnk = (m, n, k)
+
     if self.alignedA and self.alignedC:
       m = m.aligned(arch)
     else:
@@ -70,6 +75,9 @@ class Description(object):
 
   def mnk(self):
     return self._mnk
+
+  def logicalMnk(self):
+    return self._logicalMnk
 
   def setBeta(self, beta):
     self.beta = beta

@@ -6,12 +6,16 @@ for that target.
 
 import json
 import os
+import pathlib
+import re
+import shutil
+import subprocess
 import tempfile
 
 import numpy as np
 import pytest
 
-from yateto import Generator, GeneratorCollection, Tensor
+from yateto import Generator, GeneratorCollection, Tensor, simpleParameterSpace
 from yateto.arch import useArchitectureIdentifiedBy
 from yateto.codegen.factory import ExportGenerator
 from yateto.type import Datatype
@@ -391,12 +395,12 @@ class TestAlignmentIsTheStorages:
 
     @pytest.fixture
     def aligned(self):
-        from yateto.memory import DenseMemoryLayout
+        from yateto.memory import MemoryLayout
         arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
-        previous = DenseMemoryLayout.ALIGNMENT_ARCH
-        DenseMemoryLayout.setAlignmentArch(arch)
+        previous = MemoryLayout.DEFAULT_ALIGNMENT_ARCH
+        MemoryLayout.setAlignmentArch(arch)
         yield arch
-        DenseMemoryLayout.ALIGNMENT_ARCH = previous
+        MemoryLayout.DEFAULT_ALIGNMENT_ARCH = previous
 
     def test_a_slice_and_the_whole_describe_one_tensor(self, aligned):
         X = Tensor('X', (N, N), alignStride=True)
@@ -407,3 +411,626 @@ class TestAlignmentIsTheStorages:
         described = [t for t in collector.tensors if t['name'] == 'X']
         assert len(described) == 1
         assert described[0]['alignment'] == aligned.alignment
+
+
+class TestExportedAlignment:
+    """What a tensor promises about the address of a column, in bytes.
+
+    Read from the layout, so that a tensor laid out for one target keeps its
+    promise while a kernel is generated for another.
+    """
+
+    def _tensorsOf(self, tensor):
+        exporter = export([tensor['out']['ij'] <= tensor['A']['ik'] * tensor['B']['kj']])
+        return {t['name']: t for t in exporter.tensors}
+
+    def test_an_aligned_tensor_reports_its_own_architecture(self):
+        from yateto.arch import getArchitectureIdentifiedBy
+        from yateto.memory import DenseMemoryLayout
+
+        wide = getArchitectureIdentifiedBy('dskx')
+        out = Tensor('out', (N, N))
+        out.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=wide)
+
+        described = self._tensorsOf({
+            'A': Tensor('A', (N, N)), 'B': Tensor('B', (N, N)), 'out': out})
+
+        assert described['out']['alignment'] == wide.alignment
+
+    def test_an_unaligned_tensor_promises_nothing(self):
+        described = self._tensorsOf({
+            'A': Tensor('A', (N, N)), 'B': Tensor('B', (N, N)),
+            'out': Tensor('out', (N, N))})
+
+        assert described['out']['alignment'] == 0
+
+    def test_the_promise_does_not_follow_the_run(self):
+        """Two tensors, two architectures, one generator run."""
+        from yateto.arch import getArchitectureIdentifiedBy
+        from yateto.memory import DenseMemoryLayout
+
+        narrow = getArchitectureIdentifiedBy('dhsw')
+        wide = getArchitectureIdentifiedBy('dskx')
+        a = Tensor('A', (N, N))
+        a.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=narrow)
+        out = Tensor('out', (N, N))
+        out.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=wide)
+
+        described = self._tensorsOf({'A': a, 'B': Tensor('B', (N, N)), 'out': out})
+
+        assert described['A']['alignment'] == narrow.alignment
+        assert described['out']['alignment'] == wide.alignment
+        assert narrow.alignment != wide.alignment
+
+
+class Offerer(Collector):
+    """An exporter that asks for its constants in an order of its own."""
+
+    offerings = {}
+
+    def layout_offerings(self):
+        return dict(self.offerings)
+
+
+def exportOffering(statements, offerings, target='gpu'):
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+    collector = {}
+
+    def make(a, attrs=None):
+        it = Offerer(a, attrs)
+        it.offerings = offerings
+        collector['it'] = it
+        return it
+
+    generator = Generator(arch)
+    for i, statement in enumerate(statements):
+        generator.add(f'k{i}', statement, target=target)
+    out = tempfile.mkdtemp()
+    generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                       routine_exporters={target: make})
+    return out
+
+
+class TestLayoutOfferings:
+    """An exporter may ask for a constant in an arrangement of its own."""
+
+    @staticmethod
+    def _tensors():
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        return {'A': Tensor('A', (N, N), values), 'B': Tensor('B', (N, N)),
+                'out': Tensor('out', (N, N))}
+
+    def _generate(self, offerings):
+        t = self._tensors()
+        out = exportOffering([t['out']['ij'] <= t['A']['ik'] * t['B']['kj']], offerings)
+        return (open(os.path.join(out, 'pool.h')).read(),
+                open(os.path.join(out, 'pool.cpp')).read(),
+                open(os.path.join(out, 'kernel.h')).read())
+
+    def test_without_an_offering_nothing_changes(self):
+        pool_h, pool_cpp, kernel_h = self._generate({})
+
+        assert pool_cpp.count('= {') >= 1
+        assert 'A = pool.A_' in kernel_h
+
+    def test_an_offered_order_reaches_the_image(self):
+        _, plain, _ = self._generate({})
+        _, offered, _ = self._generate({'A': {'order': [1, 0]}})
+
+        assert plain != offered
+
+    def test_the_kernel_binds_the_arrangement_it_asked_for(self):
+        _, _, plain = self._generate({})
+        _, _, offered = self._generate({'A': {'order': [1, 0]}})
+
+        assert 'A = pool.A_' in offered
+        assert plain != offered
+
+    def test_an_offering_names_the_member_it_is_about(self):
+        """One member rearranged; the others stay as they were."""
+        import numpy as np
+
+        values = [np.zeros((N, N)) for _ in range(2)]
+        for k, v in enumerate(values):
+            for i in range(N):
+                v[i, (i + k + 1) % N] = float(i + 1)
+        F = {k: Tensor('F({})'.format(k), (N, N), v) for k, v in enumerate(values)}
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        plain = exportOffering([out['ij'] <= F[0]['ik'] * B['kj'],
+                                out['ij'] <= F[1]['ik'] * B['kj']], {})
+        offered = exportOffering([out['ij'] <= F[0]['ik'] * B['kj'],
+                                  out['ij'] <= F[1]['ik'] * B['kj']],
+                                 {'F(0)': {'order': [1, 0]}})
+
+        plain_h = open(os.path.join(plain, 'pool.h')).read()
+        offered_h = open(os.path.join(offered, 'pool.h')).read()
+        # One member for the family in both, and a different one once asked
+        assert len(re.findall(r'Container<double const\*> F_\w+', plain_h)) == 1
+        assert len(re.findall(r'Container<double const\*> F_\w+', offered_h)) == 1
+        assert plain_h != offered_h
+
+    def test_an_offering_for_a_member_of_it_that_is_not_read_is_refused(self):
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        F = Tensor('F(0)', (N, N), values)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        with pytest.raises(ValueError, match=r'F\(3\)'):
+            exportOffering([out['ij'] <= F['ik'] * B['kj']],
+                           {'F(3)': {'order': [1, 0]}})
+
+    def test_an_unknown_field_is_refused_by_name(self):
+        with pytest.raises(ValueError, match='storage_parts'):
+            self._generate({'A': {'storage_parts': 2}})
+
+    def test_an_offering_for_something_unread_is_refused(self):
+        with pytest.raises(ValueError, match='nosuch'):
+            self._generate({'nosuch': {'order': [1, 0]}})
+
+    def test_an_offering_for_a_writable_operand_is_refused(self):
+        with pytest.raises(ValueError, match='out'):
+            self._generate({'out': {'order': [1, 0]}})
+
+
+class TestPreparedConstants:
+    """An exporter may hand back numbers of its own, not just an order.
+
+    Where one element is split across several scalars -- an emulated
+    precision, a matrix instruction's fragments -- the split is the
+    generator's arithmetic. It computes the numbers; the pool stores them.
+    """
+
+    @staticmethod
+    def _tensors():
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        return {'A': Tensor('A', (N, N), values), 'B': Tensor('B', (N, N)),
+                'out': Tensor('out', (N, N))}
+
+    def _generate(self, offerings):
+        t = self._tensors()
+        out = exportOffering([t['out']['ij'] <= t['A']['ik'] * t['B']['kj']], offerings)
+        return (open(os.path.join(out, 'pool.h')).read(),
+                open(os.path.join(out, 'pool.cpp')).read())
+
+    def test_the_numbers_are_stored_as_they_came(self):
+        prepared = [float(i) for i in range(2 * N * N)]
+
+        _, pool_cpp = self._generate({'A': {'data': prepared, 'parts': 2,
+                                            'planar': True}})
+
+        assert '31' in pool_cpp
+        assert pool_cpp.count('{') >= 1
+
+    def test_the_entry_is_as_long_as_the_image(self):
+        prepared = [float(i) for i in range(2 * N * N)]
+
+        pool_h, _ = self._generate({'A': {'data': prepared, 'parts': 2}})
+
+        assert '[{}]'.format(2 * N * N) in pool_h
+
+    def test_the_element_type_is_still_the_tensor_s(self):
+        prepared = [float(i) for i in range(2 * N * N)]
+
+        pool_h, _ = self._generate({'A': {'data': prepared, 'parts': 2}})
+
+        assert 'double const A_' in pool_h
+
+    def test_a_shape_without_numbers_is_refused(self):
+        with pytest.raises(ValueError, match='without the'):
+            self._generate({'A': {'parts': 2}})
+
+    def test_numbers_and_an_order_together_are_refused(self):
+        with pytest.raises(ValueError, match='both'):
+            self._generate({'A': {'data': [1.0, 2.0], 'order': [1, 0]}})
+
+    def test_members_prepared_to_different_lengths_are_refused(self):
+        with pytest.raises(ValueError, match='one length'):
+            self._generate({'A': {'data': {0: [1.0, 2.0], 1: [1.0]}}})
+
+    def test_numbers_that_do_not_divide_into_parts_are_refused(self):
+        with pytest.raises(ValueError, match='do not divide'):
+            self._generate({'A': {'data': [1.0, 2.0, 3.0], 'parts': 2}})
+
+
+class Counter(Collector):
+    """An exporter that says what kind of arithmetic it issued."""
+
+    report = {}
+
+    def flop_report(self):
+        return dict(self.report)
+
+
+def exportCounting(statements, report, target='gpu'):
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+
+    def make(a, attrs=None):
+        it = Counter(a, attrs)
+        it.report = report
+        return it
+
+    generator = Generator(arch)
+    for i, statement in enumerate(statements):
+        generator.add(f'k{i}', statement, target=target)
+    out = tempfile.mkdtemp()
+    generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                       routine_exporters={target: make})
+    return open(os.path.join(out, 'kernel.h')).read()
+
+
+class TestReportedFlops:
+    """What a generator issued, in the currency it issued it in."""
+
+    @staticmethod
+    def _tensors():
+        return {'A': Tensor('A', (N, N)), 'B': Tensor('B', (N, N)),
+                'out': Tensor('out', (N, N))}
+
+    def _kernelH(self, report):
+        t = self._tensors()
+        return exportCounting([t['out']['ij'] <= t['A']['ik'] * t['B']['kj']], report)
+
+    def test_without_a_report_the_count_stays_zero(self):
+        kernel_h = self._kernelH({})
+
+        assert 'HardwareFlops' in kernel_h
+        assert 'HardwareFlops:' not in kernel_h
+
+    def test_a_reported_count_reaches_the_total(self):
+        kernel_h = self._kernelH({'mma:tf32': 300})
+
+        assert 'HardwareFlops' in kernel_h
+        assert '300' in kernel_h
+
+    def test_the_kinds_are_stated_beside_the_total(self):
+        kernel_h = self._kernelH({'mma:tf32': 300, 'fma:f32': 12})
+
+        assert '300 mma:tf32' in kernel_h
+        assert '12 fma:f32' in kernel_h
+
+    def test_a_total_of_one_kind_needs_no_explaining(self):
+        kernel_h = self._kernelH({'plain': 44})
+
+        assert '44' in kernel_h
+        assert 'HardwareFlops:' not in kernel_h
+
+
+class TestFlopCount:
+    """The count itself: it adds like a number and keeps its kinds."""
+
+    def test_it_adds_to_a_plain_number(self):
+        from yateto.codegen.flops import FlopCount
+
+        assert int(0 + FlopCount(12) + 30) == 42
+
+    def test_kinds_stay_apart_while_the_total_adds_up(self):
+        from yateto.codegen.flops import FlopCount
+
+        counted = FlopCount({'a': 2}) + FlopCount({'b': 3}) + FlopCount({'a': 1})
+
+        assert counted.kinds() == {'a': 3, 'b': 3}
+        assert int(counted) == 6
+
+    def test_it_spells_itself_as_its_total(self):
+        from yateto.codegen.flops import FlopCount
+
+        assert '{}'.format(FlopCount({'a': 2, 'b': 3})) == '5'
+
+    def test_nothing_counted_is_falsy(self):
+        from yateto.codegen.flops import FlopCount
+
+        assert not FlopCount()
+        assert FlopCount() == 0
+
+
+class ReadOfferer(Collector):
+    """Asks for an order for every constant it was described that `wants`.
+
+    Like a real exporter, it speaks only about what the kernel in hand reads,
+    so the variants of one family each speak for their own members.
+    """
+
+    wants = staticmethod(lambda name, described: False)
+
+    def layout_offerings(self):
+        described = [t['name'] for t in self.tensors]
+        return {t['name']: {'order': [1, 0]} for t in self.tensors
+                if t['flags']['constant'] and self.wants(t['name'], described)}
+
+
+class ProbingOfferer(ReadOfferer):
+    """A ReadOfferer whose kernels report the address of each constant they read.
+
+    The kernel it writes is one call per constant, to a function the program
+    that runs it defines: which member a variant reads is then something that
+    program can check, rather than something read off the generated text.
+    """
+
+    PROBE = 'yatetoProbe'
+    #: Declared for the program that runs the kernel; any object pointer
+    #: converts to it, whatever the member's type.
+    DECLARATION = 'void yatetoProbe(char const* name, void const* address);\n'
+
+    def generate(self, cpp, cache):
+        # A name with a leading underscore is the generator's own -- a scalar
+        # it introduced -- and no member of the kernel.
+        for t in self.tensors:
+            if not t['name'].startswith('_') and t['name'] != 'out':
+                cpp('{}("{}", {});'.format(self.PROBE, t['name'], t['name']))
+
+
+def exportFamily(build, wants, exporter=ReadOfferer, out=None):
+    arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+
+    def make(a, attrs=None):
+        it = exporter(a, attrs)
+        it.wants = wants
+        return it
+
+    generator = Generator(arch)
+    build(generator)
+    out = tempfile.mkdtemp() if out is None else str(out)
+    generator.generate(out, gemm_cfg=GeneratorCollection([]),
+                       routine_exporters={'gpu': make})
+    return out
+
+
+def runProbed(tmp_path, out, body):
+    """Compiles the generated kernels with `body` as main and runs them.
+
+    Every kernel written by a ProbingOfferer reports the address it reads each
+    operand at into `seen`, by the name the operand was described under.
+    """
+    include = pathlib.Path(__file__).resolve().parents[2] / 'include'
+    (tmp_path / 'probe.h').write_text(ProbingOfferer.DECLARATION)
+    (tmp_path / 'main.cpp').write_text(
+        '#include "kernel.h"\n'
+        '#include "init.h"\n'
+        '#include <algorithm>\n'
+        '#include <map>\n'
+        '#include <numeric>\n'
+        '#include <string>\n'
+        'static std::map<std::string, void const*> seen;\n'
+        'void ' + ProbingOfferer.PROBE + '(char const* name, void const* address) {\n'
+        '  seen[name] = address;\n'
+        '}\n'
+        'int main() {\n' + body + '  return 0;\n}\n')
+    sources = [str(tmp_path / 'main.cpp')] + [str(pathlib.Path(out) / name) for name in
+                                              ('kernel.cpp', 'pool.cpp', 'init.cpp', 'tensor.cpp')]
+    # Warnings as errors, and with asserts both ways: the aliases a variant
+    # reads its own arrangement through are meant to shadow the member and may
+    # be named in nothing but the asserts.
+    for flags in (['-DNDEBUG'], []):
+        built = subprocess.run(['c++', '-std=c++17', *flags, '-Wall', '-Wextra', '-Wshadow',
+                                '-Werror', '-Wno-unused-parameter', f'-isystem{include}',
+                                f'-I{out}', '-include', str(tmp_path / 'probe.h'), *sources,
+                                '-o', str(tmp_path / 'probed')],
+                               capture_output=True, text=True)
+        assert built.returncode == 0, built.stderr
+        ran = subprocess.run([str(tmp_path / 'probed')], capture_output=True, text=True)
+        assert ran.returncode == 0, (ran.returncode, ran.stderr)
+
+
+class TestOfferingsAcrossVariants:
+    """The variants of one family share its members. Those that agree share
+    one arrangement of a constant, each speaking for the members it reads; a
+    variant that disagrees gets an arrangement and a member of its own."""
+
+    @staticmethod
+    def constants(name, count):
+        import numpy as np
+
+        tensors = []
+        for k in range(count):
+            values = np.zeros((N, N))
+            for i in range(N):
+                values[i, (i + k + 1) % N] = float(i + 1)
+            tensors.append(Tensor('{}({})'.format(name, k), (N, N), values))
+        return tensors
+
+    def test_variants_rearranging_different_members_share_one_arrangement(self):
+        F = self.constants('F', 2)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily('fam', simpleParameterSpace(2),
+                                      lambda i: out['ij'] <= F[i]['ik'] * B['kj'], target='gpu')
+        plain = exportFamily(build, lambda name, described: False)
+        offered = exportFamily(build, lambda name, described: name.startswith('F('))
+
+        plain_h = open(os.path.join(plain, 'pool.h')).read()
+        offered_h = open(os.path.join(offered, 'pool.h')).read()
+        # one member for the family, bound by the family, and a different
+        # arrangement than without the offerings -- not one per variant
+        assert len(re.findall(r'Container<double const\*> F_\w+', offered_h)) == 1
+        assert offered_h != plain_h
+        member = re.search(r'Container<double const\*> (F_\w+)', offered_h).group(1)
+        assert 'F = pool.{};'.format(member) in open(os.path.join(offered, 'kernel.h')).read()
+
+    def disagreeing(self):
+        """A family whose variants read F(0) laid out differently.
+
+        Only the variant that reads G(0) asks for F(0) rearranged; the other
+        reads it as it lays itself out.
+        """
+        F = self.constants('F', 1)
+        G = self.constants('G', 2)
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily('fam', simpleParameterSpace(2),
+                                      lambda i: out['ij'] <= F[0]['ik'] * G[i]['kj'], target='gpu')
+        wants = lambda name, described: name == 'F(0)' and 'G(0)' in described
+        return build, wants
+
+    def test_variants_reading_one_member_differently_get_a_member_each(self):
+        build, wants = self.disagreeing()
+        out = exportFamily(build, wants)
+        pool_h = open(os.path.join(out, 'pool.h')).read()
+        init_h = open(os.path.join(out, 'init.h')).read()
+        kernel_h = open(os.path.join(out, 'kernel.h')).read()
+        kernel_cpp = open(os.path.join(out, 'kernel.cpp')).read()
+
+        # the pool holds F twice, once per arrangement read
+        pooled = re.findall(r'Container<double const\*> (F_[0-9a-f]{8})\{\};', pool_h)
+        assert len(pooled) == 2
+        # F keeps the family's own arrangement, which variant 1 reads and which
+        # init::F::PoolMember names; the one variant 0 asked for is bound to a
+        # member of its own, named after its entry in the pool
+        bound = dict(re.findall(r'\b(F\w*) = pool\.(F_[0-9a-f]{8});', kernel_h))
+        assert set(bound.values()) == set(pooled)
+        own = re.search(r'struct F : tensor::F \{.*?PoolMember = &Pool::(F_[0-9a-f]{8});', init_h, re.S).group(1)
+        assert bound['F'] == own
+        other = next(member for member in bound if member != 'F')
+        assert other == bound[other]
+        assert re.search(r'Container<double const\*> {};'.format(other), kernel_h)
+        # both say who reads them
+        assert '//! F as variant 1 reads it; the others read the members further down.' in kernel_h
+        assert '//! F as variant 0 reads it; bound by bindGlobals only.' in kernel_h
+        # and variant 0 reads its member under the name its code uses
+        execute0 = kernel_cpp.split('fam::execute0()')[1].split('fam::execute1()')[0]
+        execute1 = kernel_cpp.split('fam::execute1()')[1]
+        assert '[[maybe_unused]] auto const& F = this->{};'.format(other) in execute0
+        assert 'this->' not in execute1
+
+    def test_variants_that_agree_still_share_one_member(self):
+        build, _ = self.disagreeing()
+        out = exportFamily(build, lambda name, described: name == 'F(0)')
+        kernel_h = open(os.path.join(out, 'kernel.h')).read()
+        assert re.findall(r'\b(F\w*) = pool\.F_[0-9a-f]{8};', kernel_h) == ['F']
+        assert 'auto const&' not in open(os.path.join(out, 'kernel.cpp')).read()
+
+    @pytest.mark.skipif(shutil.which('c++') is None, reason='needs a C++ compiler')
+    def test_each_variant_reads_the_arrangement_it_was_generated_against(self, tmp_path):
+        build, wants = self.disagreeing()
+        (tmp_path / 'gen').mkdir()
+        out = exportFamily(build, wants, exporter=ProbingOfferer, out=tmp_path / 'gen')
+        runProbed(tmp_path, out,
+                  '  auto pool = yateto::Pool::host();\n'
+                  '  double* out[1] = {nullptr};\n'
+                  '  yateto::kernel::fam krnl;\n'
+                  '  krnl.bindGlobals(pool);\n'
+                  '  krnl.out = out;\n'
+                  '  krnl.numElements = 1;\n'
+                  '  double const* read[2] = {nullptr, nullptr};\n'
+                  '  for (unsigned i = 0; i < 2; ++i) {\n'
+                  '    krnl.streamPtr = &krnl;\n'
+                  '    krnl.execute(i);\n'
+                  '    read[i] = static_cast<double const*>(seen.at("F(0)"));\n'
+                  '  }\n'
+                  '  auto const* own = (pool.*yateto::init::F::PoolMember)(0);\n'
+                  '  auto const size = yateto::tensor::F::size(0);\n'
+                  '  // variant 1 reads F(0) as it lays itself out ...\n'
+                  '  if (read[1] != own) return 1;\n'
+                  '  if (!std::equal(own, own + size, yateto::init::F::Values0)) return 2;\n'
+                  '  // ... and variant 0 the same numbers in the order it asked for\n'
+                  '  if (read[0] == nullptr || read[0] == own) return 3;\n'
+                  '  if (std::equal(read[0], read[0] + size, own)) return 4;\n'
+                  '  if (std::accumulate(read[0], read[0] + size, 0.0)\n'
+                  '      != std::accumulate(own, own + size, 0.0)) return 5;\n'
+                  '  // F, filled by hand, reaches the variant that reads F as it lays\n'
+                  '  // itself out, and not the one that reads its own arrangement\n'
+                  '  double const byHand[16] = {};\n'
+                  '  krnl.F(0) = byHand;\n'
+                  '  for (unsigned i = 0; i < 2; ++i) {\n'
+                  '    krnl.streamPtr = &krnl;\n'
+                  '    krnl.execute(i);\n'
+                  '    read[i] = static_cast<double const*>(seen.at("F(0)"));\n'
+                  '  }\n'
+                  '  if (read[1] != byHand) return 6;\n'
+                  '  if (read[0] == byHand || read[0] == own) return 7;\n')
+
+    @pytest.mark.skipif(shutil.which('c++') is None, reason='needs a C++ compiler')
+    def test_a_member_without_values_reaches_a_variant_of_its_own_arrangement(self, tmp_path):
+        # F(0) has no values, so the pool holds nothing for it: the caller
+        # fills it in, in F, and the variant that reads F(1) in an
+        # arrangement of its own still has to see what the caller put there.
+        F = [Tensor('F(0)', (N, N))] + self.constants('F', 2)[1:]
+        G = self.constants('G', 2)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily(
+            'fam', simpleParameterSpace(2),
+            lambda i: out['ij'] <= F[1]['ik'] * G[i]['kj'] + F[0]['ik'] * B['kj'], target='gpu')
+        wants = lambda name, described: name == 'F(1)' and 'G(0)' in described
+        (tmp_path / 'gen').mkdir()
+        out = exportFamily(build, wants, exporter=ProbingOfferer, out=tmp_path / 'gen')
+        execute0 = open(os.path.join(out, 'kernel.cpp')).read().split('fam::execute0()')[1]
+        assert re.search(r'\[\[maybe_unused\]\] auto F = this->F;\n\s*F\(1\) = this->F_[0-9a-f]{8}\(1\);',
+                         execute0)
+        runProbed(tmp_path, out,
+                  '  auto pool = yateto::Pool::host();\n'
+                  '  double* out[1] = {nullptr};\n'
+                  '  double const* b[1] = {nullptr};\n'
+                  '  double const byHand[16] = {};\n'
+                  '  yateto::kernel::fam krnl;\n'
+                  '  krnl.bindGlobals(pool);\n'
+                  '  krnl.F(0) = byHand;\n'
+                  '  krnl.B = b;\n'
+                  '  krnl.out = out;\n'
+                  '  krnl.numElements = 1;\n'
+                  '  auto const* own = (pool.*yateto::init::F::PoolMember)(1);\n'
+                  '  for (unsigned i = 0; i < 2; ++i) {\n'
+                  '    krnl.streamPtr = &krnl;\n'
+                  '    krnl.execute(i);\n'
+                  '    if (seen.at("F(0)") != byHand) return 1 + i;\n'
+                  '    if ((seen.at("F(1)") == own) != (i == 1)) return 3 + i;\n'
+                  '    if (seen.at("F(1)") == nullptr) return 5 + i;\n'
+                  '  }\n')
+
+    def test_an_arrangement_a_variant_asked_for_is_not_dropped_for_a_writer(self):
+        # Variant 1 writes F(0), so the kernel does not bind F; variant 0
+        # asked for F(0) rearranged, which nothing but the pool could hand it.
+        F = self.constants('F', 1)
+        G = self.constants('G', 1)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily(
+            'fam', simpleParameterSpace(2),
+            lambda i: out['ij'] <= F[0]['ik'] * G[0]['kj'] if i == 0 else F[0]['ij'] <= B['ij'],
+            target='gpu')
+        with pytest.raises(ValueError, match=r'Variant 0 of fam reads F in an arrangement'):
+            exportFamily(build, lambda name, described: name == 'F(0)' and 'G(0)' in described)
+
+    def test_variants_preparing_different_numbers_get_a_member_each(self):
+        F = self.constants('F', 1)
+        G = self.constants('G', 2)
+        out = Tensor('out', (N, N))
+        build = lambda g: g.addFamily('fam', simpleParameterSpace(2),
+                                      lambda i: out['ij'] <= F[0]['ik'] * G[i]['kj'], target='gpu')
+
+        class Preparing(ReadOfferer):
+            # one preparation of F(0) per variant, alike in shape only
+            def layout_offerings(self):
+                described = [t['name'] for t in self.tensors]
+                first = 1.0 if 'G(0)' in described else 2.0
+                return {'F(0)': {'data': [first] * (2 * N * N), 'parts': 2}}
+
+        out = exportFamily(build, lambda name, described: True, exporter=Preparing)
+        pool_h = open(os.path.join(out, 'pool.h')).read()
+        assert len(re.findall(r'Container<double const\*> F_[0-9a-f]{8}\{\};', pool_h)) == 2
+
+    def test_an_offering_names_a_namespaced_tensor_as_it_was_described(self):
+        import numpy as np
+
+        values = np.zeros((N, N))
+        for i in range(N):
+            values[i, (i + 1) % N] = float(i + 1)
+        A = Tensor('A', (N, N), values, namespace='ns')
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        plain = exportFamily(lambda g: g.add('k', out['ij'] <= A['ik'] * B['kj'], target='gpu'),
+                             lambda name, described: False)
+        offered = exportFamily(lambda g: g.add('k', out['ij'] <= A['ik'] * B['kj'], target='gpu'),
+                               lambda name, described: name == 'A')
+        assert open(os.path.join(plain, 'pool.h')).read() \
+            != open(os.path.join(offered, 'pool.h')).read()

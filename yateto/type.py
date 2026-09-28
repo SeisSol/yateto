@@ -163,7 +163,10 @@ class Datatype(Enum):
       Datatype.I32: lambda value: f'static_cast<int32_t>({self.safeint(value)}LL)',
       Datatype.I64: lambda value: f'static_cast<int64_t>({self.safeint(value)}LL)',
       Datatype.F32: lambda value: f'{float(value):.16}f',
-      Datatype.F64: lambda value: f'{float(value):.16}',
+      # Shortest spelling that reads back as the same double. A fixed field
+      # cannot do both jobs: 16 significant digits do not determine a binary64
+      # and 17 pad most values with a digit nobody needs.
+      Datatype.F64: lambda value: repr(float(value)),
       Datatype.F16: lambda value: f'static_cast<yateto::f16_ty>({float(value):.16})',
       Datatype.BF16: lambda value: f'static_cast<yateto::bf16_ty>({float(value):.16})',
       Datatype.F128: lambda value: f'static_cast<yateto::f128_ty>(YATETO_F128_C({float(value):.36}))',
@@ -407,10 +410,12 @@ class Tensor(IdentifiedType):
     # only over what cannot change: the sparsity pattern and the memory layout
     # are set after construction, and hashing them would lose a tensor that is
     # already sitting in a set
-    return hash((self._name, self._shape, self.addressing))
+    return hash((self.nameWithNamespace(), self._shape, self.addressing))
 
-  def setMemoryLayout(self, memoryLayoutClass, alignStride=False):
-    self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp, alignStride=alignStride)
+  def setMemoryLayout(self, memoryLayoutClass, alignStride=False, alignmentArch=None):
+    self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp,
+                                                   alignStride=alignStride,
+                                                   alignmentArch=alignmentArch)
 
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
@@ -422,7 +427,11 @@ class Tensor(IdentifiedType):
 
   def setGroupSpp(self, spp):
     self._setSparsityPattern(spp, setOnlyGroupSpp=True)
-    self.setMemoryLayout(self._memoryLayout.__class__, alignStride=self._memoryLayout.alignedStride())
+    # Rebuilt against the architecture the layout already aligns to, so that a
+    # regrouped tensor keeps the arrangement its consumers were generated for.
+    self.setMemoryLayout(self._memoryLayout.__class__,
+                         alignStride=self._memoryLayout.alignedStride(),
+                         alignmentArch=self._memoryLayout.alignmentArch())
 
   def __getitem__(self, indexNames):
     from .ast.node import IndexedTensor
@@ -466,7 +475,13 @@ class Tensor(IdentifiedType):
   def __eq__(self, other):
     if not isinstance(other, Tensor):
       return NotImplemented
-    return self._name == other._name \
+    # The namespace is part of which tensor this is. Two tensors of the same
+    # name in different namespaces are emitted as two, laid out apart and
+    # referred to apart, so letting them answer to one another here would
+    # collapse them into whichever was met first the moment either lands in a
+    # set or a dict -- and the kernels of the other would be generated against
+    # a stride nobody gave them.
+    return self.nameWithNamespace() == other.nameWithNamespace() \
        and self._shape == other._shape \
        and self.addressing == other.addressing
 

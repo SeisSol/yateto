@@ -382,3 +382,76 @@ class TestGroupedTemporaries:
         with pytest.raises(ValueError, match='"T_0" is used with two different kinds'):
             self.generate(tmp_path, lambda g: g.add('k', [
                 T[0]['ij'] <= A['ik'] * clash['kj'], C['ij'] <= T[0]['ij']]))
+
+
+class TestCostEstimatorPerTarget:
+    """Which estimator a kernel is reassociated with.
+
+    A machine that runs one contraction at a time and one that runs thousands
+    do not agree about which of two orderings is cheaper, so they need not be
+    given the same estimator.
+    """
+
+    @staticmethod
+    def _estimators():
+        """Two that disagree: one counts the box, one counts the shape."""
+        from yateto.ast.cost import BoundingBoxCostEstimator, ShapeCostEstimator
+
+        return BoundingBoxCostEstimator, ShapeCostEstimator
+
+    def test_one_estimator_covers_every_target(self):
+        from yateto.generator import costEstimatorFor
+
+        box, _ = self._estimators()
+
+        assert costEstimatorFor(box, 'cpu') is box
+        assert costEstimatorFor(box, 'gpu') is box
+
+    def test_a_mapping_covers_them_apart(self):
+        from yateto.generator import costEstimatorFor
+
+        box, shape = self._estimators()
+        given = {'cpu': box, 'gpu': shape}
+
+        assert costEstimatorFor(given, 'cpu') is box
+        assert costEstimatorFor(given, 'gpu') is shape
+
+    def test_a_target_left_out_of_a_mapping_is_refused(self):
+        from yateto.generator import costEstimatorFor
+
+        box, _ = self._estimators()
+
+        with pytest.raises(ValueError, match='gpu'):
+            costEstimatorFor({'cpu': box}, 'gpu')
+
+    def test_each_kernel_takes_the_one_for_its_own_target(self, tmp_path):
+        import numpy as np
+
+        from yateto import Generator, Tensor, useArchitectureIdentifiedBy
+        from yateto.ast.cost import BoundingBoxCostEstimator
+        from yateto.gemm_configuration import GeneratorCollection
+
+        arch = useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
+
+        seen = []
+
+        class Watching(BoundingBoxCostEstimator):
+            target = None
+
+            def __init__(self, *args, **kwargs):
+                seen.append(type(self).target)
+                super().__init__(*args, **kwargs)
+
+        forCpu = type('ForCpu', (Watching,), {'target': 'cpu'})
+        forGpu = type('ForGpu', (Watching,), {'target': 'gpu'})
+
+        A, B, C = (Tensor('A', (8, 8), np.eye(8)), Tensor('B', (8, 8)),
+                   Tensor('C', (8, 8)))
+        g = Generator(arch)
+        g.add('host', C['ij'] <= A['ik'] * B['kj'], target='cpu')
+        g.add('device', C['ij'] <= A['ik'] * B['kj'], target='gpu')
+        g.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]),
+                   cost_estimator={'cpu': forCpu, 'gpu': forGpu})
+
+        assert 'cpu' in seen
+        assert 'gpu' in seen

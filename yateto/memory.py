@@ -1,5 +1,6 @@
 from .ast.indices import BoundingBox, Range, Indices
 import copy
+import hashlib
 import itertools
 import warnings
 import numpy as np
@@ -8,9 +9,120 @@ from abc import ABC, abstractmethod
 from . import aspp
 import sys
 
+class PreparedImage(object):
+  """Numbers a generator prepared for itself, stored as they came.
+
+  Some arrangements are not a reordering of a tensor's numbers but a
+  different set of them: one element split across several scalars, for an
+  emulated precision or for the fragment layout a matrix instruction reads.
+  Where the split lies is the generator's arithmetic, not the tensor's, so
+  it computes the numbers and hands them over, and the pool stores what it
+  was given.
+
+  The element type stays the tensor's. An entry made from this is an array
+  like any other, only longer -- nothing has to be stored as bytes, and
+  nothing that reads the pool has to learn a second shape.
+
+  Nothing here is addressed by index from this side. Whoever asked for the
+  arrangement is the one that reads it, and it knows where it put things.
+  """
+
+  def __init__(self, images, parts=1, planar=False):
+    """``images`` maps a member's name to the numbers prepared for it.
+
+    One image per member, because the members of a family hold different
+    numbers; what they share is the shape of the preparation, and that is
+    what makes them one arrangement.
+
+    By name rather than by position, because the name is what both sides
+    already say: it is what the tensor was described under, so neither has to
+    work out the other's way of counting.
+    """
+    if not images:
+      raise ValueError('A prepared image has to carry numbers.')
+    if parts < 1:
+      raise ValueError('A prepared image is at least one scalar per element.')
+    lengths = {len(image) for image in images.values()}
+    if len(lengths) != 1:
+      raise ValueError('The members of one arrangement are prepared to one '
+                       'length; got {}.'.format(sorted(lengths)))
+    length = lengths.pop()
+    if length % parts != 0:
+      raise ValueError('{} numbers do not divide into {} parts.'.format(length, parts))
+    self._images = dict(images)
+    self._parts = parts
+    self._planar = planar
+    self._length = length
+
+  def parts(self):
+    return self._parts
+
+  def planar(self):
+    return self._planar
+
+  def requiredReals(self):
+    return self._length
+
+  def alignedStride(self):
+    """Nothing is promised about an image this side did not lay out."""
+    return False
+
+  def alignmentArch(self):
+    return None
+
+  def imageFor(self, *names):
+    """The numbers prepared for a member, under any of the names it goes by."""
+    for name in names:
+      if name in self._images:
+        return list(self._images[name])
+    raise ValueError('The arrangement carries no image for {}.'.format(
+      ' or '.join(str(name) for name in names)))
+
+  def identity(self):
+    """What makes this one arrangement rather than another.
+
+    Over the shape of the preparation and over the numbers. The shape alone
+    would name two preparations of one member alike that a generator filled
+    differently -- two kernels, or two variants of one, asking for different
+    numbers -- and the pool would then store one of them for both. The numbers
+    are those of every member this carries, so the members of a family that
+    were prepared together still name the same arrangement.
+    """
+    digest = hashlib.new('md5', usedforsecurity=False)
+    for name in sorted(self._images, key=str):
+      digest.update(str(name).encode())
+      digest.update(repr(list(self._images[name])).encode())
+    return ('prepared', self._length, self._parts, self._planar, digest.hexdigest())
+
+
 class MemoryLayout(ABC):
-  def __init__(self, shape):
+  #: Architecture a layout aligns against when it is not told one at
+  #: construction.
+  DEFAULT_ALIGNMENT_ARCH = None
+
+  @classmethod
+  def setAlignmentArch(cls, arch):
+    """Sets the architecture that layouts built without one align against.
+
+    Assigned on ``MemoryLayout`` and not on ``cls``, so that the default is
+    one value rather than one per subclass.
+    """
+    MemoryLayout.DEFAULT_ALIGNMENT_ARCH = arch
+
+  def __init__(self, shape, alignmentArch=None):
     self._shape = shape
+    self._alignmentArch = alignmentArch if alignmentArch is not None else MemoryLayout.DEFAULT_ALIGNMENT_ARCH
+
+  def alignmentArch(self):
+    """The architecture this layout's alignment is measured against.
+
+    Read once, when the layout is built, and kept: two layouts built against
+    different architectures describe two different arrangements of memory,
+    and both have to stay usable while the other exists. ``None`` where none
+    was available, in which case the layout promises no alignment and
+    answers every alignment question negatively.
+    """
+    return self._alignmentArch
 
   def shape(self):
     return self._shape
@@ -151,14 +263,8 @@ class MemoryLayout(ABC):
     return all(t <= b for t, b in zip(tile, shape))
 
 class DenseMemoryLayout(MemoryLayout):
-  ALIGNMENT_ARCH = None
-
-  @classmethod
-  def setAlignmentArch(cls, arch):
-    cls.ALIGNMENT_ARCH = arch
-
-  def __init__(self, shape, boundingBox=None, stride=None, alignStride=False):
-    super().__init__(shape)
+  def __init__(self, shape, boundingBox=None, stride=None, alignStride=False, alignmentArch=None):
+    super().__init__(shape, alignmentArch)
 
     if boundingBox:
       self._bbox = boundingBox
@@ -184,12 +290,12 @@ class DenseMemoryLayout(MemoryLayout):
     if len(self._bbox) == 0:
       # a tensor without axes has no column to line up
       return
-    if self.ALIGNMENT_ARCH is not None:
+    if self._alignmentArch is not None:
       self._range0 = self._bbox[0]
-      rnew = Range( self.ALIGNMENT_ARCH.alignedLower(self._range0.start), self.ALIGNMENT_ARCH.alignedUpper(self._range0.stop) )
+      rnew = Range( self._alignmentArch.alignedLower(self._range0.start), self._alignmentArch.alignedUpper(self._range0.stop) )
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
     else:
-      warnings.warn('Set architecture with DenseMemoryLayout.setAlignmentArch(arch) if you want to use the align stride feature.', UserWarning)
+      warnings.warn('An aligned stride needs an architecture to align against: pass alignmentArch, or set a default with MemoryLayout.setAlignmentArch(arch).', UserWarning)
 
   def alignedStride(self):
     """Whether the distance between two columns is a multiple of the alignment.
@@ -198,26 +304,26 @@ class DenseMemoryLayout(MemoryLayout):
     not a promise that happens to be false, it is the absence of one, and the
     answer is the same either way: nothing to rely on.
     """
-    if self.ALIGNMENT_ARCH is None or len(self._bbox) == 0:
+    if self._alignmentArch is None or len(self._bbox) == 0:
       return False
-    ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self.ALIGNMENT_ARCH.checkAlignment(self._stride[1]))
-    localOk = self.ALIGNMENT_ARCH.checkAlignment(self._bbox[0].stop - self._bbox[0].start)
+    ldOk = self._stride[0] == 1 and (len(self._stride) == 1 or self._alignmentArch.checkAlignment(self._stride[1]))
+    localOk = self._alignmentArch.checkAlignment(self._bbox[0].stop - self._bbox[0].start)
     return ldOk and localOk
 
   def mayVectorizeDim(self, dim):
-    if self.ALIGNMENT_ARCH is None or dim >= len(self._bbox):
+    if self._alignmentArch is None or dim >= len(self._bbox):
       return False
-    return self.ALIGNMENT_ARCH.checkAlignment(self._bbox[dim].size())
+    return self._alignmentArch.checkAlignment(self._bbox[dim].size())
 
   @classmethod
-  def fromSpp(cls, spp, alignStride=False, alignOffset=0):
+  def fromSpp(cls, spp, alignStride=False, alignOffset=0, alignmentArch=None):
     bbox = BoundingBox.fromSpp(spp)
     shape = tuple(spp.shape)
     if alignStride and alignOffset > 0:
       bbox = BoundingBox([Range(rng.start + alignOffset, rng.stop + alignOffset) if i == 0 else rng for i,rng in enumerate(bbox)])
       shape = tuple(alignOffset + x if i == 0 else x for i, x in enumerate(shape))
-      return cls(shape, bbox, alignStride=alignStride).subslice(0, alignOffset, shape[0])
-    return cls(shape, bbox, alignStride=alignStride)
+      return cls(shape, bbox, alignStride=alignStride, alignmentArch=alignmentArch).subslice(0, alignOffset, shape[0])
+    return cls(shape, bbox, alignStride=alignStride, alignmentArch=alignmentArch)
 
   def __contains__(self, entry):
     return entry in self._bbox
@@ -227,7 +333,39 @@ class DenseMemoryLayout(MemoryLayout):
 
     originalBB = BoundingBox([self._range0] + self._bbox[1:]) if self._range0 else self._bbox
     newBB = BoundingBox([copy.copy(originalBB[p]) for p in permutation])
-    return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None)
+    return DenseMemoryLayout(newShape, newBB, alignStride=self._range0 is not None, alignmentArch=self._alignmentArch)
+
+  def realigned(self, alignment):
+    """The same tensor, its stride aligned to a different width.
+
+    Rebuilt from the extent the tensor really occupies rather than from the
+    one it was widened to, so that a narrower width narrows: widening an
+    already widened box again would keep whatever the first width decided,
+    since one width is a multiple of the other.
+
+    A layout that aligns to nothing has nothing to realign, and says so by
+    returning itself.
+    """
+    if self._range0 is None:
+      return self
+    bbox = BoundingBox([self._range0] + [rng for rng in self._bbox[1:]])
+    return DenseMemoryLayout(self._shape, bbox, alignStride=True,
+                             alignmentArch=alignment)
+
+  def reordered(self, order):
+    """The same tensor, its axes laid out in the given order.
+
+    ``order`` lists the axes fastest first. The index space does not move --
+    an entry is still named the way the tensor names it -- only the address
+    it is given changes, so the values need no rearranging to be packed into
+    it and everything that reads by index goes on working.
+    """
+    if sorted(order) != list(range(len(self._shape))):
+      raise ValueError('{} is not an order of {} axes.'.format(order, len(self._shape)))
+    permuted = self.permuted(tuple(order))
+    stride = tuple(permuted.stridei(order.index(axis)) for axis in range(len(self._shape)))
+    return DenseMemoryLayout(self._shape, self.bbox(), stride,
+                             alignmentArch=self._alignmentArch)
 
   def address(self, entry):
     assert entry in self._bbox
@@ -260,8 +398,10 @@ class DenseMemoryLayout(MemoryLayout):
   def requiredReals(self):
     if len(self._bbox) == 0:
       return 1
-    size = self._bbox[-1].size() * self._stride[-1]
-    return size
+    # Over every axis rather than the last one: the axis that reaches
+    # furthest is the one with the largest extent-times-stride, and which
+    # axis that is depends on the order the layout puts them in.
+    return max(rng.size() * stride for rng, stride in zip(self._bbox, self._stride))
 
   def addressString(self, indices, I = None, Z = None, prefix='_', offsets=()):
     if len(self._bbox) == 0:
@@ -287,7 +427,7 @@ class DenseMemoryLayout(MemoryLayout):
       I = set(indices)
     positions = indices.positions(I)
     for p in positions:
-      if self.ALIGNMENT_ARCH.checkAlignment(self._stride[p]) == False:
+      if self._alignmentArch.checkAlignment(self._stride[p]) == False:
         return False
     return True
 
@@ -315,7 +455,7 @@ class DenseMemoryLayout(MemoryLayout):
     bbox = BoundingBox([self._subRange(positionsI)])
     stride = (self._firstStride(positionsI),)
 
-    return DenseMemoryLayout(shape, bbox, stride)
+    return DenseMemoryLayout(shape, bbox, stride, alignmentArch=self._alignmentArch)
 
   def withDummyDimension(self, front=False):
     if front:
@@ -328,7 +468,7 @@ class DenseMemoryLayout(MemoryLayout):
       shape = self._shape + (1,)
       bbox = BoundingBox(list(self._bbox) + [Range(0,1)])
       stride = self._stride + (self._bbox[-1].size() * self._stride[-1],)
-    return DenseMemoryLayout(shape, bbox, stride)
+    return DenseMemoryLayout(shape, bbox, stride, alignmentArch=self._alignmentArch)
 
   def unfold(self, indices, I, J, Z):
     positionsI = indices.positions(I)
@@ -342,7 +482,7 @@ class DenseMemoryLayout(MemoryLayout):
     bbox = BoundingBox([self._subRange(positionsI), self._subRange(positionsJ)])
     stride = (self._firstStride(positionsI), self._firstStride(positionsJ))
 
-    return DenseMemoryLayout(shape, bbox, stride)
+    return DenseMemoryLayout(shape, bbox, stride, alignmentArch=self._alignmentArch)
 
   def isCompatible(self, spp):
     return BoundingBox.fromSpp(spp) in self.bbox()
@@ -376,8 +516,8 @@ class DenseMemoryLayout(MemoryLayout):
     return True
 
 class CSCMemoryLayout(MemoryLayout):
-  def __init__(self, spp, alignStride=False):
-    super().__init__(spp.shape)
+  def __init__(self, spp, alignStride=False, alignmentArch=None):
+    super().__init__(spp.shape, alignmentArch)
 
     self.aligned = alignStride
     self._spp = spp
@@ -389,7 +529,7 @@ class CSCMemoryLayout(MemoryLayout):
     self._bbox = BoundingBox.fromSpp(spp)
     if self.aligned:
       range0 = self._bbox[0]
-      rnew = Range( DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(range0.start), DenseMemoryLayout.ALIGNMENT_ARCH.alignedUpper(range0.stop) )
+      rnew = Range( self._alignmentArch.alignedLower(range0.start), self._alignmentArch.alignedUpper(range0.stop) )
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
 
     nonzeros = spp.nonzero()
@@ -398,14 +538,14 @@ class CSCMemoryLayout(MemoryLayout):
     if self.aligned:
       nonzeros_pre = set(nonzeros)
       for nonzero in nonzeros:
-        lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
+        lower = self._alignmentArch.alignedLower(nonzero[0])
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
         # clamp against the *aligned* bounding box, not against the logical shape:
         # `self._bbox[0]` was rounded up to the next alignment boundary above, and every
         # consumer of an aligned layout relies on each aligned block being either full or
         # empty. Clamping to `self._shape[0]` truncates the last block whenever the row
         # count is not a multiple of the SIMD width.
-        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._bbox[0].stop)
+        upper = min(lower + self._alignmentArch.alignedReals, self._bbox[0].stop)
 
         for i in range(lower, upper):
           nonzeros_pre.add((np.int64(i), nonzero[1]))
@@ -523,7 +663,7 @@ class CSCMemoryLayout(MemoryLayout):
     return entry in self._bbox
 
   def isCompatible(self, spp):
-    comp = self.fromSpp(spp, alignStride=self.aligned)
+    comp = self.fromSpp(spp, alignStride=self.aligned, alignmentArch=self._alignmentArch)
 
     bboxOk = comp._bbox in self._bbox
     sppOk = set(comp.entries(comp._bbox[0], comp._bbox[1])).issubset(set(self.entries(comp._bbox[0], comp._bbox[1])))
@@ -557,8 +697,8 @@ class CSCMemoryLayout(MemoryLayout):
 
 
 class PatternMemoryLayout(MemoryLayout):
-  def __init__(self, spp, alignStride=False, pattern=None):
-    super().__init__(spp.shape if spp is not None else pattern.shape)
+  def __init__(self, spp, alignStride=False, pattern=None, alignmentArch=None):
+    super().__init__(spp.shape if spp is not None else pattern.shape, alignmentArch)
 
     if spp is None:
       spp = aspp.general(pattern != 0)
@@ -568,7 +708,7 @@ class PatternMemoryLayout(MemoryLayout):
     self._bbox = BoundingBox.fromSpp(spp)
     if alignStride:
       range0 = self._bbox[0]
-      rnew = Range( DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(range0.start), DenseMemoryLayout.ALIGNMENT_ARCH.alignedUpper(range0.stop) )
+      rnew = Range( self._alignmentArch.alignedLower(range0.start), self._alignmentArch.alignedUpper(range0.stop) )
       self._bbox = BoundingBox([rnew] + self._bbox[1:])
 
     nonzeros = spp.nonzero()
@@ -577,9 +717,9 @@ class PatternMemoryLayout(MemoryLayout):
     if alignStride:
       nonzeros_pre = set(nonzeros)
       for nonzero in nonzeros:
-        lower = DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(nonzero[0])
+        lower = self._alignmentArch.alignedLower(nonzero[0])
         # no alignedUpper call here: avoid reduction to a single element when on alignment boundaries
-        upper = min(lower + DenseMemoryLayout.ALIGNMENT_ARCH.alignedReals, self._bbox[0].stop)
+        upper = min(lower + self._alignmentArch.alignedReals, self._bbox[0].stop)
 
         for i in range(lower, upper):
           nonzeros_pre.add(tuple([np.int64(i)] + list(nonzero[1:])))
@@ -656,7 +796,7 @@ class PatternMemoryLayout(MemoryLayout):
     return entry in self._bbox
 
   def isCompatible(self, spp):
-    comp = self.fromSpp(spp, alignStride=self.aligned)
+    comp = self.fromSpp(spp, alignStride=self.aligned, alignmentArch=self._alignmentArch)
 
     bboxOk = comp._bbox in self._bbox
     sppOk = set(comp.entries(*comp._bbox)).issubset(set(self.entries(*comp._bbox)))
@@ -682,11 +822,11 @@ class PatternMemoryLayout(MemoryLayout):
     # the I-axes in the correct relative order; no transpose needed.
     pattern = self._pattern[tuple(selector)].flatten(order='F')
 
-    return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
+    return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern, alignmentArch=self._alignmentArch)
 
   def withDummyDimension(self, front=False):
     pattern = np.expand_dims(self._pattern, 0 if front else -1)
-    return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
+    return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern, alignmentArch=self._alignmentArch)
 
   def unfold(self, indices, I, J, Z):
     positionsI = indices.positions(I)
@@ -714,7 +854,7 @@ class PatternMemoryLayout(MemoryLayout):
 
     pattern = self._pattern.transpose(dimmap)[tuple(selector)].reshape((sizeI, sizeJ), order='F')
 
-    return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern)
+    return PatternMemoryLayout(None, alignStride=self.aligned, pattern=pattern, alignmentArch=self._alignmentArch)
 
   def addressString(self, indices, I = None, Z = None, prefix='_', offsets=()):
     # handled differently; via unrolling
@@ -767,13 +907,13 @@ class PatternMemoryLayout(MemoryLayout):
 
 class AlignedCSCMemoryLayout:
   @classmethod
-  def fromSpp(cls, spp, **kwargs):
-    return CSCMemoryLayout(spp, alignStride=True)
+  def fromSpp(cls, spp, alignmentArch=None, **kwargs):
+    return CSCMemoryLayout(spp, alignStride=True, alignmentArch=alignmentArch)
 
 class AlignedPatternMemoryLayout:
   @classmethod
-  def fromSpp(cls, spp, **kwargs):
-    return PatternMemoryLayout(spp, alignStride=True)
+  def fromSpp(cls, spp, alignmentArch=None, **kwargs):
+    return PatternMemoryLayout(spp, alignStride=True, alignmentArch=alignmentArch)
 
 class MemoryLayoutView(MemoryLayout):
   def isSparse(self):
@@ -783,7 +923,8 @@ class MemoryLayoutView(MemoryLayout):
     return self.base.sparsityBlockSize(dim)
 
   def __init__(self, base, index, start, end):
-    super().__init__([base._shape[i] if i != index else end - start for i in range(len(base.shape()))])
+    super().__init__([base._shape[i] if i != index else end - start for i in range(len(base.shape()))],
+                     base.alignmentArch())
     self.base = base
     self.index = index
     self.start = start
@@ -820,7 +961,7 @@ class MemoryLayoutView(MemoryLayout):
     return self.base.subtensorOffset(self.relidx(topLeftEntry))
 
   def alignedStride(self):
-    return self.base.alignedStride() and (self.index != 0 or DenseMemoryLayout.ALIGNMENT_ARCH.checkAlignment(self.end - self.start))
+    return self.base.alignedStride() and (self.index != 0 or self._alignmentArch.checkAlignment(self.end - self.start))
 
   def fromSpp(self):
     # cannot be implemented. Call should result in error.
@@ -955,7 +1096,7 @@ class MemoryLayoutView(MemoryLayout):
     val = self.base.alignmentOffset(dim)
     if self.index == dim:
       newval = val + self.start
-      val = newval - DenseMemoryLayout.ALIGNMENT_ARCH.alignedLower(newval)
+      val = newval - self._alignmentArch.alignedLower(newval)
     return val
 
   def equalStride(self, dim):

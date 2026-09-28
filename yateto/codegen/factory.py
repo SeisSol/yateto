@@ -38,11 +38,16 @@ def _indexedTensors(node):
 class KernelFactory(object):
   ERROR_NAME = '_error'
 
-  def __init__(self, cpp, arch, target, attrs=None):
+  def __init__(self, cpp, arch, target, attrs=None, dataCache=None):
     self._cpp = cpp
     self._arch = arch
     self._freeList = list()
     self._target = target
+    #: Registry for constant arrays this kernel needs in memory. A generator
+    #: that lays an operand out its own way announces the array here and
+    #: reads it back through the pool, instead of emitting it beside the
+    #: kernel where nothing could share or copy it.
+    self._dataCache = dataCache
     #: The attributes of the kernel being generated. Every generator that
     #: emits a call into an external kernel needs them, because the flags
     #: member such a call would name only exists when the kernel declares it.
@@ -150,6 +155,40 @@ class KernelFactory(object):
   def allocateTemporary(self):
     return True
 
+  def flopReport(self):
+    """The arithmetic this factory issued that it has not already counted.
+
+    Empty from a factory whose operations return their own count, which is
+    every one that works in the type the operation is written in. One that
+    emulates -- carrying a multiply out in a narrower precision, several
+    products to a product -- returns what it issued and in what kind, since
+    the count it would otherwise give would be in a currency of its own
+    without saying so.
+
+    Asked once the kernel is generated, for the same reason an offering is.
+    """
+    return {}
+
+  def layoutOfferings(self):
+    """How this factory wants the constants it reads to be arranged.
+
+    Empty from a factory that takes them as they come. One that generates
+    the reads itself may know better than the tensor does -- an order that
+    lets the loads be vectorised, say -- and says so here, by tensor name.
+
+    An offering is data: ``{'order': [axis, ...]}`` names the axes fastest
+    first, and nothing else is defined yet. Data rather than a layout,
+    because the one offering need not be in this process, and because what
+    it asks for has to be checked against what the tensor is before it is
+    granted.
+
+    Asked once the kernel is generated, because that is when the answer
+    exists. What comes back holds for this kernel alone: another kernel
+    reading the same matrix may read it another way, and the pool then holds
+    it both ways.
+    """
+    return {}
+
   def post_generate(self, routine_cache):
     pass
 
@@ -216,8 +255,8 @@ class KernelFactory(object):
           f'that is not.')
 
 class OptimizedKernelFactory(KernelFactory):
-  def __init__(self, cpp, arch, target, attrs=None):
-    super().__init__(cpp, arch, target, attrs)
+  def __init__(self, cpp, arch, target, attrs=None, dataCache=None):
+    super().__init__(cpp, arch, target, attrs, dataCache)
 
   def acceptsImmediate(self, method, node=None):
     """The element-wise generator, and the host GEMM where it can.
@@ -269,7 +308,7 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
 
   def create_FusedGEMMs(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
-    description = fused_gemms.Description(node, result, arguments, condition, add, scalar)
+    description = fused_gemms.Description(node, result, arguments, add, scalar)
     generator = fused_gemms.generator(self._arch, description, gemm_cfg, self._target,
                                       self._attrs)
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
@@ -644,8 +683,8 @@ class ExportFactory(KernelFactory):
 
   @classmethod
   def makeFactory(cls, generator):
-    return lambda cpp, arch, target, attrs=None: cls(
-      cls._makeExporter(generator, arch, attrs), cpp, arch, target, attrs)
+    return lambda cpp, arch, target, attrs=None, dataCache=None: cls(
+      cls._makeExporter(generator, arch, attrs), cpp, arch, target, attrs, dataCache)
 
   @staticmethod
   def _makeExporter(generator, arch, attrs):
@@ -686,12 +725,53 @@ class ExportFactory(KernelFactory):
 
     return exporter
 
-  def __init__(self, generator, cpp, arch, target, attrs=None):
-    super().__init__(cpp, arch, target, attrs)
+  def __init__(self, generator, cpp, arch, target, attrs=None, dataCache=None):
+    super().__init__(cpp, arch, target, attrs, dataCache)
     self.generator = generator
     self.tensors = {}
     self.operations = []
     self.scalarcounter = 0
+
+  def flopReport(self):
+    """What the exporter says it issued, where it says anything.
+
+    Optional on its side and outside the interface version, as an offering
+    is: an exporter that says nothing is one whose arithmetic yateto could
+    not have counted anyway, and zero is what it reported before there was
+    anywhere to say otherwise.
+    """
+    report = getattr(self.generator, 'flop_report', None)
+    if report is None:
+      return {}
+    counts = report()
+    if not counts:
+      return {}
+    if not isinstance(counts, dict):
+      raise TypeError('{}.flop_report() must map a kind of arithmetic to a '
+                      'count; got {}.'.format(type(self.generator).__name__,
+                                              type(counts).__name__))
+    return counts
+
+  def layoutOfferings(self):
+    """What the exporter asks for, where it asks for anything.
+
+    Optional on the exporter's side, and deliberately not part of the
+    interface version: one that does not offer gets the arrangement the
+    tensor gives itself, which is what every exporter got before there was
+    anywhere to say otherwise. A missing answer is therefore not a dropped
+    field but no request, and that degrades to the right thing.
+    """
+    offer = getattr(self.generator, 'layout_offerings', None)
+    if offer is None:
+      return {}
+    offerings = offer()
+    if not offerings:
+      return {}
+    if not isinstance(offerings, dict):
+      raise TypeError('{}.layout_offerings() must map a tensor name to an '
+                      'offering; got {}.'.format(type(self.generator).__name__,
+                                                 type(offerings).__name__))
+    return offerings
 
   def post_generate(self, routine_cache):
     self.generator.add_kernel({
@@ -874,15 +954,24 @@ class ExportFactory(KernelFactory):
     """
     return [int(value) for value in values]
 
-  def _alignment(self, memoryLayout):
+  @staticmethod
+  def _alignment(memoryLayout):
     """The alignment the layout promises for a column, in bytes.
+
+    Read from the layout and not from the architecture this run was
+    configured with, because they need not be the same one: a tensor laid out
+    for one target and described while generating for another would otherwise
+    be handed a promise nothing had made.
 
     A tensor without axes has no column and promises nothing; asking the
     layout would read a bounding box that has no first dimension.
     """
     if len(memoryLayout.shape()) == 0:
       return 0
-    return self._arch.alignment if memoryLayout.alignedStride() else 0
+    arch = memoryLayout.alignmentArch()
+    if arch is None or not memoryLayout.alignedStride():
+      return 0
+    return arch.alignment
 
   @staticmethod
   def _logicalBox(tensorIndexed):

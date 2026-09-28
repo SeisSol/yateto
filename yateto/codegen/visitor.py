@@ -1,16 +1,20 @@
 import collections
 import contextlib
+import hashlib
 import operator
+import re
 from functools import reduce
 from io import StringIO
-from ..memory import DenseMemoryLayout
+from ..memory import DenseMemoryLayout, PreparedImage
 from .. import aspp
 from ..controlflow.visitor import DerivedScalarsList, ScalarsSet, SortedGlobalsList, SortedPrefetchList
 from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
+from .arrangement import Arrangement, layoutTag
 from .code import Cpp
 from .factory import *
+from .flops import FlopCount
 from .common import BatchedOperationsAux, KernelAttributes
 from ..type import Scalar, Tensor, Datatype
 
@@ -108,7 +112,7 @@ class KernelGenerator(object):
       cpp(f'{datatype.ctype()} const {scalar.name()} = {scalar.expression.ccode(self._arch)};')
 
   def generate(self, cpp, cfg, factory,  routineCache, gemm_cfg):
-    hwFlops = 0
+    hwFlops = FlopCount()
     # temporary memory required (per element in case of gpu)
     # NOTE: it is required to know in case if the memory is allocated on the heap
     #       an provided by the user
@@ -158,9 +162,24 @@ class OptimizedKernelGenerator(KernelGenerator):
   BIND_GLOBALS_ARGUMENT = 'pool'
 
 
-  def __init__(self, arch, routineCache, routine_exporters, namespace=''):
+  def __init__(self, arch, routineCache, dataCache, routine_exporters, namespace='',
+               families=None):
     super().__init__(arch)
     self._routineCache = routineCache
+    #: Reachable while the kernels are written out, and not only afterwards,
+    #: so that a generator deciding how it wants an operand laid out can put
+    #: that arrangement into the pool at the moment it decides.
+    self._dataCache = dataCache
+    #: Which members each tensor family has, so that a kernel reading one of
+    #: them can still speak about the whole of it. A family is handed out as
+    #: one table of pointers, so what it is asked about is how all of it is
+    #: held, not the part this kernel happens to touch.
+    self._families = families or {}
+    #: Every arrangement a kernel was generated against, per family. The pool
+    #: is filled from this rather than from the tensors alone: an arrangement
+    #: nobody reads need not be stored, and one that two kernels disagree
+    #: about has to be stored twice.
+    self._arrangements = collections.OrderedDict()
     self._routine_exporters = routine_exporters
     self._poolType = '::{}{}'.format('{}::'.format(namespace) if namespace else '',
                                      PoolGenerator.POOL_STRUCT_NAME)
@@ -188,9 +207,12 @@ class OptimizedKernelGenerator(KernelGenerator):
                  tmp_mem_size,
                  is_compute_constant_tensors,
                  datatype,
+                 layouts,
                  target,
                  attrs,
-                 inMemory=None):
+                 inMemory=None,
+                 reads=None,
+                 offered=None):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
@@ -205,11 +227,23 @@ class OptimizedKernelGenerator(KernelGenerator):
       self.tmp_mem_size = tmp_mem_size
       self.is_compute_constant_tensors = is_compute_constant_tensors
       self.datatype = datatype
+      #: The arrangement each operand's family is generated against. Which
+      #: entry in the pool a kernel reads follows from it, so it has to be
+      #: known here, where the kernel is written, and not only where the pool
+      #: is filled.
+      self.layouts = layouts
       self.target = target
       self.attrs = attrs
       #: Immediate operands this kernel reads from memory, by name, with the
       #: operations that could not take them as they are addressed.
       self.inMemory = inMemory if inMemory is not None else {}
+      #: Per family, the groups this kernel reads. What the arrangement says
+      #: about the others is the family's own layout, not a claim of this
+      #: kernel's, which is what lets its variants be put together.
+      self.reads = reads if reads is not None else {}
+      #: Per family, the members this kernel reads in an arrangement its
+      #: generator asked for, which only the pool holds.
+      self.offered = offered if offered is not None else {}
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -233,6 +267,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     is_compute_constant_tensors = dict()
     scalars = collections.OrderedDict()
     datatype = dict()
+    members = dict()
 
     inConstTensors = {}
     inTensors = {}
@@ -244,7 +279,8 @@ class OptimizedKernelGenerator(KernelGenerator):
     function = ''
     with Cpp(functionIO) as fcpp:
       attrs = attrs if attrs is not None else KernelAttributes()
-      factory = self._routine_factories[target](fcpp, self._arch, target, attrs)
+      factory = self._routine_factories[target](fcpp, self._arch, target, attrs,
+                                                self._dataCache)
       hwFlops, tmp_memory = super().generate(fcpp, cfg, factory, self._routineCache, gemm_cfg)
       factory.post_generate(self._routineCache)
       factory.freeTmp()
@@ -284,6 +320,11 @@ class OptimizedKernelGenerator(KernelGenerator):
 
       is_compute_constant_tensors[bn] = var.tensor.is_compute_constant()
 
+      # Noted per member. The family is what is arranged, so the layouts are
+      # put together into one once every operand has been seen.
+      members.setdefault(bn, collections.OrderedDict())[var.tensor.group()] = \
+        var.tensor.memoryLayout()
+
       nm = var.tensor.nameWithNamespace()
 
       size = var.tensor.memoryLayout().storage().requiredReals() * self._arch.bytesPerReal
@@ -299,10 +340,62 @@ class OptimizedKernelGenerator(KernelGenerator):
     inBytes = sum(size for size in inTensors.values())
     outBytes = sum(size for size in outTensors.values())
 
+    # Over the whole family where the family is known, so that two kernels
+    # reading different members of it still name the same arrangement of it.
+    # A member this kernel never reads is in the table it is handed all the
+    # same, and a family of tensors laid out differently is that family held
+    # one way rather than two arrangements in conflict.
+    layouts = {baseName: Arrangement.of(self._families[baseName])
+               if baseName in self._families else Arrangement(byGroup)
+               for baseName, byGroup in members.items()}
+
     prefetchTensors = SortedPrefetchList().visit(cfg)
     prefetch = collections.OrderedDict()
     for tensor in prefetchTensors:
       self.KernelOutline._addTensor(tensor, prefetch)
+
+    # Counted by whoever issued it: a generator working in a precision other
+    # than the operation's is the only one that can say what it issued, and
+    # in what.
+    hwFlops = hwFlops + FlopCount(factory.flopReport())
+
+    # Asked once the kernel is built, because only then does the generator
+    # know how it wants to read what it reads, and once the operands are
+    # known, because that is what an offering is checked against. Constants
+    # only: an operand the caller fills in is arranged by whoever fills it.
+    # The description names a tensor as the kernel does, without its
+    # namespace, and an offering answers in those names.
+    described = collections.defaultdict(set)
+    offeredMembers = collections.defaultdict(set)
+    for bn in members:
+      described[Tensor.splitBasename(bn)[1]].add(bn)
+    for offeredName, offered in factory.layoutOfferings().items():
+      # Offered under whatever name the tensor was described by, so a member
+      # of a family names that member, and only that member is rearranged.
+      named = Tensor.isValidName(offeredName)
+      baseName = Tensor.getBaseName(offeredName) if named else offeredName
+      group = Tensor.getGroup(offeredName) if named else tuple()
+      if baseName not in layouts:
+        candidates = described.get(baseName, set())
+        if len(candidates) > 1:
+          raise ValueError('{} offered an arrangement for {}, which this kernel reads '
+                           'from more than one namespace ({}).'.format(
+                             type(factory).__name__, offeredName, ', '.join(sorted(candidates))))
+        if candidates:
+          baseName = next(iter(candidates))
+      if baseName not in layouts:
+        raise ValueError('{} offered an arrangement for {}, which it does not '
+                         'read.'.format(type(factory).__name__, baseName))
+      if not is_compute_constant_tensors[baseName] or writable[baseName]:
+        raise ValueError('{} offered an arrangement for {}, which is not a '
+                         'constant it only reads.'.format(type(factory).__name__, baseName))
+      layout = layouts[baseName].layoutOf(group)
+      if layout is None:
+        raise ValueError('{} offered an arrangement for {}, which it does not '
+                         'read.'.format(type(factory).__name__, offeredName))
+      layouts[baseName] = layouts[baseName].withMember(
+        group, self._grantOffering(offeredName, layout, offered))
+      offeredMembers[baseName].add(group)
 
     return self.KernelOutline(nonZeroFlops,
                               hwFlops,
@@ -317,9 +410,50 @@ class OptimizedKernelGenerator(KernelGenerator):
                               tmp_memory,
                               is_compute_constant_tensors,
                               datatype,
+                              layouts,
                               target,
                               attrs,
-                              inMemory)
+                              inMemory,
+                              {baseName: frozenset(byGroup) for baseName, byGroup in members.items()},
+                              {baseName: frozenset(groups) for baseName, groups in offeredMembers.items()})
+
+  def arrangements(self):
+    """Per tensor, the arrangements the kernels actually read it in."""
+    return self._arrangements
+
+  @staticmethod
+  def _grantOffering(baseName, layout, offering):
+    """The arrangement an offering asks for, checked against the tensor.
+
+    An offering names what it wants, not how to get it: the layout is built
+    here, from the one the tensor already has, so that what comes back is
+    something this yateto can address and pack. A field it does not know is
+    refused by name rather than ignored, because an arrangement granted in
+    part is an arrangement nobody asked for.
+    """
+    unknown = set(offering) - {'order', 'data', 'parts', 'planar'}
+    if unknown:
+      raise ValueError('Offering for {} asks for {}, which this yateto cannot '
+                       'grant.'.format(baseName, ', '.join(sorted(unknown))))
+    order = offering.get('order')
+    data = offering.get('data')
+    if data is not None:
+      if order is not None:
+        raise ValueError('Offering for {} asks both for an order and for numbers '
+                         'of its own; the numbers already carry one.'.format(baseName))
+      images = data if isinstance(data, dict) else {baseName: data}
+      return PreparedImage(images,
+                           parts=int(offering.get('parts', 1)),
+                           planar=bool(offering.get('planar', False)))
+    if offering.get('parts', 1) != 1 or offering.get('planar', False):
+      raise ValueError('Offering for {} asks for a prepared shape without the '
+                       'numbers to fill it.'.format(baseName))
+    if order is None:
+      return layout
+    if not hasattr(layout, 'reordered'):
+      raise ValueError('Offering for {} asks for an axis order, which a {} '
+                       'cannot be given.'.format(baseName, type(layout).__name__))
+    return layout.reordered(list(order))
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -342,7 +476,13 @@ class OptimizedKernelGenerator(KernelGenerator):
     scalars = collections.OrderedDict()
     is_compute_constant_tensors = dict()
     datatype = dict()
-    for ko in kernelOutlines:
+    #: Per family, the arrangements the variants read it in, each with the
+    #: members read that way and the variant that read each first. One, as a
+    #: rule; the first is bound to the member named after the family.
+    bindings = dict()
+    #: Per variant, which of those arrangements it reads each family in.
+    positions = collections.defaultdict(dict)
+    for index, ko in enumerate(kernelOutlines):
       if ko:
         self._addFromKO(ko.scalars, scalars)
         self._addFromKO(ko.tensors, tensors)
@@ -350,6 +490,101 @@ class OptimizedKernelGenerator(KernelGenerator):
         self._addFromKO(ko.prefetch, prefetch)
         self._addFromKO(ko.is_compute_constant_tensors, is_compute_constant_tensors)
         self._addFromKO(ko.datatype, datatype)
+        # The variants of one kernel share its members, so a constant is bound
+        # in one arrangement for all of them wherever that is possible. Each
+        # variant speaks only for the members it reads -- one reading
+        # plusFluxMatrices(0) rearranged and another plusFluxMatrices(1) is one
+        # arrangement with both rearranged. Two that read one member
+        # differently cannot share it, and the one that disagrees with every
+        # arrangement so far gets one of its own, bound to a member of its own.
+        for baseName, arrangement in ko.layouts.items():
+          constant = is_compute_constant_tensors.get(baseName) and not writable.get(baseName)
+          reads = ko.reads.get(baseName, ())
+          if baseName not in bindings or not constant:
+            bindings[baseName] = [(arrangement, {group: index for group in reads})]
+            for which in positions.values():
+              which.pop(baseName, None)
+            positions[index][baseName] = 0
+            continue
+          held = bindings[baseName]
+          for position, (merged, readers) in enumerate(held):
+            if all(group not in readers
+                   or layoutTag(merged.layoutOf(group)) == layoutTag(arrangement.layoutOf(group))
+                   for group in reads):
+              break
+          else:
+            position = len(held)
+            held.append((arrangement, {group: index for group in reads}))
+          merged, readers = held[position]
+          for group in reads:
+            if group not in readers:
+              merged = merged.withMember(group, arrangement.layoutOf(group))
+              readers[group] = index
+          held[position] = (merged, readers)
+          positions[index][baseName] = position
+
+    #: Whether bindGlobals binds the family, for the kernel as a whole.
+    isBound = lambda baseName: is_compute_constant_tensors.get(baseName) and not writable.get(baseName)
+
+    # Only bindGlobals can hand a variant an arrangement its generator asked
+    # for, and it binds constants only. A family another variant writes, or
+    # one that is not a constant for the kernel as a whole, is filled by the
+    # caller as it lays itself out -- which is not what that variant reads.
+    for index, ko in enumerate(kernelOutlines):
+      if ko:
+        for baseName, groups in ko.offered.items():
+          if groups and not isBound(baseName):
+            raise ValueError(
+              'Variant {} of {} reads {} in an arrangement its generator asked for, '
+              'but the kernel does not bind {} from the pool: another variant writes '
+              'it, or it is not a constant for all of them.'.format(
+                index, name, baseName, Tensor.splitBasename(baseName)[1]))
+
+    # The member named after the family keeps the family's own arrangement
+    # wherever some variant reads it that way, so that it means what
+    # init::X::Values means to whoever fills it by hand; the arrangements a
+    # generator asked for are the ones that get members of their own.
+    for baseName, held in bindings.items():
+      if len(held) < 2 or baseName not in self._families:
+        continue
+      own = Arrangement.of(self._families[baseName]).tag()
+      first = next((position for position, (arrangement, _) in enumerate(held)
+                    if arrangement.tag() == own), 0)
+      if first:
+        order = [first] + [position for position in range(len(held)) if position != first]
+        bindings[baseName] = [held[position] for position in order]
+        for which in positions.values():
+          if baseName in which:
+            which[baseName] = order.index(which[baseName])
+
+    #: Per variant, the families it reads in an arrangement other than the
+    #: first, and which one.
+    alternates = collections.defaultdict(collections.OrderedDict)
+    for index, which in positions.items():
+      for baseName, position in which.items():
+        if position > 0 and isBound(baseName):
+          alternates[index][baseName] = position
+
+    # Recorded once the variants are put together, so that the pool holds what
+    # the kernel reads and not what one variant of it was going to read on the
+    # way there.
+    for baseName, held in bindings.items():
+      for arrangement, _ in held:
+        self._arrangements.setdefault(baseName, collections.OrderedDict())[
+          arrangement.tag()] = arrangement
+
+    # The member a further arrangement is bound to. Named after the pool entry
+    # it points at, so that the two can be found from one another.
+    def alternateName(baseName, position):
+      _, memberName = Tensor.splitBasename(baseName)
+      return '{}_{}'.format(memberName, bindings[baseName][position][0].tag())
+    taken = {Tensor.splitBasename(baseName)[1] for baseName in list(tensors) + list(scalars)}
+    for baseName, held in bindings.items():
+      for position in range(1, len(held)):
+        if alternateName(baseName, position) in taken:
+          raise ValueError('{} needs a member {} for the variants that read it laid out '
+                           'differently, and a tensor of that name is already one.'.format(
+                             name, alternateName(baseName, position)))
 
     target = kernelOutlines[-1].target
     is_same_target = True
@@ -390,6 +625,20 @@ class OptimizedKernelGenerator(KernelGenerator):
           ))
 
         addConst(self.NONZEROFLOPS_NAME, lambda ko: ko.nonZeroFlops)
+        # What the total is made of, where it is made of more than one kind of
+        # arithmetic. Said here rather than summed silently: a kernel that
+        # reaches its result in a narrower precision issues a count in a
+        # currency of its own, and dividing it by one peak gives a figure that
+        # means nothing.
+        for index, ko in enumerate(kernelOutlines):
+          counted = FlopCount(ko.hwFlops) if ko is not None else FlopCount()
+          if counted.isPlain():
+            continue
+          header('// {}{}: {}'.format(
+            self.HARDWAREFLOPS_NAME,
+            '[{}]'.format(index) if brackets else '',
+            ', '.join('{} {}'.format(count, kind)
+                      for kind, count in counted.kinds().items())))
         addConst(self.HARDWAREFLOPS_NAME, lambda ko: ko.hwFlops)
         addConst(self.INBOUND_CONST_BYTES_NAME, lambda ko: ko.inConstBytes)
         addConst(self.INBOUND_BYTES_NAME, lambda ko: ko.inBytes)
@@ -416,8 +665,10 @@ class OptimizedKernelGenerator(KernelGenerator):
 
         header.emptyline()
 
-        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, datatype, target):
+        def kernelArgs(base_name_with_namespace, groups, writable, is_constant, datatype, target,
+                       member=None):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+          member = member if member is not None else base_name
           typ = datatype.ctype()
           ptr_type = '**' if not is_constant and target == 'gpu' else '*'
           if not writable:
@@ -425,9 +676,9 @@ class OptimizedKernelGenerator(KernelGenerator):
           if len(next(iter(groups))) > 0:
             class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
             container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}{ptr_type}>'
-            header(f'{class_name}::{container_type} {base_name};')
+            header(f'{class_name}::{container_type} {member};')
           else:
-            header(f'{typ}{ptr_type} {base_name}{"{"}nullptr{"}"};')
+            header(f'{typ}{ptr_type} {member}{"{"}nullptr{"}"};')
 
         def scalarArgs(base_name_with_namespace, datatype, groups):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
@@ -443,7 +694,22 @@ class OptimizedKernelGenerator(KernelGenerator):
           scalarArgs(baseName,
                      datatype[baseName],
                      groups)
+        # Which variants read a constant in which of its arrangements, where
+        # they do not all read it in one.
+        def readersOf(baseName, position):
+          return [index for index, ko in enumerate(kernelOutlines)
+                  if ko and baseName in ko.layouts
+                  and alternates.get(index, {}).get(baseName, 0) == position]
+
+        def variantList(indices):
+          return 'variant{} {}'.format('s' if len(indices) > 1 else '', ', '.join(map(str, indices)))
+
         for baseName, groups in tensors.items():
+          if isBound(baseName) and len(bindings[baseName]) > 1:
+            header('//! {} as {} read{} it; the others read the members further down.'.format(
+              Tensor.splitBasename(baseName)[1],
+              variantList(readersOf(baseName, 0)),
+              '' if len(readersOf(baseName, 0)) > 1 else 's'))
           kernelArgs(baseName,
                      groups,
                      writable[baseName],
@@ -457,6 +723,28 @@ class OptimizedKernelGenerator(KernelGenerator):
         # is a pointer to mutable memory and the pool hands out const.
         constants = [baseName for baseName in tensors
                      if is_compute_constant_tensors[baseName] and not writable[baseName]]
+
+        # A constant that variants read laid out differently, once more for
+        # each further arrangement. Only bindGlobals fills these: a variant
+        # reading one of them reads it in place of the member named after the
+        # family, so assigning that member by hand does not reach it.
+        for baseName in constants:
+          for position in range(1, len(bindings[baseName])):
+            readBy = readersOf(baseName, position)
+            header('//! {} as {} read{} it; bound by {} only.'.format(
+              Tensor.splitBasename(baseName)[1],
+              variantList(readBy),
+              '' if len(readBy) > 1 else 's',
+              self.BIND_GLOBALS_NAME))
+            kernelArgs(baseName,
+                       tensors[baseName],
+                       writable[baseName],
+                       is_compute_constant_tensors[baseName],
+                       datatype[baseName],
+                       target,
+                       member=alternateName(baseName, position))
+        if any(len(bindings[baseName]) > 1 for baseName in constants):
+          header.emptyline()
         # Emitted even when there is nothing to bind, so that "bind the globals
         # of every kernel" is a rule a caller can follow without knowing which
         # operands a kernel happens to have. The failure modes are not
@@ -471,9 +759,10 @@ class OptimizedKernelGenerator(KernelGenerator):
             header('static_cast<void>({});'.format(self.BIND_GLOBALS_ARGUMENT))
           for baseName in constants:
             _, memberName = Tensor.splitBasename(baseName)
-            header('{} = {}.{};'.format(memberName,
-                                        self.BIND_GLOBALS_ARGUMENT,
-                                        PoolGenerator.memberName(baseName)))
+            for position, (arrangement, _) in enumerate(bindings[baseName]):
+              header('{} = {}.{};'.format(alternateName(baseName, position) if position else memberName,
+                                          self.BIND_GLOBALS_ARGUMENT,
+                                          PoolGenerator.memberName(baseName, arrangement)))
         header.emptyline()
 
         # containers with extra offsets for GPU-like computations
@@ -557,6 +846,35 @@ class OptimizedKernelGenerator(KernelGenerator):
         continue
 
       with cpp.Function('{}::{}::{}'.format(self.NAMESPACE, name, executeName(index))):
+        # This variant reads these constants laid out differently than the
+        # member named after them holds them, so it reads them from the member
+        # bound to its own arrangement -- under the name its code already
+        # uses, which is why the declaration shadows the member on purpose.
+        aliases = [(baseName, position) for baseName, position in alternates.get(index, {}).items()
+                   if baseName in constants]
+        if aliases:
+          cpp('#if defined(__GNUC__)')
+          cpp('#pragma GCC diagnostic push')
+          cpp('#pragma GCC diagnostic ignored "-Wshadow"')
+          cpp('#endif')
+          for baseName, position in aliases:
+            memberName = Tensor.splitBasename(baseName)[1]
+            alternate = alternateName(baseName, position)
+            family = self._families.get(baseName, {})
+            withValues = [group for group, tensor in family.items() if tensor.values() is not None]
+            if len(withValues) < len(family):
+              # The pool holds nothing for a member without values, so the
+              # caller fills that one in, and in the member named after the
+              # family: this variant takes it from there and the rest from
+              # its own arrangement.
+              cpp('[[maybe_unused]] auto {0} = this->{0};'.format(memberName))
+              for group in withValues:
+                cpp('{0}({1}) = this->{2}({1});'.format(memberName, ','.join(map(str, group)), alternate))
+            else:
+              cpp('[[maybe_unused]] auto const& {} = this->{};'.format(memberName, alternate))
+          cpp('#if defined(__GNUC__)')
+          cpp('#pragma GCC diagnostic pop')
+          cpp('#endif')
         for base_name_with_namespace, groups in kernelOutline.scalars.items():
           base_name = Tensor.splitBasename(base_name_with_namespace)[-1]
           if len(next(iter(groups))) > 0:
@@ -758,7 +1076,6 @@ class UnitTestGenerator(KernelGenerator):
 
     scalars = ScalarsSet().visit(cfg)
     variables = SortedGlobalsList().visit(cfg)
-    bindPool = any(not var.tensor.isPassedAsArgument() for var in variables)
     # A by-value operand is a scalar wherever it turns up, as it is in the
     # kernel's signature: the kernel takes its value, and there is no buffer,
     # no init view and no device copy of it. The reference reads it through a
@@ -770,6 +1087,14 @@ class UnitTestGenerator(KernelGenerator):
       scalars.setdefault(var.tensor.name(), var.tensor)
     scalars = sorted(scalars.values(), key=str)
     conditions = self._conditionVariables(cfg)
+    # A constant the kernel binds is read in the arrangement it was generated
+    # against, which need not be the tensor's own, and only the pool holds it
+    # that way. A condition is not one of them even where it carries values:
+    # the test runs every case of it, and the kernel has to see each.
+    guards = {str(var) for var in conditions}
+    pooled = lambda var: (var.tensor.is_compute_constant() and not var.writable
+                          and str(var) not in guards)
+    bindPool = any(not var.tensor.isPassedAsArgument() or pooled(var) for var in variables)
     kernel_prefix = '{}::'.format(namespace) if namespace else ''
     with cpp.Function(**testFramework.functionArgs(testName)):
       # A guarded kernel is several kernels: which statements run depends on
@@ -841,26 +1166,36 @@ class UnitTestGenerator(KernelGenerator):
          cpp.emptyline()
 
        cpp( '{}{}::{} {};'.format(kernel_prefix, OptimizedKernelGenerator.NAMESPACE, kernelClass, self.KERNEL_VAR) )
-       if bindPool:
-         # A generator that cannot write an immediate operand into its code
-         # reads it from the pool instead, and which ones do is decided when
-         # the kernel is generated -- after this test was. Binding the pool
-         # first covers them whichever they are; the members assigned below
-         # then point the rest at the test's own buffers, as they always do.
-         pool = (f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.CREATE_FUN_NAME}({self.DEV_POOL_MEM})'
-                 if device_test else
-                 f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.HOST_FUN_NAME}()')
-         cpp(f'{self.KERNEL_VAR}.{OptimizedKernelGenerator.BIND_GLOBALS_NAME}({pool});')
        for var in scalars:
          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.baseName(), self._groupIndex(var), self._tensorNameS(var)) )
-       for var in variables:
+       # Constants first, then the pool, then everything else. Which
+       # arrangement of a constant the kernel reads, and whether a generator
+       # that cannot write an immediate operand into its code reads it from
+       # memory after all, are decided when the kernel is generated -- after
+       # this test was. The test's buffer holds a constant as the tensor lays
+       # itself out and the pool as the kernel reads it, so the pool has the
+       # last word on the constants it binds; the buffer stays for those it
+       # does not. bindGlobals hands out a family whole, and the pool holds
+       # nothing for a member without values, so those members come after it.
+       def assign(var):
          if not var.tensor.isPassedAsArgument():
            # The kernel has no member for it. The buffer above stays: the
            # reference implementation reads the tensor from memory, the
            # kernel spells it out, and the comparison between the two is
            # exactly what this test is for.
-           continue
+           return
          cpp( '{}.{}{} = {};'.format(self.KERNEL_VAR, var.tensor.baseName(), self._groupIndex(var.tensor), kernelTensorName(var)) )
+       for var in variables:
+         if pooled(var):
+           assign(var)
+       if bindPool:
+         pool = (f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.CREATE_FUN_NAME}({self.DEV_POOL_MEM})'
+                 if device_test else
+                 f'{PoolGenerator.POOL_STRUCT_NAME}::{PoolGenerator.HOST_FUN_NAME}()')
+         cpp(f'{self.KERNEL_VAR}.{OptimizedKernelGenerator.BIND_GLOBALS_NAME}({pool});')
+       for var in variables:
+         if not pooled(var):
+           assign(var)
 
        if device_test:
          cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
@@ -912,12 +1247,81 @@ class UnitTestGenerator(KernelGenerator):
 
        factory.freeTmp()
 
+class ViewArrayPool(object):
+  """The index arrays the views need, each spelled once.
+
+  Tensors that share a sparsity pattern need the same row indices, and
+  tensors of the same shape the same bounds. One array per tensor repeats
+  them; naming them by content spells each once and lets the tensors refer to
+  it. They stay constant expressions on both sides of that, which is what
+  lets a lookup with constant indices fold to a single address instead of a
+  search through the pattern.
+
+  Named after the text that gets emitted, the way the constant pool is: two
+  arrays are the same array exactly when the generated source cannot tell
+  them apart.
+  """
+
+  STRUCT_NAME = 'viewdata'
+  NAME_SUFFIX_LENGTH = 8
+
+  def __init__(self):
+    self._arrays = collections.OrderedDict()
+    self._names = dict()
+
+  def intern(self, numberType, values, hint='array'):
+    """Registers one array; reports the symbol it is spelled under and its length."""
+    text = ViewArrayPool._text(values)
+    key = hashlib.sha256('{}|{}'.format(numberType, text).encode('utf-8')).hexdigest()
+    known = self._arrays.get(key)
+    if known is None:
+      known = (self._takeName(hint, key), numberType, text, ViewArrayPool._length(values))
+      self._arrays[key] = known
+    return known[0], known[3]
+
+  def generate(self, cpp):
+    if not self._arrays:
+      return
+    with cpp.Struct(self.STRUCT_NAME):
+      for name, numberType, text, length in self._arrays.values():
+        cpp('{} {} {}[{}] = {};'.format(DATA_MODIFIERS, numberType, name, length, text))
+    cpp.emptyline()
+
+  def __len__(self):
+    return len(self._arrays)
+
+  @staticmethod
+  def _text(values):
+    if isinstance(values, np.ndarray):
+      values = values.flatten(order='K')
+    return '{{{}}}'.format(', '.join([str(v) for v in values]))
+
+  @staticmethod
+  def _length(values):
+    if isinstance(values, np.ndarray):
+      return values.size
+    return len(values)
+
+  def _takeName(self, hint, key):
+    stem = re.sub(r'\W', '_', hint)
+    length = self.NAME_SUFFIX_LENGTH
+    while True:
+      name = '{}_{}'.format(stem, key[:length])
+      if self._names.get(name, key) == key:
+        self._names[name] = key
+        return name
+      length += self.NAME_SUFFIX_LENGTH
+      if length > len(key):
+        raise RuntimeError('Could not find a unique symbol for the view array {}.'.format(hint))
+
+
 class InitializerGenerator(object):
   SHAPE_NAME = 'Shape'
   SIZE_NAME = 'Size'
   SIZE_FUN_NAME = 'size'
   INDEX_FUN_NAME = 'index'
   VALUES_BASENAME = 'Values'
+  POOL_MEMBER_NAME = 'PoolMember'
   CONTAINER_CLASS_NAME = 'Container'
   CONTAINER_DATA_NAME = 'data'
   TENSOR_NAMESPACE = 'tensor'
@@ -936,8 +1340,9 @@ class InitializerGenerator(object):
     #: CUDA translation unit including init.h, called or not.
     DEVICE_CALLABLE = True
 
-    def __init__(self, datatype):
+    def __init__(self, datatype, arrayPool=None):
       self._datatype = datatype
+      self._arrayPool = arrayPool
 
     def factoryModifiers(self):
       return STATIC_INLINE if self.DEVICE_CALLABLE else f'{STATIC} {INLINE}'
@@ -958,11 +1363,32 @@ class InitializerGenerator(object):
         lst = lst.flatten(order='K')
       return '{{{}}}'.format(', '.join([str(l) for l in lst]))
 
-    def formatArray(self, numberType, name, values, declarationOnly):
-      lhs = f'{numberType} {name}[]'
+    def arrayData(self, memLayout):
+      """The arrays this kind of view needs beside the values, as (suffix, values).
+
+      Both the emission and the interning read the view's arrays from here,
+      so that what gets spelled once and what gets named once cannot drift
+      apart.
+      """
+      return []
+
+    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
+      for suffix, values in self.arrayData(memLayout):
+        cpp(self.formatArray(numberType, namespace + suffix + index, values,
+                             declarationOnly, hint=suffix))
+
+    def internArrays(self, memLayout, numberType):
+      for suffix, values in self.arrayData(memLayout):
+        self._arrayPool.intern(numberType, values, suffix)
+
+    def formatArray(self, numberType, name, values, declarationOnly, hint='array'):
       if declarationOnly:
         return ''
-      return f'{DATA_MODIFIERS} {lhs} = {self.listToInitializerList(values)};'
+      if self._arrayPool is None:
+        return f'{DATA_MODIFIERS} {numberType} {name}[] = {self.listToInitializerList(values)};'
+      shared, length = self._arrayPool.intern(numberType, values, hint)
+      return '{} {} (&{})[{}] = {}::{};'.format(
+        DATA_MODIFIERS, numberType, name, length, ViewArrayPool.STRUCT_NAME, shared)
 
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
@@ -977,10 +1403,11 @@ class InitializerGenerator(object):
           self.listToInitializerList([r.stop for r in memLayout.bbox()])
         )
       )
-    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
-      if memLayout.shape():
-        cpp(self.formatArray(numberType, namespace + self.START_NAME + index, [r.start for r in memLayout.bbox()], declarationOnly))
-        cpp(self.formatArray(numberType, namespace + self.STOP_NAME + index, [r.stop for r in memLayout.bbox()], declarationOnly))
+    def arrayData(self, memLayout):
+      if not memLayout.shape():
+        return []
+      return [(self.START_NAME, [r.start for r in memLayout.bbox()]),
+              (self.STOP_NAME, [r.stop for r in memLayout.bbox()])]
 
   class CSCMatrixView(TensorView):
     ROWIND_NAME = 'RowInd'
@@ -1000,9 +1427,9 @@ class InitializerGenerator(object):
           self.COLPTR_NAME + (index if index is not None else '')
         )
       )
-    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
-      cpp(self.formatArray(numberType, namespace + self.ROWIND_NAME + index, memLayout.rowIndex(), declarationOnly))
-      cpp(self.formatArray(numberType, namespace + self.COLPTR_NAME + index, memLayout.colPointer(), declarationOnly))
+    def arrayData(self, memLayout):
+      return [(self.ROWIND_NAME, memLayout.rowIndex()),
+              (self.COLPTR_NAME, memLayout.colPointer())]
 
   class PatternTensorView(TensorView):
     PATTERN_NAME = 'Pattern'
@@ -1021,13 +1448,14 @@ class InitializerGenerator(object):
         )
       )
 
-    def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
-      cpp(self.formatArray(numberType, namespace + self.PATTERN_NAME + index, memLayout.pattern(), declarationOnly))
+    def arrayData(self, memLayout):
+      return [(self.PATTERN_NAME, memLayout.pattern())]
 
   #: What the pool needs to know about one tensor group: how large the group
   #: is, which element type its entries were stored as, and where each member
   #: of it ended up.
-  PoolEntry = collections.namedtuple('PoolEntry', ['groupSize', 'datatype', 'symbols'])
+  PoolEntry = collections.namedtuple(
+    'PoolEntry', ['baseName', 'groupSize', 'datatype', 'symbols', 'arrangement'])
 
   def __init__(self, arch, tensors, scalars, inMemory=frozenset()):
     self._arch = arch
@@ -1035,6 +1463,7 @@ class InitializerGenerator(object):
     #: They get a pool entry like any other constant.
     self._inMemory = inMemory
     self._numberType = f'{self._arch.uintTypename} const'
+    self._viewArrays = None
     self._pool = dict()
     self._realType = lambda datatype: f'{datatype.ctype()} const'
     self._realPtrType = lambda datatype: self._realType(datatype) + '*'
@@ -1079,7 +1508,8 @@ class InitializerGenerator(object):
       'CSCMemoryLayout': self.CSCMatrixView,
       'PatternMemoryLayout': self.PatternTensorView
     }
-    return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch))
+    return memLayoutMap[type(memoryLayout).__name__](tensor.getDatatype(self._arch),
+                                                     self._viewArrays)
 
   def iterate_collect(self):
     cur_namespace = ''
@@ -1177,11 +1607,16 @@ class InitializerGenerator(object):
     # class. Writing one anyway is deprecated and both GCC and clang say so.
     pass
 
-  def collectPool(self, dataCache):
+  def collectPool(self, dataCache, arrangements=None):
     """Registers every constant tensor in `dataCache` and reports the symbols.
 
-    The result maps a tensor's base name (namespace included) to its group
-    size, its element type and the pool symbol each group ended up under.
+    The result maps a tensor and one arrangement of it -- keyed by the pair --
+    to its group size, its element type and the pool symbol each group ended
+    up under. A tensor read in two arrangements is stored twice, because the
+    two are two different sequences of numbers and an address into one is not
+    an address into the other. Where `arrangements` says nothing about a
+    tensor, it is stored as it lays itself out.
+
     Groups without values are absent: they have nothing to store, and the
     pool leaves the corresponding pointer null.
 
@@ -1198,9 +1633,25 @@ class InitializerGenerator(object):
     for baseName, tensors in self._collect.items():
       groupSize = self._groupSize[baseName]
       stride = groupSizeToStride(groupSize)
-      symbols = collections.OrderedDict()
-      datatype = None
-      for group, tensor in tensors.items():
+      read = (arrangements or {}).get(baseName) \
+        or {None: Arrangement.of(tensors)}
+      for _, arrangement in read.items():
+        entry = self._poolEntry(dataCache, baseName, tensors, groupSize, stride, arrangement)
+        if entry is not None:
+          pool[(baseName, arrangement.tag())] = entry
+    self._pool = pool
+    return pool
+
+  def _poolEntry(self, dataCache, baseName, tensors, groupSize, stride, arrangement):
+    """One family in one arrangement, registered member by member.
+
+    A member is stored as the arrangement holds it, and as it lays itself out
+    where the arrangement says nothing about it -- a member the kernels never
+    read still has an entry, because the family is handed out whole.
+    """
+    symbols = collections.OrderedDict()
+    datatype = None
+    for group, tensor in tensors.items():
         values = tensor.values()
         if values is None:
           continue
@@ -1211,8 +1662,9 @@ class InitializerGenerator(object):
           # still written, from the same numbers, for whoever computes with
           # the tensor on the host.
           continue
-        memLayout = tensor.memoryLayout()
-        hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, address(group, stride))
+        memLayout = arrangement.layoutOf(group, tensor.memoryLayout())
+        index = address(group, stride)
+        hint = baseName if len(group) == 0 else '{}_{}'.format(baseName, index)
         groupDatatype = tensor.getDatatype(self._arch)
         if datatype is None:
           datatype = groupDatatype
@@ -1227,32 +1679,48 @@ class InitializerGenerator(object):
         # loads need.
         layoutAlignment = self._arch.cacheline if memLayout.alignedStride() else 1
         alignment = max(POOL_ALIGNMENT, layoutAlignment)
+        # A prepared image is stored as it was handed over; anything this
+        # side laid out is packed from the tensor's own numbers.
+        image = (memLayout.imageFor(tensor.nameWithNamespace(), tensor.name())
+                 if isinstance(memLayout, PreparedImage)
+                 else memLayout.pack(values))
         symbols[group] = dataCache.add(hint,
-                                       [groupDatatype.literal(value) for value in memLayout.pack(values)],
+                                       [groupDatatype.literal(value) for value in image],
                                        groupDatatype.ctype(),
                                        alignment)
-      if symbols:
-        pool[baseName] = self.PoolEntry(groupSize, datatype, symbols)
-    self._pool = pool
-    return pool
+    if not symbols:
+      return None
+    return self.PoolEntry(baseName, groupSize, datatype, symbols, arrangement)
 
   def poolSymbol(self, baseName, group):
     """Pool entry holding exactly what init would otherwise print, if there is one.
 
-    There is one as long as a tensor has a single realisation, which is why
-    the initialiser can bind a reference instead of materialising the values a
-    second time. Once a tensor is realised in more than one layout, only the
-    one that matches what init promises can be bound this way, and the rest of
-    them answer None here and get their own array.
+    There is one as long as a family is held the way it lays itself out, which
+    is why the initialiser can bind a reference instead of materialising the
+    values a second time. Once the kernels read it some other way, only an
+    entry that matches what init promises can be bound like that, and the rest
+    of them answer None here and get their own array.
     """
-    entry = self._pool.get(baseName)
+    tensors = self._collect.get(baseName)
+    if not tensors or group not in tensors:
+      return None
+    entry = self._pool.get((baseName, Arrangement.of(tensors).tag()))
     return entry.symbols.get(group) if entry is not None else None
 
   def generateInitH(self, header):
     for namespace, tensor_dict in self.iterate_collect():
+      # The shared arrays have to stand before the structs that name them, so
+      # which ones there are is settled before anything is written.
+      self._viewArrays = ViewArrayPool()
+      for _, tensors in tensor_dict.items():
+        for tensor in tensors.values():
+          self._tensorViewGenerator(tensor).internArrays(tensor.memoryLayout(),
+                                                         self._numberType)
       with header.Namespace(namespace), header.Namespace(self.INIT_NAMESPACE):
+        self._viewArrays.generate(header)
         for (base_name, base_name_without_namespace), tensors in tensor_dict.items():
           self._init(header, base_name, base_name_without_namespace, '', tensors, False)
+    self._viewArrays = None
     for namespace, scalar_dict in self.iterate_collect_scalar():
       if len(scalar_dict) == 0:
         continue
@@ -1347,6 +1815,17 @@ class InitializerGenerator(object):
             nValueArrays += 1
         if nValueArrays > 1:
           cpp(f'{STATIC} {self._realPtrType(datatype)} {self.VALUES_BASENAME}[];')
+
+        # Where a pool holds the family as it lays itself out -- the numbers
+        # `Values` refers to. The member of `Pool` is named after the
+        # arrangement, which is a hash; code that reads the constants itself
+        # rather than through a kernel's bindGlobals, from a pool that lives
+        # on a device, say, names it through this instead: `pool.*PoolMember`.
+        own = self._pool.get((baseName, Arrangement.of(tensors).tag()))
+        if own is not None:
+          cpp('{} {} auto {} = &{}::{};'.format(CONSTEXPR, STATIC, self.POOL_MEMBER_NAME,
+                                                PoolGenerator.POOL_STRUCT_NAME,
+                                                PoolGenerator.memberName(baseName, own.arrangement)))
 
         cpp.emptyline()
         if len(groupSize) == 0:
@@ -1453,17 +1932,31 @@ class PoolGenerator(object):
     self._arch = arch
     self._dataCache = dataCache
     self._pool = pool
-    self._members = self.assignMembers(pool)
+    self._reservations = dataCache.reservations()
+    self._members = self.assignMembers(pool, self._reservations)
 
   @classmethod
-  def memberName(cls, baseNameWithNamespace):
-    """Name a tensor goes by inside `Pool`.
+  def memberName(cls, baseNameWithNamespace, arrangement=None):
+    """Name an arrangement of a tensor family goes by inside `Pool`.
 
     Flattened rather than nested by namespace: a kernel may read constants
     from several namespaces at once, so one flat table is the only shape that
     lets it bind all of them against a single object.
+
+    The arrangement is part of the name, because one family may be held in
+    more than one of them: a kernel generated against a different padding or
+    a different sparsity reads a different array, and binding both to one
+    member would hand one of them a stride nobody gave it. Both sides work it
+    out from the tensors alone, each where it stands, so neither has to wait
+    for the other.
     """
-    return baseNameWithNamespace.replace('::', '_')
+    flat = baseNameWithNamespace.replace('::', '_')
+    if arrangement is None:
+      return flat
+    return '{}_{}'.format(flat, arrangement.tag())
+
+  #: A short name for how one tensor is held; see `arrangement.layoutTag`.
+  arrangementTag = staticmethod(layoutTag)
 
   def imageAlignment(self):
     """Alignment the image is declared with.
@@ -1479,35 +1972,46 @@ class PoolGenerator(object):
     return max([POOL_ALIGNMENT] + [entry.alignment() for entry in self._dataCache.entries()])
 
   @classmethod
-  def assignMembers(cls, pool):
+  def assignMembers(cls, pool, reservations=()):
     """Member name per tensor, with the collisions flattening can cause refused.
 
     Two tensors that differ only in where the namespace separator sat --
     `a::b` and `a_b` -- flatten to the same identifier. Declaring the member
     twice would not compile, and were the name to come from a hint instead
     one of them would quietly write into the other's slot. Say which two, and
-    let the caller rename one.
+    let the caller rename one. A reservation names its own member and is held
+    to the same rule, against the tensors and against the other reservations.
     """
     members = collections.OrderedDict()
     taken = dict()
-    for baseName in pool:
-      member = cls.memberName(baseName)
+    for key in pool:
+      # A bare listing of names carries no arrangement, and a member named
+      # from the name alone is the right answer for it.
+      entry = pool.get(key) if hasattr(pool, 'get') else None
+      baseName = key if entry is None else entry.baseName
+      member = cls.memberName(baseName, None if entry is None else entry.arrangement)
       if member in taken:
         raise ValueError('The tensors {} and {} share the pool member {}. '
                          'Rename one of them.'.format(taken[member], baseName, member))
       taken[member] = baseName
-      members[baseName] = member
+      members[key] = member
+    for reservation in reservations:
+      member = reservation.name()
+      if member in taken:
+        raise ValueError('The reserved pool entry {} shares the pool member {} with {}. '
+                         'Rename one of them.'.format(reservation.name(), member, taken[member]))
+      taken[member] = reservation.name()
     return members
 
   @staticmethod
   def _elementPtrType(datatype):
     return '{} const*'.format(datatype.ctype())
 
-  def _memberType(self, baseName, entry):
+  def _memberType(self, entry):
     elementPtr = self._elementPtrType(entry.datatype)
     if len(entry.groupSize) == 0:
       return elementPtr
-    prefix, name = Tensor.splitBasename(baseName)
+    prefix, name = Tensor.splitBasename(entry.baseName)
     return '{}{}::{}::{}<{}>'.format(prefix,
                                      InitializerGenerator.TENSOR_NAMESPACE,
                                      name,
@@ -1532,9 +2036,10 @@ class PoolGenerator(object):
     header.emptyline()
 
     with header.Struct(self.POOL_STRUCT_NAME):
-      for baseName, entry in self._pool.items():
-        header('{} {}{{}};'.format(self._memberType(baseName, entry),
-                                   self._members[baseName]))
+      for key, entry in self._pool.items():
+        header('{} {}{{}};'.format(self._memberType(entry), self._members[key]))
+      for reservation in self._reservations:
+        header('{} const* {}{{}};'.format(reservation.entry().typename(), reservation.name()))
       header.emptyline()
       header('//! Table for an image that lives at `base`, host or device.')
       header.functionDeclaration(self.CREATE_FUN_NAME,
@@ -1569,14 +2074,18 @@ class PoolGenerator(object):
                       returnType):
       cpp('auto const* origin = static_cast<char const*>(base);')
       cpp('{} result;'.format(self.POOL_STRUCT_NAME))
-      for baseName, entry in self._pool.items():
-        member = self._members[baseName]
+      for key, entry in self._pool.items():
+        member = self._members[key]
         stride = groupSizeToStride(entry.groupSize)
         for group, symbol in entry.symbols.items():
           target = member if len(group) == 0 else '{}.{}[{}]'.format(
             member, InitializerGenerator.CONTAINER_DATA_NAME, address(group, stride))
           cpp('result.{} = reinterpret_cast<{}>(origin + offsetof({}, {}));'.format(
             target, self._elementPtrType(entry.datatype), self._storageType(), symbol))
+      for reservation in self._reservations:
+        cpp('result.{} = reinterpret_cast<{} const*>(origin + offsetof({}, {}));'.format(
+          reservation.name(), reservation.entry().typename(), self._storageType(),
+          reservation.entry().name()))
       cpp('return result;')
     cpp.emptyline()
 

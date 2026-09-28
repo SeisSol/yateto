@@ -82,11 +82,12 @@ class Kernel(object):
     self.cfg = LivenessAnalysis().visit(self.cfg)
 
   def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool):
+    estimator = costEstimatorFor(cost_estimator, self.target)
     self.nonZeroFlops = 0
     for a in self.ast:
       ast = copy.deepcopy(a)
       ast = EquivalentSparsityPattern(groupSpp=False).visit(ast)
-      ast = StrengthReduction(cost_estimator).visit(ast)
+      ast = StrengthReduction(estimator).visit(ast)
       ast = SetSparsityPattern().visit(ast)
       self.nonZeroFlops += ComputeOptimalFlopCount().visit(ast)
 
@@ -94,7 +95,7 @@ class Kernel(object):
     prefetch = copy.copy(self._prefetch)
     for ast in self.ast:
       ast = EquivalentSparsityPattern().visit(ast)
-      ast = StrengthReduction(cost_estimator).visit(ast)
+      ast = StrengthReduction(estimator).visit(ast)
       ast = FindContractions().visit(ast)
       ast = ComputeMemoryLayout().visit(ast)
       permutationVariants = FindIndexPermutations().visit(ast)
@@ -201,6 +202,27 @@ class KernelFamily(object):
   def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
     for kernel in self._kernels.values():
       kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
+
+def costEstimatorFor(costEstimator, target):
+  """Which estimator a kernel for this target is reassociated with.
+
+  One estimator covers every target. A mapping from target to estimator
+  covers them apart, for where what is worth reassociating differs: a machine
+  that runs one contraction at a time and one that runs thousands of them do
+  not agree about which of two orderings is cheaper, and there is no reason
+  they should be made to.
+
+  A mapping that names targets and not the one in hand is refused rather than
+  filled in: the caller has said the targets differ, so which one this is
+  cannot be guessed.
+  """
+  if not isinstance(costEstimator, dict):
+    return costEstimator
+  if target not in costEstimator:
+    raise ValueError('No cost estimator given for target {}; there are ones for '
+                     '{}.'.format(target, ', '.join(sorted(costEstimator))))
+  return costEstimator[target]
+
 
 def simpleParameterSpace(*args):
   return list(itertools.product(*[list(range(i)) for i in args]))
@@ -316,6 +338,8 @@ class Generator(object):
                outputDir: str,
                namespace='yateto',
                gemm_cfg: GeneratorCollection = None,
+               # One estimator, or a mapping from target to estimator where
+               # what is worth reassociating differs between them.
                cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set(),
                routine_cache=None,
@@ -383,13 +407,46 @@ class Generator(object):
       else:
         kernel_family_dict[family.namespace] = [family]
 
+    # Mapping basename -> tensor
+    tensors = dict()
+    scalars = set()
+
+    # Mapping namespace -> (basename -> tensor)
+    tensors_dict = collections.defaultdict(dict)
+
+    for tensor in include_tensors:
+      tensors[tensor.name()] = tensor
+      tensors_dict[tensor.namespace][tensor.name()] = tensor
+    for kernel in self._kernels:
+        tensors.update( FindTensors().visit(kernel.ast) )
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        scalars.update(ScalarsSet().visit(kernel.cfg))
+    for family in self._kernelFamilies.values():
+      for group, kernel in family.items():
+        tensors.update( FindTensors().visit(kernel.ast) )
+        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
+        scalars.update(ScalarsSet().visit(kernel.cfg))
+
+    # Which members a tensor family has, before a line of it is written: how a
+    # family is held is a fact about the family, so a kernel that reads one
+    # member of it still has to say how the whole of it is held.
+    families = collections.OrderedDict()
+    for tensor in tensors.values():
+      families.setdefault(tensor.baseNameWithNamespace(),
+                          collections.OrderedDict())[tensor.group()] = tensor
+
     print('Generating kernels...')
     if routine_cache is None:
       cache = RoutineCache()
     else:
       cache = routine_cache.cache
-    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, routine_exporters,
-                                                 namespace)
+    # One cache for the whole run, reachable from here on: the pool is filled
+    # after the kernels are written, and a generator that wants an operand in
+    # it decides that while its kernel is being written.
+    dataCache = DataCache()
+    optKernelGenerator = OptimizedKernelGenerator(self._arch, cache, dataCache,
+                                                 routine_exporters, namespace,
+                                                 families=families)
 
     # Immediate operands some generator read from memory after all:
     # tensor name -> (operations that did, {kernel or family: how many kernels})
@@ -475,26 +532,6 @@ class Generator(object):
     else:
       routine_cache.register(outputDir)
 
-    # Mapping basename -> tensor
-    tensors = dict()
-    scalars = set()
-
-    # Mapping namespace -> (basename -> tensor)
-    tensors_dict = collections.defaultdict(dict)
-
-    for tensor in include_tensors:
-      tensors[tensor.name()] = tensor
-      tensors_dict[tensor.namespace][tensor.name()] = tensor
-    for kernel in self._kernels:
-        tensors.update( FindTensors().visit(kernel.ast) )
-        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
-        scalars.update(ScalarsSet().visit(kernel.cfg))
-    for family in self._kernelFamilies.values():
-      for group, kernel in family.items():
-        tensors.update( FindTensors().visit(kernel.ast) )
-        tensors_dict[''].update( FindTensors().visit(kernel.ast) )
-        scalars.update(ScalarsSet().visit(kernel.cfg))
-
     print('Generating initialization code...')
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
@@ -504,8 +541,9 @@ class Generator(object):
     # Before the initialisation code, not after: init binds references into the
     # pool where it can, so it has to know which entries exist.
     print('Generating constant pool...')
-    dataCache = DataCache()
-    poolMap = initGen.collectPool(dataCache)
+    # Filled from the arrangements the kernels were written against, so that
+    # a tensor two of them read differently is stored once for each.
+    poolMap = initGen.collectPool(dataCache, optKernelGenerator.arrangements())
     with Cpp(fTensors.h) as header:
       with header.HeaderGuard(self._headerGuardName(namespace, self.TENSORS_FILE_NAME)):
         header.include(self.MARKER_HEADER)

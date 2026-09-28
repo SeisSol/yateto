@@ -357,6 +357,38 @@ class TestDatatypeLiteral:
     def test_double_round_trips(self):
         assert float(Datatype.F64.literal("0.1")) == 0.1
 
+    @pytest.mark.parametrize("value", [
+        10.030594405594405,   # a stiffness matrix entry; needs 17 digits
+        0.30000000000000004,  # 0.1 + 0.2
+        1.2345678901234567,
+        -2.2250738585072014e-308,
+        1.7976931348623157e+308,
+        5e-324,
+    ])
+    def test_a_double_that_needs_seventeen_digits_survives(self, value):
+        assert float(Datatype.F64.literal(value)) == value
+
+    def test_every_double_survives(self):
+        """Not a sample of tidy numbers: bit patterns, which is what a matrix holds."""
+        import random
+        import struct
+
+        rng = random.Random(20260917)
+        for _ in range(2000):
+            bits = rng.getrandbits(64)
+            value = struct.unpack("<d", struct.pack("<Q", bits))[0]
+            if value != value or value in (float("inf"), float("-inf")):
+                continue
+            assert float(Datatype.F64.literal(value)) == value
+
+    def test_a_numpy_scalar_is_spelled_as_a_number(self):
+        """`repr` of a numpy scalar names its type, which is not C++."""
+        import numpy as np
+
+        literal = Datatype.F64.literal(np.float64(0.1))
+
+        assert literal == "0.1"
+        assert float(literal) == 0.1
     def test_quad_literal_goes_through_the_macro(self):
         """A bare ``q`` suffix is GCC's own dialect and is rejected under
         -std=c++17; ``f128`` is rejected by clang. The macro in Type.h carries
@@ -393,3 +425,39 @@ class TestAddressingPredicates:
     def test_a_scalar_has_no_storage(self):
         assert not Scalar('a').hasStorage()
         assert Scalar('a').isPassedByValue()
+
+
+class TestTensorIdentityAcrossNamespaces:
+    """Two tensor sets, one per target, is two tensors and not one."""
+
+    def _pair(self):
+        return (Tensor("kDivM", (10, 10), namespace="cpu"),
+                Tensor("kDivM", (10, 10), namespace="gpu"))
+
+    def test_the_namespace_tells_them_apart(self):
+        cpu, gpu = self._pair()
+
+        assert cpu != gpu
+        assert len({cpu, gpu}) == 2
+
+    def test_they_keep_their_own_layout(self):
+        from yateto.arch import getArchitectureIdentifiedBy
+        from yateto.memory import DenseMemoryLayout
+
+        narrow = getArchitectureIdentifiedBy("dhsw")
+        wide = getArchitectureIdentifiedBy("dskx")
+        cpu, gpu = self._pair()
+        cpu.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=narrow)
+        gpu.setMemoryLayout(DenseMemoryLayout, alignStride=True, alignmentArch=wide)
+
+        collected = {cpu: "cpu", gpu: "gpu"}
+
+        assert len(collected) == 2
+        assert cpu.memoryLayout().stridei(1) != gpu.memoryLayout().stridei(1)
+
+    def test_one_namespace_is_still_one_tensor(self):
+        assert Tensor("kDivM", (10, 10)) == Tensor("kDivM", (10, 10))
+        assert len({Tensor("kDivM", (10, 10)), Tensor("kDivM", (10, 10))}) == 1
+
+    def test_a_shape_still_tells_them_apart(self):
+        assert Tensor("a", (4, 4), namespace="cpu") != Tensor("a", (4, 5), namespace="cpu")

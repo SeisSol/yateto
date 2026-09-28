@@ -12,7 +12,9 @@ import pytest
 from yateto import Generator, GeneratorCollection, Tensor
 from yateto.arch import useArchitectureIdentifiedBy
 from yateto.codegen.factory import ExportGenerator
-from yateto.type import AddressingMode
+from yateto.type import AddressingMode, Datatype
+
+import yateto.functions as yf
 
 N = 4
 
@@ -128,16 +130,52 @@ class TestFallback:
                'as immediate.' in self.printed
         assert 'k1' not in self.printed.split('Note:')[1]
 
-    def test_the_unit_test_binds_the_pool_before_its_own_buffers(self):
+    def test_the_unit_test_binds_the_pool_before_the_operands_it_fills_itself(self):
         test = self.files['KernelTest.t.h'].split('void testk0')[1].split('void test')[0]
         assert test.index('krnl.bindGlobals(Pool::host());') < test.index('krnl.B = B;')
 
-    def test_a_kernel_without_immediates_binds_nothing_in_its_test(self, tmp_path):
+    def test_a_kernel_without_constants_binds_nothing_in_its_test(self, tmp_path):
         B = Tensor('B', (N, N))
         out = Tensor('out', (N, N))
         (tmp_path / 'plain').mkdir()
         files = generate(tmp_path / 'plain', [out['ij'] <= 2.0 * B['ij']])
         assert 'bindGlobals' not in files['KernelTest.t.h']
+
+    def test_a_constant_it_passes_is_bound_from_the_pool_over_its_own_buffer(self, tmp_path):
+        # The kernel may read the constant in an arrangement other than the
+        # tensor's own, which is how the test's buffer holds it; the pool
+        # holds it as the kernel reads it, so the pool has the last word.
+        values = np.zeros((N, N))
+        values[1, 2] = 3.0
+        D = Tensor('D', (N, N), values)
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        (tmp_path / 'passed').mkdir()
+        files = generate(tmp_path / 'passed', [out['ij'] <= D['ik'] * B['kj']])
+        test = files['KernelTest.t.h'].split('void testk0')[1]
+        assert test.index('krnl.D = D;') < test.index('krnl.bindGlobals(Pool::host());') \
+            < test.index('krnl.B = B;')
+
+    def test_what_the_pool_holds_nothing_for_is_assigned_after_it(self, tmp_path):
+        # bindGlobals hands a family out whole, and the pool holds nothing for
+        # a member without values; a condition with a value is run through
+        # every case by the test, which the pool knows nothing of.
+        values = np.zeros((N, N))
+        values[1, 2] = 3.0
+        F = [Tensor('F(0)', (N, N)), Tensor('F(1)', (N, N), values)]
+        X = Tensor('X', (), spp={(): 1}, datatype=Datatype.BOOL)
+        A = Tensor('A', (N, N))
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        (tmp_path / 'mixed').mkdir()
+        files = generate(tmp_path / 'mixed', [out['ij'] <= F[0]['ik'] * B['kj'] + F[1]['ik'] * B['kj'],
+                                              yf.assignIf(X[''], A['ij'], yf.sqrt(B['ij']))])
+        mixed = files['KernelTest.t.h'].split('void testk0')[1].split('void test')[0]
+        assert mixed.index('krnl.F(1) = F_1;') < mixed.index('krnl.bindGlobals(Pool::host());') \
+            < mixed.index('krnl.F(0) = F_0;')
+        # the condition is the only constant there, so nothing is bound at all
+        guarded = files['KernelTest.t.h'].split('void testk1')[1]
+        assert 'krnl.X = X;' in guarded and 'bindGlobals' not in guarded
 
 
 class TestHostGemm:

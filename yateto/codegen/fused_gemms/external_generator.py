@@ -12,7 +12,9 @@ class FusedGemms:
     self._arch = arch
     self._descr = descr
     self._attrs = attrs if attrs is not None else KernelAttributes()
-    self._datatype = self._descr[0].node.datatype
+    # The chain is generated in one precision: the one of the result of its
+    # first GEMM. (The description iterates GEMM by GEMM and is not indexed.)
+    self._datatype = self._descr.args[0].datatype
     self._batch_aux = BatchedOperationsAux()
     self._cache = {}
     self._tmp_matrices = {}
@@ -98,7 +100,7 @@ class FusedGemms:
         self._cache[res.name] = matrix
 
   def _get_chainforge_matrix(self, tensor, tensor_variable, range):
-    addr_mode = self._batch_aux.deduce_addresing(tensor)
+    addr_mode = self._batch_aux.forge_addressing(tensor)
     if tensor_variable.is_temporary:
       if not tensor_variable.name in self._tmp_matrices:
         raise RuntimeError(f'expected tmp. tensor {tensor_variable.name} to be cached '

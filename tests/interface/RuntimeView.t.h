@@ -2,6 +2,7 @@
 #include <cxxtest/TestSuite.h>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <yateto/RuntimeView.h>
 
@@ -81,6 +82,21 @@ class RuntimeViewTestSuite : public CxxTest::TestSuite {
     TS_ASSERT_EQUALS(family.data[1 + 2 * 2], 5);
     TS_ASSERT_EQUALS((Family<int, 2, 3>::position(1, 2)), 5u);
     TS_ASSERT_EQUALS((Family<int, 2, 3>::Count), 6u);
+  }
+
+  void testAViewKnowsTheElementTypeOfItsValues() {
+    static_assert(datatypeOf<double>() == Datatype::F64, "");
+    static_assert(datatypeOf<float>() == Datatype::F32, "");
+    static_assert(datatypeOf<std::int32_t>() == Datatype::I32, "");
+    static_assert(datatypeOf<bool>() == Datatype::Bool, "");
+    double values[6]{};
+    const auto writing = viewOf(&runtime_view_check::Plain, values);
+    static_assert(std::is_same_v<decltype(writing), const RuntimeView>, "");
+    TS_ASSERT_EQUALS(writing.data, static_cast<void*>(values));
+    const double* reading = values;
+    const auto read = viewOf(&runtime_view_check::Plain, reading);
+    static_assert(std::is_same_v<decltype(read), const ConstRuntimeView>, "");
+    TS_ASSERT_EQUALS(read.layout, &runtime_view_check::Plain);
   }
 
   void testAViewForWritingIsOneForReading() {

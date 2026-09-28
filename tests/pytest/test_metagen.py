@@ -215,6 +215,11 @@ class TestRuntimeHeader:
         assert positions['D'] == '4, 5'
         assert re.search(r'namespace sub \{\s*namespace init \{\s*struct D \{', (out / 'runtime.h').read_text())
         assert 'descriptor(std::size_t variant, unsigned i0);' in (out / 'runtime.h').read_text()
+        # A view of values held as a variant holds a tensor, for writing and for reading.
+        assert 'template <typename T> static ::yateto::RuntimeView view(std::size_t variant, unsigned i0, ' \
+            'T* data) {\n' in (out / 'runtime.h').read_text()
+        assert 'template <typename T> static ::yateto::ConstRuntimeView view(std::size_t variant, ' \
+            'const T* data) {\n' in (out / 'runtime.h').read_text()
 
     @staticmethod
     def named(tmp_path, *tensors):
@@ -278,8 +283,8 @@ int main() {
   krnl.execute();
   // ... and the same kernel through runtime.h.
   runtime::kernel::add views;
-  views.A = {runtime::init::A::descriptor(variant), a.data()};
-  views.C = {runtime::init::C::descriptor(variant), viewed.data()};
+  views.A = runtime::init::A::view(variant, static_cast<const double*>(a.data()));
+  views.C = runtime::init::C::view(variant, viewed.data());
   views.execute(variant);
   return c == viewed ? 0 : 1;
 }

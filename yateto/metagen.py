@@ -541,6 +541,12 @@ class MetaGenerator:
                                     header('//! Where a variant stores {}; null where it has none.'.format(name))
                                     header.functionDeclaration('descriptor', variantArg + groupArgs(rank),
                                                                'static ::yateto::TensorDescriptor const*')
+                                    header('//! Values held as a variant stores {}, as a view.'.format(name))
+                                    at = ''.join(f', i{i}' for i in range(rank))
+                                    for const, view in (('', 'RuntimeView'), ('const ', 'ConstRuntimeView')):
+                                        with header.Function('view', '{}{}, {}T* data'.format(variantArg, groupArgs(rank), const),
+                                                             'template <typename T> static ::yateto::{}'.format(view)):
+                                            header(f'return ::yateto::viewOf(descriptor(variant{at}), data);')
                     for space, names in byNamespace(kernels).items():
                         with header.Namespace(space), header.Namespace(self.KERNEL_NAMESPACE):
                             for name in names:

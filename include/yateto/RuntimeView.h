@@ -30,6 +30,60 @@ struct RuntimeView {
   constexpr operator ConstRuntimeView() const noexcept { return {layout, data}; }
 };
 
+/// The element type `T` stands for.
+template <typename T>
+constexpr Datatype datatypeOf() noexcept {
+  if constexpr (std::is_same_v<T, bool>) {
+    return Datatype::Bool;
+  } else if constexpr (std::is_same_v<T, std::int8_t>) {
+    return Datatype::I8;
+  } else if constexpr (std::is_same_v<T, std::int16_t>) {
+    return Datatype::I16;
+  } else if constexpr (std::is_same_v<T, std::int32_t>) {
+    return Datatype::I32;
+  } else if constexpr (std::is_same_v<T, std::int64_t>) {
+    return Datatype::I64;
+  } else if constexpr (std::is_same_v<T, float>) {
+    return Datatype::F32;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return Datatype::F64;
+  }
+#if YATETO_HAS_F16
+  else if constexpr (std::is_same_v<T, f16_ty>) {
+    return Datatype::F16;
+  }
+#endif
+#if YATETO_HAS_BF16
+  else if constexpr (std::is_same_v<T, bf16_ty>) {
+    return Datatype::BF16;
+  }
+#endif
+#if YATETO_HAS_F128
+  else if constexpr (std::is_same_v<T, f128_ty>) {
+    return Datatype::F128;
+  }
+#endif
+  else {
+    static_assert(sizeof(T) == 0, "YATETO: no element type of a tensor is stored as this type");
+  }
+}
+
+/// `data`, held as `layout` says, as a view. That the values are of the element type of the layout
+/// is checked here, where the view is made, rather than never.
+template <typename T>
+RuntimeView viewOf(const TensorDescriptor* layout, T* data) noexcept {
+  assert((layout == nullptr || layout->datatype == datatypeOf<T>()) &&
+         "YATETO: the values are of another type than the layout says");
+  return {layout, data};
+}
+
+template <typename T>
+ConstRuntimeView viewOf(const TensorDescriptor* layout, const T* data) noexcept {
+  assert((layout == nullptr || layout->datatype == datatypeOf<T>()) &&
+         "YATETO: the values are of another type than the layout says");
+  return {layout, data};
+}
+
 /// A family of anything -- views, scalars -- indexed like a family of tensors: by one index per
 /// dimension, the first one running fastest.
 template <typename T, unsigned... Size>

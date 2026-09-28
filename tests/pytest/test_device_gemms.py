@@ -68,6 +68,82 @@ def sizes(descr):
   return tuple(r.size() for r in descr.mnk())
 
 
+class TestProductsAsGemms:
+  """A product the device has no element-wise generator for is a GEMM with K = 1."""
+
+  N, M = 6, 5
+
+  def test_an_outer_product_is_a_gemm(self, device, monkeypatch):
+    a = Tensor('a', (self.N,))
+    b = Tensor('b', (self.M,))
+    C = Tensor('C', (self.N, self.M))
+    [descr] = lower(device, C['kp'] <= a['k'] * b['p'], monkeypatch)
+    assert sizes(descr) == (self.N, self.M, 1)
+    assert not descr.transA and not descr.transB
+
+  def test_it_is_written_the_way_the_result_is_indexed(self, device, monkeypatch):
+    a = Tensor('a', (self.N,))
+    b = Tensor('b', (self.M,))
+    C = Tensor('C', (self.M, self.N))
+    [descr] = lower(device, C['pk'] <= a['k'] * b['p'], monkeypatch)
+    assert sizes(descr) == (self.M, self.N, 1)
+    assert descr.leftTerm.name == 'b' and descr.rightTerm.name == 'a'
+
+  def test_a_vector_scaled_by_a_rank_zero_tensor_is_one(self, device, monkeypatch):
+    s = Tensor('s', ())
+    v = Tensor('v', (self.N,))
+    C = Tensor('C', (self.N,))
+    [descr] = lower(device, C['k'] <= s[''] * v['k'], monkeypatch)
+    assert sizes(descr) == (self.N, 1, 1)
+    assert descr.leftTerm.name == 'v' and descr.rightTerm.name == 's'
+
+  def test_an_index_of_extent_one_is_none(self, device, monkeypatch):
+    s = Tensor('s', ())
+    v = Tensor('v', (self.N, 1))
+    C = Tensor('C', (self.N, 1))
+    [descr] = lower(device, C['kq'] <= s[''] * v['kq'], monkeypatch)
+    assert sizes(descr) == (self.N, 1, 1)
+
+  def test_a_row_of_a_matrix_is_read_transposed(self, device, monkeypatch):
+    # the row is a vector whose entries are a column apart
+    s = Tensor('s', ())
+    X = Tensor('X', (self.N, self.M))
+    C = Tensor('C', (1, self.M))
+    [descr] = lower(device, C['ij'] <= s[''] * X['ij'].subslice('i', 0, 1), monkeypatch)
+    assert descr.transA and descr.leftTerm.name == 'X'
+    assert descr.leftTerm.memoryLayout.stridei(1) == self.N
+    # and gemmforge takes the extent of the first dimension for that distance
+    bbox, _ = BatchedOperationsAux.forge_region(descr.leftTerm.memoryLayout, descr.mnk()[::2], True)
+    assert bbox[0].stop == self.N
+    assert sizes(descr) == (self.M, 1, 1)
+
+  def test_a_row_is_written_as_a_row(self, device, monkeypatch):
+    s = Tensor('s', ())
+    v = Tensor('v', (1, self.M))
+    C = Tensor('C', (self.N, self.M))
+    [descr] = lower(device, C['ij'].subslice('i', 0, 1) <= s[''] * v['ij'], monkeypatch)
+    assert descr.leftTerm.name == 's' and descr.rightTerm.name == 'v'
+    assert sizes(descr) == (1, self.M, 1)
+    bbox, region = BatchedOperationsAux.forge_region(descr.result.memoryLayout, descr.mnk()[:2])
+    # the first row of C, its columns a column of C apart
+    assert bbox[0].stop == self.N and region[0] == Range(0, 1)
+
+  def test_a_window_away_from_the_start_along_a_fixed_index_is_refused(self, device, monkeypatch):
+    # folded to a matrix, the fixed index is gone, and the offset with it
+    s = Tensor('s', ())
+    v = Tensor('v', (1, self.M))
+    C = Tensor('C', (self.N, self.M))
+    with pytest.raises(NotImplementedError, match='not at the start of its storage'):
+      lower(device, C['ij'].subslice('i', 2, 3) <= s[''] * v['ij'], monkeypatch)
+
+  def test_a_product_that_shares_an_index_is_refused(self, device, monkeypatch):
+    a = Tensor('a', (self.N,))
+    b = Tensor('b', (self.N,))
+    C = Tensor('C', (self.N,))
+    with pytest.raises(NotImplementedError, match='share an index'):
+      lower(device, C['k'] <= a['k'] * b['k'], monkeypatch)
+
+
 class TestContractionOrder:
   """An order that leaves a product no GEMM can do is searched for again.
 

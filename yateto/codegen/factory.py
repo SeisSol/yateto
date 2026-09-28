@@ -1,12 +1,14 @@
 import contextlib
 import inspect
 import string
+import numpy as np
 from ..ast.indices import BoundingBox, Indices, Range
 from ..ast.node import IndexedTensor
 from ..memory import DenseMemoryLayout, CSCMemoryLayout, PatternMemoryLayout, MemoryLayoutView
 from .. import aspp
-from .common import forLoops, zeroFill, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes
-from . import copyscaleadd, log, fused_gemms, elementwise, reduction
+from .common import forLoops, zeroFill, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes, reduceSpp
+from . import copyscaleadd, log, fused_gemms, elementwise, reduction, gemm
+from .gemm.generic import Generic as GenericGemm
 from ..type import Datatype, AddressingMode, Scalar, Tensor
 from ..controlflow.graph import Guard
 from ..ops import Add, Mul
@@ -273,7 +275,8 @@ class OptimizedKernelFactory(KernelFactory):
     an address, or hands them to a routine that does.
     """
     if method == 'create_Elementwise':
-      return True
+      # on a device, it is a GEMM, see create_Elementwise
+      return self._target == 'cpu'
     if method == 'create_LoopOverGEMM' and self._target == 'cpu' and node is not None:
       return self._gemmTakesImmediates(node)
     return False
@@ -314,7 +317,164 @@ class OptimizedKernelFactory(KernelFactory):
     return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache, gemm_cfg))
 
   def create_Elementwise(self, node, result, arguments, condition, add, scalar, prefetchName, routineCache, gemm_cfg):
+    if self._target == 'gpu':
+      return self._productAsGemm(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
     return self._elementwise(node, result, arguments, condition, add, scalar, routineCache, gemm_cfg)
+
+  def _productAsGemm(self, node, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
+    """A product on a device, as a GEMM whose contraction has length one.
+
+    The device generators here know GEMMs and copy-scale-add, and nothing
+    element-wise. A product whose operands share no index is a GEMM, though:
+    C(M x N) = A(M x 1) B(1 x N), with M the indices of one operand and N
+    those of the other -- an outer product, or, where one operand has no
+    index, a scaling by a tensor of rank zero. An index of extent one is none
+    to either side; it is fixed at zero.
+
+    A vector is a column where it is contiguous and a row otherwise, whose
+    columns are as far apart as its entries: a row of a matrix, say. A scaled
+    vector is written as a column or as a row accordingly, and the vector it
+    is scaled from is read as either, transposed where it has to be.
+
+    Whatever else is element-wise has no GEMM to become and is refused.
+    """
+    def refuse(why):
+      raise NotImplementedError(
+        f'{node} cannot be generated for the device without an element-wise '
+        f'generator: {why}.')
+
+    if node.optype != Mul() or len(node) != 2 or any(t is not None for t in node.termTemplate):
+      refuse('only a product of two tensors is a GEMM')
+
+    res = IndexedTensorDescription.fromNode(result, node)
+    left, right = [IndexedTensorDescription.fromNode(argument, term)
+                   for argument, term in zip(arguments, node)]
+    unit = {idx for term in (res, left, right) for idx in term.indices
+            if term.indices.indexSize(idx) == 1}
+    fixed = {idx: 0 for idx in unit}
+    free = lambda term: [idx for idx in term.indices if idx not in unit]
+    I, J, C = free(left), free(right), free(res)
+
+    if set(I) & set(J):
+      refuse('its operands share an index')
+    # the rows are the operand that leads the result
+    if not I or (J and C[0] == J[0]):
+      left, right, I, J = right, left, J, I
+    if C != I + J:
+      refuse(f'the result is indexed {res.indices}, which is not the indices of '
+             f'{left.name} followed by those of {right.name}')
+    for term, fused in ((res, (I, J)), (left, (I,)), (right, (J,))):
+      for K in fused:
+        if K and not term.memoryLayout.mayFuse(term.indices.positions(K)):
+          refuse(f'{term.name} does not store {"".join(K)} as one dimension')
+      if not self._unitAtOrigin(term, unit):
+        refuse(f'{term.name} is not at the start of its storage where the indices of extent one are')
+
+    def vector(term, K):
+      layout = term.memoryLayout.vec(term.indices, K, fixed)
+      target = term.indices.extract(''.join(K))
+      spp = reduceSpp(term.eqspp, term.indices, target, fixed).reshape(layout.shape())
+      return layout, spp
+
+    def describe(term, layout, spp):
+      return TensorDescription(term.name, layout, spp, term.is_compute_constant,
+                               term.is_temporary, datatype=term.datatype)
+
+    def one(term):
+      return describe(term, DenseMemoryLayout((1, 1)), aspp.dense((1, 1)))
+
+    def column(term, K):
+      layout, spp = vector(term, K)
+      if layout.stridei(0) != 1:
+        return None
+      return describe(term, layout.withDummyDimension(), spp.reshape(tuple(layout.shape()) + (1,)))
+
+    def row(term, K):
+      layout, spp = vector(term, K)
+      pattern = np.zeros((layout.stridei(0),) + tuple(layout.shape()), dtype=bool)
+      pattern[0] = spp.as_ndarray()
+      return describe(term, self._asRow(layout), aspp.general(pattern))
+
+    transA = False
+    if I and J:
+      A = column(left, I)
+      if A is None:
+        A, transA = row(left, I), True
+      B = row(right, J)
+      memoryLayout = res.memoryLayout if len(res.indices) == 2 \
+                     else res.memoryLayout.unfold(res.indices, I, J, fixed)
+      target = res.indices.extract(''.join(C))
+      spp = reduceSpp(res.eqspp, res.indices, target, fixed).reshape(memoryLayout.shape())
+      result = describe(res, memoryLayout, spp)
+    elif I:
+      # a vector scaled by a scalar: C(M x 1) = X(M x 1) s, or C(1 x M) = s X(1 x M)
+      result = column(res, I)
+      if result is not None:
+        A = column(left, I)
+        if A is None:
+          A, transA = row(left, I), True
+        B = one(right)
+      else:
+        A, B, result = one(right), row(left, I), row(res, I)
+    else:
+      A, B, result = one(left), one(right), one(res)
+
+    gemmDescr = gemm.Description(
+      leftTerm = A,
+      rightTerm = B,
+      result = result,
+      transA = transA,
+      transB = False,
+      alpha = scalar,
+      beta = 1.0 if add else 0.0,
+      arch = self._arch,
+      alignedStartA = False,
+      alignedStartC = False,
+    )
+
+    if not add and not res.is_temporary \
+        and res.memoryLayout.notWrittenAddresses(BoundingBox.fromSpp(res.eqspp)):
+      # A temporary is read where the product is nonzero and nowhere else; an
+      # argument is read by the caller, who expects the zeros, and the device
+      # has nothing here to write them with.
+      refuse(f'the GEMM would leave the zeros of {res.name} unwritten')
+
+    generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target, self._attrs)
+    if isinstance(generator, GenericGemm):
+      refuse('no device GEMM generator takes its operands')
+    return self._conditional(condition, lambda: generator.generate(self._cpp, routineCache))
+
+  @classmethod
+  def _asRow(cls, layout):
+    """A vector as a matrix of one row, its columns as far apart as its entries.
+
+    Its first dimension stands for those entries' distance, so that a
+    generator that takes the extent of a matrix's first dimension as the
+    distance of its columns reads it right. A view stays a view, of such a
+    row.
+    """
+    if isinstance(layout, MemoryLayoutView):
+      return MemoryLayoutView(cls._asRow(layout.base), 1, layout.start, layout.end)
+    stride = layout.stridei(0)
+    return DenseMemoryLayout((stride,) + tuple(layout.shape()),
+                             BoundingBox([Range(0, stride), layout.bbox()[0]]),
+                             (1, stride), alignmentArch=layout.alignmentArch())
+
+  @staticmethod
+  def _unitAtOrigin(term, unit):
+    """Whether fixing `unit` at zero leaves `term` where its storage starts.
+
+    A layout folded to a matrix drops the indices it fixes, and with them any
+    offset they would contribute -- which is none where each of them is at
+    the start of its storage.
+    """
+    positions = set(term.indices.positions([idx for idx in term.indices if idx in unit]))
+    layout = term.memoryLayout
+    while isinstance(layout, MemoryLayoutView):
+      if layout.index in positions and layout.start != 0:
+        return False
+      layout = layout.base
+    return all(layout.bbox()[p].start == 0 for p in positions)
 
   def _elementwise(self, node, result, arguments, condition, add, scalar, routineCache, gemm_cfg):
     description = elementwise.Description(

@@ -23,6 +23,9 @@ class _ForgeFactor(str):
   argument, and it spells the name of the routine from the value -- which a
   name has none of. Zero stands in for it there; the digest gemmforge adds to
   the name still tells the routines apart.
+
+  A negative factor is handed over this way as well: its value would spell a
+  minus into the name of the routine, which no identifier has.
   """
 
   def __int__(self):
@@ -154,8 +157,10 @@ class GemmGen(object):
         try:
           vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=ctype)
           forge_generator = gf.GemmGenerator(vm)
-          # a factor known only at run time is an argument; the call hands it over
-          alpha = d.alpha if isinstance(d.alpha, float) else _ForgeFactor('alpha')
+          # a factor known only at run time, or a negative one, is an argument;
+          # the call hands it over
+          byArgument = not isinstance(d.alpha, (int, float)) or int(d.alpha) < 0
+          alpha = _ForgeFactor('alpha') if byArgument else float(d.alpha)
           forge_generator.set(d.transA, d.transB, matrix_a, matrix_b, matrix_c, alpha, d.beta)
           routine_name = forge_generator.get_base_name()
 
@@ -170,7 +175,7 @@ class GemmGen(object):
                   BatchedOperationsAux.STREAM_PTR_NAME]
           args_str = ', '.join(args)
 
-          if not isinstance(d.alpha, float):
+          if byArgument:
             args_str = f'{d.alpha}, {args_str}'
 
           cpp(f'{routine_name}({args_str});')

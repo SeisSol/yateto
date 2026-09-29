@@ -7,7 +7,7 @@ from .node import IndexedTensor, Op, Assign, Einsum, Reduction, Contraction, Sli
 from .indices import Indices
 from .log import LoG
 from . import opt
-from .cost import ShapeCostEstimator
+from .cost import ShapeCostEstimator, ProductsAsGemms
 from .. import aspp
 
 # Similar as ast.NodeTransformer
@@ -141,12 +141,25 @@ class DeduceIndices(Transformer):
 ### Optimal binary tree
 
 class StrengthReduction(Transformer):
-  def __init__(self, costEstimator):
+  """Picks the order in which an Einsum is contracted.
+
+  With `productsAsGemms`, what the order leaves as products has to be done by
+  GEMMs, see cost.ProductsAsGemms. An order that leaves one a GEMM cannot do
+  is then searched for again, with that taken into account; one that does not
+  stays as it is, cheapest by the estimator it was asked for.
+  """
+
+  def __init__(self, costEstimator, productsAsGemms=False):
     self._costEstimator = costEstimator
+    self._productsAsGemms = productsAsGemms
 
   def visit_Einsum(self, node):
     self.generic_visit(node)
-    minTree = opt.strengthReduction(list(node), node.indices, self._costEstimator())
+    terms = list(node)
+    minTree = opt.strengthReduction(terms, node.indices, self._costEstimator())
+    if self._productsAsGemms and ProductsAsGemms.unrepresentable(minTree):
+      minTree = opt.strengthReduction(terms, node.indices,
+                                      ProductsAsGemms(self._costEstimator(), node.indices))
     minTree.setIndexPermutation(node.indices)
     return minTree
 

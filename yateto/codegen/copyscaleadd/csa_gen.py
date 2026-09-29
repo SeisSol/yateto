@@ -1,6 +1,8 @@
 from ..common import *
 from ..cache import RoutineGenerator, GpuRoutineGenerator
 from ..common import BatchedOperationsAux, KernelAttributes
+from ...ast.indices import Range
+from ...memory import DenseMemoryLayout
 
 
 # Optional modules
@@ -65,20 +67,37 @@ class CopyScaleAddGenerator(object):
       import gemmforge as gf
 
       d = self._descr  # type: copyscaleadd.Description
-      m = d.loopRanges[d.result.indices[0]]
-      n = d.loopRanges[d.result.indices[1]]
+      rank = len(d.result.indices)
+      if rank > 2:
+        raise NotImplementedError(
+          f'gemmforge copies and scales matrices; {d.result.name} has {rank} indices.')
+      if d.term.indices != d.result.indices:
+        # it reads the operand the way it writes the result
+        raise NotImplementedError(
+          f'gemmforge copies and scales a matrix as it is; {d.term.name}[{d.term.indices}] '
+          f'is not laid out like {d.result.name}[{d.result.indices}].')
+      # a vector is a matrix of one column, and a scalar one of one entry
+      unit = Range(0, 1)
+      m = d.loopRanges[d.result.indices[0]] if rank > 0 else unit
+      n = d.loopRanges[d.result.indices[1]] if rank > 1 else unit
       alpha = d.alpha
 
       aux = BatchedOperationsAux()
-      matrix_a = gf.YatetoInterface.produce_dense_matrix((m, n),
-                                                         d.term.memoryLayout.bbox(),
-                                                         addressing=aux.forge_addressing(d.term),
-                                                         transpose=False)
 
-      matrix_b = gf.YatetoInterface.produce_dense_matrix((m, n),
-                                                         d.result.memoryLayout.bbox(),
-                                                         addressing=aux.forge_addressing(d.result),
-                                                         transpose=False)
+      def matrix(term):
+        layout = term.memoryLayout
+        if len(term.indices) == 0:
+          layout = DenseMemoryLayout((1, 1))
+        elif len(term.indices) == 1:
+          layout = layout.withDummyDimension()
+        bbox, region = aux.forge_region(layout, (m, n))
+        return gf.YatetoInterface.produce_dense_matrix(region,
+                                                       bbox,
+                                                       addressing=aux.forge_addressing(term),
+                                                       transpose=False)
+
+      matrix_a = matrix(d.term)
+      matrix_b = matrix(d.result)
 
       try:
         vm = gf.vm_factory(self._arch.name, self._arch.backend, fp_type=d.result.datatype.ctype())

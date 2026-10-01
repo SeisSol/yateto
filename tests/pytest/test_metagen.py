@@ -157,10 +157,10 @@ class TestSources:
     def test_nothing_includes_the_code_of_a_generator(self, tmp_path):
         m = metagen(tmp_path)
         assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == \
-            ['init.h', 'kernel.h', 'keys.h', 'runtime.cpp', 'runtime.h', 'tensor.h', 'variant.h']
+            ['init.h', 'kernel.h', 'keys.h', 'pool.h', 'runtime.cpp', 'runtime.h', 'tensor.h', 'variant.h']
         assert m.shared_headers(str(tmp_path)) == \
-            [str(tmp_path / name) for name in ('tensor.h', 'init.h', 'kernel.h', 'variant.h', 'runtime.h')]
-        for header in ('init.h', 'kernel.h', 'tensor.h'):
+            [str(tmp_path / name) for name in ('tensor.h', 'init.h', 'kernel.h', 'pool.h', 'variant.h', 'runtime.h')]
+        for header in ('init.h', 'kernel.h', 'pool.h', 'tensor.h'):
             assert '.cpp' not in (tmp_path / header).read_text()
         assert m.shared_sources(str(tmp_path)) == [str(tmp_path / 'runtime.cpp')]
         includes = re.findall(r'#include ["<](.*)[">]', (tmp_path / 'runtime.cpp').read_text() +
@@ -180,7 +180,7 @@ class TestSources:
         reports = [json.loads(json.dumps(m.generate_single(i, str(apart), 'test')))
                    for i in range(len(m.generators))]
         m.generate(str(apart), namespace='test', includes=['keys.h'], precompiled=reports)
-        for name in ('init.h', 'kernel.h', 'tensor.h', 'variant.h', 'runtime.h', 'runtime.cpp',
+        for name in ('init.h', 'kernel.h', 'pool.h', 'tensor.h', 'variant.h', 'runtime.h', 'runtime.cpp',
                      'metagen_Wide/runtime.cpp', 'metagen_Narrow/runtime.cpp'):
             assert (at_once / name).read_text() == (apart / name).read_text(), name
 
@@ -537,16 +537,19 @@ class TestRuntimeKernels:
 
 MAIN = """#include "init.h"
 #include "kernel.h"
+#include "pool.h"
 #include "runtime.h"
 #include "tensor.h"
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
 
-// The pool is a type of each generator's own, not one the metagen maps a key to.
-inline auto poolOf(test::Wide) { return test::yatetometagen_Wide::Pool::host(); }
-inline auto poolOf(test::Narrow) { return test::yatetometagen_Narrow::Pool::host(); }
+// The pool of a key is the one of its generator, and so is the image behind it.
+static_assert(std::is_same_v<test::Pool<test::Wide>, test::yatetometagen_Wide::Pool>, "");
+static_assert(std::is_same_v<test::Pool<test::Narrow>, test::yatetometagen_Narrow::Pool>, "");
+static_assert(std::is_void_v<test::Pool<int>>, "");
 
 template <typename Key>
 int check(unsigned n, int code) {
@@ -557,7 +560,16 @@ int check(unsigned n, int code) {
     a[i] = static_cast<real>(i % 7) + 1;
     b[i] = static_cast<real>(i % 5) - 2;
   }
-  auto pool = poolOf(Key{});
+  if (test::poolData<Key>() == nullptr || test::poolBytes<Key>() == 0 ||
+      reinterpret_cast<std::size_t>(test::poolData<Key>()) % test::poolAlignment<Key>() != 0) {
+    return code + 2;
+  }
+  // A table on a copy of the image reads what the one on the image reads.
+  std::vector<char> copy(test::poolBytes<Key>() + test::poolAlignment<Key>());
+  void* aligned = copy.data() + (test::poolAlignment<Key>() -
+                                 reinterpret_cast<std::size_t>(copy.data()) % test::poolAlignment<Key>());
+  std::memcpy(aligned, test::poolData<Key>(), test::poolBytes<Key>());
+  const auto pool = test::Pool<Key>::create(aligned);
   test::kernel::matmul<Key> krnl;
   krnl.bindGlobals(pool);
   krnl.alpha = 2;

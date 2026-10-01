@@ -1,5 +1,6 @@
 from .arch import fixArchitectureGlobal
 from .codegen.code import Block, Cpp
+from .codegen.visitor import PoolGenerator
 from .type import Datatype
 
 import collections
@@ -13,7 +14,9 @@ class MetaGenerator:
     Every generator is generated into a namespace and a directory of its own,
     and the headers in the output directory map a template key to the tensors
     and kernels of the generator it was added with: `kernel::X<Key>` is the
-    kernel `X` of that generator.
+    kernel `X` of that generator, and `Pool<Key>` the table of its constants,
+    which that kernel binds; `poolBytes<Key>()`, `poolAlignment<Key>()` and
+    `poolData<Key>()` describe the image behind it.
 
     The code of each generator is compiled in translation units of its own --
     `sources` lists them. Nothing here includes one generator's code into
@@ -54,7 +57,8 @@ class MetaGenerator:
     #: What the metagen writes itself: the headers that map a key to the
     #: code of its generator, the one with the variant of a key, and those of
     #: the generators reached by their variant.
-    TYPED_HEADERS = ('tensor', 'init', 'kernel')
+    POOL_NAME = 'pool'
+    TYPED_HEADERS = ('tensor', 'init', 'kernel', POOL_NAME)
     VARIANT_NAME = 'variant'
     RUNTIME_NAME = 'runtime'
     RUNTIME_NAMESPACE = 'runtime'
@@ -256,6 +260,7 @@ class MetaGenerator:
             headerForward('tensor', tensors)
             headerForward('init', tensors)
             headerForward('kernel', kernels)
+            self._pools(outputDir, namespace, includes, summaries)
         with Cpp(os.path.join(outputDir, f'{self.VARIANT_NAME}.h')) as header:
             with header.HeaderGuard(self._guard(namespace, self.VARIANT_NAME)):
                 header.includeSys('cstddef')
@@ -264,6 +269,43 @@ class MetaGenerator:
                 with header.Namespace(namespace):
                     self._variantOf(header, summaries)
         self._runtime(outputDir, namespace, summaries)
+
+    def _pools(self, outputDir, namespace, includes, summaries):
+        """The pool of the generator added under a key, and the image behind it.
+
+        Every generator has a pool of its own, of a type of its own: a kernel
+        binds the one of its generator, so code that names the kernel by key
+        names the pool by the same key.
+        """
+        templatetypes = ', '.join(f'{typ} Arg{i}' for i, typ in enumerate(self.templateType))
+        templateargs = ', '.join(f'Arg{i}' for i, _ in enumerate(self.templateType))
+        pool = PoolGenerator.POOL_STRUCT_NAME
+        functions = ((PoolGenerator.BYTES_FUN_NAME, PoolGenerator.SIZE_TYPE, 'Size of the image'),
+                     (PoolGenerator.ALIGN_FUN_NAME, PoolGenerator.SIZE_TYPE, 'Alignment of the image'),
+                     (PoolGenerator.DATA_FUN_NAME, 'void const*', 'Address of the image'))
+        with Cpp(os.path.join(outputDir, f'{self.POOL_NAME}.h')) as header:
+            with header.HeaderGuard(self._guard(namespace, self.POOL_NAME)):
+                header.includeSys('cstddef')
+                for path in includes:
+                    header.include(path)
+                for gendata in self.generators:
+                    header.include(self._includePath(
+                        os.path.join(self._directory(gendata, outputDir), f'{self.POOL_NAME}.h'),
+                        outputDir))
+                with header.Namespace(namespace):
+                    with header.Namespace('internal'):
+                        header(f'template<{templatetypes}> struct Internal_{pool} {{ using Type = void; }};')
+                        for summary in summaries:
+                            header('template<> struct Internal_{}<{}> {{ using Type = ::{}::{}; }};'.format(
+                                pool, ', '.join(summary['template']), summary['namespace'], pool))
+                    header('//! The table of the constants of the generator added under a key.')
+                    header(f'template<{templatetypes}> using {pool} = typename internal::Internal_{pool}<{templateargs}>::Type;')
+                    for name, returnType, what in functions:
+                        header(f'//! {what} of the generator added under a key.')
+                        header(f'template<{templatetypes}> {returnType} {name}() = delete;')
+                        for summary in summaries:
+                            header('template<> inline {} {}<{}>() {{ return ::{}::{}(); }}'.format(
+                                returnType, name, ', '.join(summary['template']), summary['namespace'], name))
 
     @staticmethod
     def _literal(text):

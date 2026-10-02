@@ -384,6 +384,44 @@ class TestGroupedTemporaries:
                 T[0]['ij'] <= A['ik'] * clash['kj'], C['ij'] <= T[0]['ij']]))
 
 
+class TestTemporaryWrittenThroughViews:
+    """A temporary written a window at a time is one buffer.
+
+    The buffer was looked up by the window a store writes, and two windows of
+    one temporary are two different views of it: the second window got a
+    buffer of its own, the pointer was declared once per window -- which does
+    not compile -- and a read of the whole temporary saw only the windows
+    stored into the buffer it was pointed at last.
+    """
+
+    N = 4
+
+    def generate(self, tmp_path, build):
+        from yateto.arch import useArchitectureIdentifiedBy
+        from yateto.gemm_configuration import GeneratorCollection
+        g = Generator(useArchitectureIdentifiedBy('dhsw'))
+        build(g)
+        g.generate(str(tmp_path), gemm_cfg=GeneratorCollection([]))
+        return {p.name: p.read_text() for p in tmp_path.iterdir() if p.is_file()}
+
+    def test_the_windows_share_one_buffer(self, tmp_path):
+        import re
+        N = self.N
+        A = Tensor('A', (N, 2))
+        B = Tensor('B', (N, N))
+        C = Tensor('C', (N, N))
+        D = Tensor('D', (2, N))
+        T = Tensor('T', (N, 2), temporary=True)
+        files = self.generate(tmp_path, lambda g: g.add('k', [
+            T['ij'].subslice('j', 0, 1) <= A['ij'].subslice('j', 0, 1),
+            T['ij'].subslice('j', 1, 2) <= B['ik'] * A['kj'].subslice('j', 1, 2),
+            C['il'] <= T['ij'] * D['jl']]))
+        for name in ('kernel.cpp', 'KernelTest.t.h'):
+            assert files[name].count('double* T;') == 1, name
+            buffers = set(re.findall(r'\bT = reinterpret_cast<double\*>\((_buffer\d+)\);', files[name]))
+            assert len(buffers) == 1, (name, buffers)
+
+
 class TestCostEstimatorPerTarget:
     """Which estimator a kernel is reassociated with.
 

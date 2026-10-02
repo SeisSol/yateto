@@ -976,7 +976,7 @@ class UnitTestGenerator(KernelGenerator):
   MAX_CASES = 16
   STREAM = '_stream'
   TMP_MEM = '_tmpMem'
-  TMP_SIZE = 128 * 8
+  TMP_SIZE = '_tmpMemSize'
   FLAGS_MEM = '_flags'
   DEV_FLAGS_MEM = '_dev_flags'
   DEV_POOL_MEM = '_dev_pool'
@@ -1211,6 +1211,11 @@ class UnitTestGenerator(KernelGenerator):
          kernelTensorName = lambda var: self._devTensorKernelArgument(var, writable)
 
          stream_new(self.STREAM)
+         # what the kernel needs for one element, which is how many it runs
+         # on; at least a byte, so that there is a block to hand it
+         required = (f'{kernel_prefix}{OptimizedKernelGenerator.NAMESPACE}::{kernelClass}::'
+                     f'{OptimizedKernelGenerator.TEMP_MAX_MEM_REQUIRED_NAME}')
+         cpp(f'const std::size_t {self.TMP_SIZE} = {required} > 0 ? {required} : 1;')
          data_malloc(self.TMP_MEM, self.TMP_SIZE, f'{Datatype.I8.ctype()}*', self.STREAM)
          if use_flags:
            # A kernel that declares the batch flags reads one per element and
@@ -1270,7 +1275,7 @@ class UnitTestGenerator(KernelGenerator):
 
        if device_test:
          cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
-         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM});' )
+         cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM}, {self.TMP_SIZE});' )
          cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
          if use_flags:
            cpp( f'{self.KERNEL_VAR}.{BatchedOperationsAux.FLAGS_NAME} = {self.DEV_FLAGS_MEM};' )

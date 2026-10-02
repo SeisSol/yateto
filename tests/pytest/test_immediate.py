@@ -92,6 +92,9 @@ class TestFallback:
 
     @pytest.fixture(autouse=True)
     def emitted(self, tmp_path, capsys):
+        # the layouts of the tensors below are aligned against it, so it has to
+        # be in place before they are built, and not only once generate sets it
+        useArchitectureIdentifiedBy('dhsw', 'dsm_86', 'cuda')
         data = np.zeros((N, N, 2))
         data[0, 0, 0] = 0.5
         data[1, 2, 1] = -1.0

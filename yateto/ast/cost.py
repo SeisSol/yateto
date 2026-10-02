@@ -280,3 +280,58 @@ class ExactCost(CachedCostEstimator):
     spp = node.computeSparsityPattern(termSpp)
     self._cache[node] = spp
     return termSpp.count_nonzero() - spp.count_nonzero()
+
+
+class ProductsAsGemms(CostEstimator):
+  """Another estimator's cost, and a penalty for every product a GEMM cannot do.
+
+  Where the generators know GEMMs and nothing element-wise, a product that is
+  not contracted has to be a GEMM whose contraction has length one: an outer
+  product of two vectors, or a vector or scalar scaled by a scalar. Indices of
+  extent one do not count. A product beyond that -- one that shares an index,
+  or scales a matrix -- has no generator, while another order of the same
+  contraction usually does without it. The penalty makes the search prefer
+  that order over any cost it would save.
+
+  A product below a summation is a contraction and not charged, and neither
+  is one at the root of what is estimated while it carries an index that is
+  not among `targetIndices`: that one is still to be summed over.
+  """
+
+  PENALTY = 10**12
+
+  def __init__(self, inner, targetIndices):
+    self._inner = inner
+    self._target = set(targetIndices)
+
+  def searchModel(self, terms):
+    # the analytic model has no notion of which products are GEMMs
+    return None
+
+  def planSignature(self, terms):
+    inner = self._inner.planSignature(terms)
+    return None if inner is None else (type(self).__name__, inner)
+
+  def estimate(self, node):
+    pending = not set(node.indices) <= self._target
+    return self._inner.estimate(node) + self.PENALTY * self.unrepresentable(node, pending)
+
+  def generic_estimate(self, node):
+    return self._inner.generic_estimate(node)
+
+  @classmethod
+  def unrepresentable(cls, node, summed=False):
+    """How many products in `node` a GEMM cannot do; `summed` if it is summed over."""
+    count = 0
+    if isProduct(node) and not summed and not cls.isGemm(node):
+      count += 1
+    for child in node:
+      count += cls.unrepresentable(child, isSummation(node) and isinstance(node, Reduction))
+    return count
+
+  @staticmethod
+  def isGemm(product):
+    free = [[index for index in term.indices if term.indices.indexSize(index) > 1]
+            for term in product]
+    left, right = free
+    return not set(left) & set(right) and len(left) <= 1 and len(right) <= 1

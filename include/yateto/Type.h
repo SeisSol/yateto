@@ -100,9 +100,11 @@
 #define YATETO_BF16_TY std::bfloat16_t
 #elif defined(__BFLT16_MANT_DIG__)
 #define YATETO_BF16_TY __bf16
-#elif defined(__clang__) && defined(__FLT16_MANT_DIG__)
-// clang predefines no macro for `__bf16`. It offers the type on the targets on
-// which it also offers `_Float16`, so that is what gets asked; being wrong here
+#elif defined(__clang__) &&                                                                        \
+    (defined(__AVX512BF16__) || defined(__BFLOAT16__) || defined(__ARM_FEATURE_BF16) ||            \
+     defined(__ARM_BF16_FORMAT_ALTERNATIVE))
+// clang predefines no macro for `__bf16`. It offers the type on some targets,
+// so that is what gets asked; being wrong here
 // costs the format, not the build.
 #define YATETO_BF16_TY __bf16
 #endif

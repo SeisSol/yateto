@@ -61,6 +61,7 @@ class Kernel(object):
     #: KernelAttributes. Validated here so a typo is reported against the
     #: `add` call that made it, not against generated C++ much later.
     self.attrs = KernelAttributes(attrs)
+    self.checkViews(name, self.target, self._prefetch is not None, self.attrs)
 
     self.cfg = None
     self.nonZeroFlops = -1
@@ -68,6 +69,16 @@ class Kernel(object):
   @classmethod
   def isValidName(cls, name):
     return re.match(cls.VALID_NAME, name) is not None
+
+  @staticmethod
+  def checkViews(name, target, prefetches, attrs):
+    """Refuses views as operands of a kernel that cannot take them."""
+    if attrs.runtimeOperands and target != 'cpu':
+      raise ValueError('{} is to take its operands as views, which only a kernel on the host '
+                       'can: its target is {}.'.format(name, target))
+    if attrs.runtimeOperands and prefetches:
+      raise ValueError('{} is to take its operands as views, and a view cannot say what to '
+                       'prefetch.'.format(name))
 
   def prepareUntilUnitTest(self, arch):
     self.ast = [FoldAccumulate().visit(ast) for ast in self.ast]
@@ -312,6 +323,8 @@ class Generator(object):
                 target='cpu',
                 attrs=None):
 
+    # Checked under the name of the family rather than of its first member.
+    Kernel.checkViews(name, target, prefetchGenerator is not None, KernelAttributes(attrs))
     if name not in self._kernelFamilies:
       self._kernelFamilies[name] = KernelFamily(namespace=namespace)
     family = self._kernelFamilies[name]
@@ -463,6 +476,13 @@ class Generator(object):
         ops.update(operations)
         kernels[kernelName] = kernels.get(kernelName, 0) + 1
 
+    # What the metagen needs to bind views to the kernels that are to take
+    # their operands as views. The tensor families under a name of their
+    # own, since the loop over the kernel families below takes `families` for
+    # itself.
+    interfaces = []
+    tensorFamilies = families
+
     kernelSource = StringIO()
     kernelSourceContent = ''
     with Cpp(kernelSource) as cpp:
@@ -494,6 +514,9 @@ class Generator(object):
                                                                            kernel.target,
                                                                            kernel.attrs)
                   recordInMemory(kernel.name, kernelOutline.inMemory)
+                  if kernel.attrs.runtimeOperands:
+                    interfaces.append(OptimizedKernelGenerator.interface(
+                      kernel.name, kernel_namespace, [kernelOutline], tensorFamilies))
                   with cpp.Namespace(kernel_namespace), header.Namespace(kernel_namespace):
                     optKernelGenerator.generate(cpp, header, kernel.name, [kernelOutline])
 
@@ -509,6 +532,9 @@ class Generator(object):
                                                                                      kernel.attrs)
                     recordInMemory(family.name, kernelOutlines[group].inMemory)
 
+                  if any(kernel.attrs.runtimeOperands for kernel in family.kernels()):
+                    interfaces.append(OptimizedKernelGenerator.interface(
+                      family.name, family_namespace, kernelOutlines, tensorFamilies, family.stride()))
                   with cpp.Namespace(family_namespace), header.Namespace(family_namespace):
                     optKernelGenerator.generate(cpp, header, family.name, kernelOutlines, family.stride())
       kernelSourceContent = kernelSource.getvalue()
@@ -542,7 +568,7 @@ class Generator(object):
     # Sort order: Namespace, base name of group, idx of tensor in group
     sort_key = lambda x: (x.namespace, x.name())
     initGen = InitializerGenerator(self._arch, sorted(tensors.values(), key=sort_key), sorted(scalars, key=sort_key),
-                                   inMemory=set(inMemory))
+                                   inMemory=set(inMemory), namespace=namespace)
 
     # Before the initialisation code, not after: init binds references into the
     # pool where it can, so it has to know which entries exist.
@@ -569,11 +595,13 @@ class Generator(object):
         header.include(self.SUPPORT_LIBRARY_HEADER)
         with header.Namespace(namespace):
           initGen.generateInitH(header)
+          initGen.generateTableH(header)
     with Cpp(fInit.cpp) as cpp:
       cpp.includeSys('limits')
       cpp.include(fInit.hName)
       with cpp.Namespace(namespace):
         initGen.generateInitCpp(cpp)
+        initGen.generateTableCpp(cpp)
 
     poolGen = PoolGenerator(self._arch, dataCache, poolMap)
     with Cpp(fPool.h) as header:
@@ -595,7 +623,13 @@ class Generator(object):
     return {
       'namespace': namespace,
       'tensors': set(tensor.baseNameWithNamespace() for tensor in tensors.values()) | set(scalar.baseNameWithNamespace() for scalar in scalars),
-      'kernels': set(prefixnsp(kernel) for kernel in self._kernels) | set(prefixnsp(family) for family in self._kernelFamilies.values())
+      'kernels': set(prefixnsp(kernel) for kernel in self._kernels) | set(prefixnsp(family) for family in self._kernelFamilies.values()),
+      # What init::tensorTable() lists, in its order: name and number of
+      # group indices of every tensor that has a descriptor.
+      'tensorTable': initGen.tableEntries(),
+      # The kernels that are to take their operands as views, and what a
+      # caller sets on them.
+      'runtime': interfaces,
     }
 
 class NamespacedGenerator(object):

@@ -12,7 +12,7 @@ from ..controlflow.transformer import DetermineLocalInitialization
 from ..controlflow.graph import Guard
 from ..controlflow.graph import Variable
 from .arrangement import Arrangement, layoutTag
-from .code import Cpp
+from .code import Block, Cpp
 from .factory import *
 from .flops import FlopCount
 from .common import BatchedOperationsAux, KernelAttributes
@@ -454,6 +454,77 @@ class OptimizedKernelGenerator(KernelGenerator):
       raise ValueError('Offering for {} asks for an axis order, which a {} '
                        'cannot be given.'.format(baseName, type(layout).__name__))
     return layout.reordered(list(order))
+
+  @classmethod
+  def interface(cls, name, namespace, kernelOutlines, families, familyStride=None):
+    """What code outside the kernel sets on it, as plain data.
+
+    For the metagen, which writes a way into the kernel for operands whose
+    layout is only known at run time. Put together over the variants of a
+    family the way `generate` puts together the members of its struct, so that
+    both agree on which operand is a constant `bindGlobals` fills. Every
+    operand is listed with the groups a caller hands over: all the kernel
+    reads of it where the pool does not bind it, and where it does, the
+    members the pool holds no values for. `kernels` says, per variant, which
+    of those it uses and which operands it writes, so that a caller only
+    hands over what the variant it runs uses.
+    """
+    tensors = collections.OrderedDict()
+    writable = dict()
+    constant = dict()
+    datatype = dict()
+    scalars = collections.OrderedDict()
+    for ko in kernelOutlines:
+      if ko:
+        cls._addFromKO(ko.tensors, tensors)
+        cls._addFromKO(ko.writable, writable)
+        cls._addFromKO(ko.is_compute_constant_tensors, constant)
+        cls._addFromKO(ko.datatype, datatype)
+        cls._addFromKO(ko.scalars, scalars)
+
+    def rankOf(groups):
+      return len(next(iter(groups)))
+
+    def listed(groups):
+      return sorted(list(group) for group in groups)
+
+    operands = []
+    handed = dict()
+    for baseName, groups in tensors.items():
+      bound = bool(constant.get(baseName)) and not writable.get(baseName)
+      family = families.get(baseName, {})
+      handed[baseName] = {group for group in groups
+                          if not bound or family.get(group) is None or family[group].values() is None}
+      operands.append({'name': baseName,
+                       'member': Tensor.splitBasename(baseName)[1],
+                       'rank': rankOf(groups),
+                       'groups': listed(handed[baseName]),
+                       'writable': bool(writable.get(baseName)),
+                       'bound': bound,
+                       'datatype': str(datatype[baseName])})
+    kernels = []
+    for position, ko in enumerate(kernelOutlines):
+      if ko:
+        uses = {baseName: listed(groups & handed[baseName]) for baseName, groups in ko.tensors.items()}
+        kernels.append({'position': position,
+                        'uses': {baseName: groups for baseName, groups in uses.items() if groups},
+                        'writes': sorted(baseName for baseName, written in ko.writable.items() if written)})
+    return {
+      'name': name,
+      'namespace': namespace,
+      'family': None if familyStride is None else {
+        'stride': list(familyStride),
+        'size': len(kernelOutlines),
+      },
+      'operands': operands,
+      'scalars': [{'name': baseName,
+                   'member': Tensor.splitBasename(baseName)[1],
+                   'rank': rankOf(groups),
+                   'groups': listed(groups),
+                   'datatype': str(datatype[baseName])}
+                  for baseName, groups in scalars.items()],
+      'kernels': kernels,
+    }
 
   @classmethod
   def _addFromKO(cls, koEntries, entries):
@@ -1335,6 +1406,26 @@ class InitializerGenerator(object):
   VIEW_FUN_NAME = 'create'
   VIEW_TYPE_NAME = 'type'
   VIEW_TYPE_NAME_CONST = 'type_const'
+  DESCRIPTOR_NAME = 'Descriptor'
+  DESCRIPTORS_NAME = 'Descriptors'
+  DESCRIPTOR_FUN_NAME = 'descriptor'
+  TABLE_FUN_NAME = 'tensorTable'
+  DESCRIPTOR_TYPE = '::{}::TensorDescriptor'.format(SUPPORT_LIBRARY_NAMESPACE)
+  ENTRY_TYPE = '::{}::TensorEntry'.format(SUPPORT_LIBRARY_NAMESPACE)
+  TABLE_TYPE = '::{}::TensorTable'.format(SUPPORT_LIBRARY_NAMESPACE)
+  #: How the support library spells an element type.
+  DESCRIPTOR_DATATYPES = {
+    Datatype.BOOL: 'Bool',
+    Datatype.I8: 'I8',
+    Datatype.I16: 'I16',
+    Datatype.I32: 'I32',
+    Datatype.I64: 'I64',
+    Datatype.F32: 'F32',
+    Datatype.F64: 'F64',
+    Datatype.F16: 'F16',
+    Datatype.BF16: 'BF16',
+    Datatype.F128: 'F128',
+  }
 
   class TensorView(object):
     ARGUMENT_NAME = 'values'
@@ -1382,6 +1473,22 @@ class InitializerGenerator(object):
         cpp(self.formatArray(numberType, namespace + suffix + index, values,
                              declarationOnly, hint=suffix))
 
+    #: The storage a descriptor names, and which of its arrays this kind of
+    #: view fills, by the name of the member of the descriptor.
+    STORAGE = None
+    DESCRIPTOR_ARRAYS = {}
+
+    def descriptorArrays(self, memLayout, index):
+      """The members of a descriptor that point at the arrays of this view.
+
+      Spelled as the names `arrays` emitted them under, so that a descriptor
+      and a view read the same numbers. A view without an array of some kind
+      -- a tensor without dimensions has no box -- points at nothing there.
+      """
+      emitted = {suffix for suffix, _ in self.arrayData(memLayout)}
+      return {member: suffix + (index if index is not None else '')
+              for member, suffix in self.DESCRIPTOR_ARRAYS.items() if suffix in emitted}
+
     def internArrays(self, memLayout, numberType):
       for suffix, values in self.arrayData(memLayout):
         self._arrayPool.intern(numberType, values, suffix)
@@ -1398,6 +1505,9 @@ class InitializerGenerator(object):
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
     STOP_NAME = 'Stop'
+    STRIDE_NAME = 'Stride'
+    STORAGE = 'Dense'
+    DESCRIPTOR_ARRAYS = {'start': START_NAME, 'stop': STOP_NAME, 'stride': STRIDE_NAME}
 
     def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {}, {});'.format(
@@ -1411,13 +1521,19 @@ class InitializerGenerator(object):
     def arrayData(self, memLayout):
       if not memLayout.shape():
         return []
+      # The strides as the layout has them. They follow from the box as long
+      # as nobody gave the layout strides of its own, which is what the view
+      # assumes; a descriptor says what is true either way.
       return [(self.START_NAME, [r.start for r in memLayout.bbox()]),
-              (self.STOP_NAME, [r.stop for r in memLayout.bbox()])]
+              (self.STOP_NAME, [r.stop for r in memLayout.bbox()]),
+              (self.STRIDE_NAME, list(memLayout.stride()))]
 
   class CSCMatrixView(TensorView):
     ROWIND_NAME = 'RowInd'
     COLPTR_NAME = 'ColPtr'
     DEVICE_CALLABLE = False
+    STORAGE = 'CSC'
+    DESCRIPTOR_ARRAYS = {'rowIndex': ROWIND_NAME, 'columnPointer': COLPTR_NAME}
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
@@ -1438,7 +1554,13 @@ class InitializerGenerator(object):
 
   class PatternTensorView(TensorView):
     PATTERN_NAME = 'Pattern'
+    START_NAME = 'Start'
+    STOP_NAME = 'Stop'
+    STRIDE_NAME = 'Stride'
     DEVICE_CALLABLE = False
+    STORAGE = 'Pattern'
+    DESCRIPTOR_ARRAYS = {'start': START_NAME, 'stop': STOP_NAME, 'stride': STRIDE_NAME,
+                         'pattern': PATTERN_NAME}
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'
@@ -1454,7 +1576,16 @@ class InitializerGenerator(object):
       )
 
     def arrayData(self, memLayout):
-      return [(self.PATTERN_NAME, memLayout.pattern())]
+      # The pattern covers a box of its own, which reaches past the shape where
+      # the layout is padded; its entries lie in it by columns.
+      extent = memLayout.pattern().shape
+      stride = [1]
+      for size in extent[:-1]:
+        stride.append(stride[-1] * size)
+      return [(self.START_NAME, [0] * len(extent)),
+              (self.STOP_NAME, list(extent)),
+              (self.STRIDE_NAME, stride),
+              (self.PATTERN_NAME, memLayout.pattern())]
 
   #: What the pool needs to know about one tensor group: how large the group
   #: is, which element type its entries were stored as, and where each member
@@ -1462,8 +1593,11 @@ class InitializerGenerator(object):
   PoolEntry = collections.namedtuple(
     'PoolEntry', ['baseName', 'groupSize', 'datatype', 'symbols', 'arrangement'])
 
-  def __init__(self, arch, tensors, scalars, inMemory=frozenset()):
+  def __init__(self, arch, tensors, scalars, inMemory=frozenset(), namespace=''):
     self._arch = arch
+    #: The namespace everything is generated into, for the table, which names
+    #: the tensors of every namespace from one place.
+    self._namespace = namespace
     #: Immediate tensors some kernel reads from memory after all, by name.
     #: They get a pool entry like any other constant.
     self._inMemory = inMemory
@@ -1832,6 +1966,8 @@ class InitializerGenerator(object):
                                                 PoolGenerator.POOL_STRUCT_NAME,
                                                 PoolGenerator.memberName(baseName, own.arrangement)))
 
+        self._descriptors(cpp, baseName, tensors, groupSize)
+
         cpp.emptyline()
         if len(groupSize) == 0:
           prototensor = next(iter(tensors.values()))
@@ -1867,6 +2003,93 @@ class InitializerGenerator(object):
               tv.generate(cpp, ml, self._arch, index(group), False)
             with cpp.Function(self.VIEW_FUN_NAME, arguments=viewArgsConst, returnType='{} {}'.format(tv.factoryModifiers(), self.VIEW_TYPE_NAME_CONST)):
               tv.generate(cpp, ml, self._arch, index(group), True)
+
+  def _descriptors(self, cpp, baseName, tensors, groupSize):
+    """Where the values of each member are, as data: a descriptor per member.
+
+    It points at the arrays the views are built from, so that a descriptor
+    and a view cannot tell two different stories about one tensor.
+    `Descriptors` holds them in the order `tensor::X::index` gives -- a hole
+    of the family is null there -- and `descriptor` picks one out.
+    """
+    stride = groupSizeToStride(groupSize)
+    members = dict()
+    for group, tensor in tensors.items():
+      index = str(address(group, stride)) if len(group) > 0 else ''
+      at = '[{}]'.format(index) if len(group) > 0 else ''
+      memLayout = tensor.memoryLayout()
+      view = self._tensorViewGenerator(tensor)
+      arrays = view.descriptorArrays(memLayout, index)
+      rank = len(memLayout.shape())
+      datatype = tensor.getDatatype(self._arch)
+      alignmentArch = memLayout.alignmentArch()
+      aligned = memLayout.alignedStride() and alignmentArch is not None
+      fields = ['::{}::Datatype::{}'.format(SUPPORT_LIBRARY_NAMESPACE, self.DESCRIPTOR_DATATYPES[datatype]),
+                '::{}::Storage::{}'.format(SUPPORT_LIBRARY_NAMESPACE, view.STORAGE),
+                str(rank),
+                self.SHAPE_NAME + at if rank > 0 else 'nullptr']
+      fields += [arrays.get(member, 'nullptr')
+                 for member in ('start', 'stop', 'stride', 'rowIndex', 'columnPointer', 'pattern')]
+      fields += [self.SIZE_NAME + at,
+                 str(alignmentArch.alignment if aligned else datatype.size())]
+      name = self.DESCRIPTOR_NAME + index
+      cpp('{} {} {}{{{}}};'.format(DATA_MODIFIERS, self.DESCRIPTOR_TYPE, name, ', '.join(fields)))
+      members[group] = name
+
+    count = reduce(operator.mul, groupSize, 1)
+    table = ['nullptr'] * count
+    for group, name in members.items():
+      table[address(group, stride)] = '&' + name
+    cpp('{} {} const* {}[] = {{{}}};'.format(DATA_MODIFIERS, self.DESCRIPTOR_TYPE,
+                                             self.DESCRIPTORS_NAME, ', '.join(table)))
+    args = ndargs(len(groupSize))
+    with cpp.Function(self.DESCRIPTOR_FUN_NAME,
+                      typedNdArgs(len(groupSize), self._arch.uintTypename),
+                      '{} {} {} const*'.format(CONSTEXPR, STATIC, self.DESCRIPTOR_TYPE)):
+      if len(groupSize) > 0:
+        cpp('return {}[{}({})];'.format(self.DESCRIPTORS_NAME, self.INDEX_FUN_NAME, ', '.join(args)))
+      else:
+        cpp('return &{};'.format(self.DESCRIPTOR_NAME))
+
+  def tableEntries(self):
+    """What the table lists: name and number of group indices, ordered by name."""
+    return [(baseName, len(self._groupSize[baseName])) for baseName in sorted(self._collect)]
+
+  def generateTableH(self, header):
+    if self.TABLE_FUN_NAME in self._collect:
+      raise ValueError('The tensor {0} has the name of the function that lists every tensor, '
+                       '{1}::{0}(). Rename the tensor.'.format(self.TABLE_FUN_NAME, self.INIT_NAMESPACE))
+    with header.Namespace(self.INIT_NAMESPACE):
+      header('//! Every tensor of this generation, ordered by name.')
+      header.functionDeclaration(self.TABLE_FUN_NAME, '', '{} const&'.format(self.TABLE_TYPE))
+
+  def generateTableCpp(self, cpp):
+    """The table of every tensor, for code that learns at run time which one it wants.
+
+    Ordered by name, the namespace included, which is the order a lookup in
+    it relies on.
+    """
+    root = '::{}'.format(self._namespace) if self._namespace else ''
+    with cpp.Namespace(self.INIT_NAMESPACE):
+      with cpp.Function(self.TABLE_FUN_NAME, '', '{} const&'.format(self.TABLE_TYPE)):
+        entries = []
+        for position, (baseName, rank) in enumerate(self.tableEntries()):
+          prefix, name = Tensor.splitBasename(baseName)
+          qualified = '{}::{}{}::{}::{}'.format(root, prefix, self.INIT_NAMESPACE, name, self.DESCRIPTORS_NAME)
+          groupSize = 'nullptr'
+          if rank > 0:
+            groupSize = 'GroupSize{}'.format(position)
+            cpp('{} {} {}[] = {{{}}};'.format(DATA_MODIFIERS, self._numberType, groupSize,
+                                              ', '.join(str(size) for size in self._groupSize[baseName])))
+          entries.append('{{"{}", {}, {}, {}}}'.format(baseName, rank, groupSize, qualified))
+        if entries:
+          with Block(cpp, '{} {} Entries[] ='.format(DATA_MODIFIERS, self.ENTRY_TYPE), foot=';'):
+            for entry in entries:
+              cpp(entry + ',')
+          cpp('{} {} Table{{Entries, {}}};'.format(DATA_MODIFIERS, self.TABLE_TYPE, len(entries)))
+        else:
+          cpp('{} {} Table{{nullptr, 0}};'.format(DATA_MODIFIERS, self.TABLE_TYPE))
+        cpp('return Table;')
 
   def _array(self, cpp, typ, name, content, groupSize, declarationOnly=False, alwaysArray=True, constexpr=True, static=True):
     cexpr = CONSTEXPR + ' ' if constexpr else ''

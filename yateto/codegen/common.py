@@ -283,10 +283,20 @@ class KernelAttributes:
 
   Unknown keys are rejected here rather than ignored, since an attribute
   that does nothing looks exactly like a typo in one that would have.
+
+  `operands` says how a caller hands the kernel its operands: `'static'`, as
+  pointers into the layout the kernel was generated for, or `'runtime'`,
+  which gives it a second way in besides, for code that only learns at run
+  time in which configuration it holds them: views that carry their layout,
+  bound to the kernel by the metagen (see `MetaGenerator`). That way in is
+  for the host, so it is refused for a kernel on the device, and for one
+  that prefetches, since a view cannot say what to prefetch.
   """
 
   FLAGS = 'flags'
-  KNOWN = frozenset({FLAGS})
+  OPERANDS = 'operands'
+  KNOWN = frozenset({FLAGS, OPERANDS})
+  OPERAND_BINDINGS = ('static', 'runtime')
 
   def __init__(self, attrs=None):
     attrs = dict(attrs) if attrs else {}
@@ -296,6 +306,9 @@ class KernelAttributes:
         'unknown kernel attribute(s) {}; known are {}'.format(
           ', '.join(repr(key) for key in unknown),
           ', '.join(repr(key) for key in sorted(self.KNOWN))))
+    if attrs.get(self.OPERANDS, 'static') not in self.OPERAND_BINDINGS:
+      raise ValueError('unknown binding of operands {!r}; known are {}'.format(
+        attrs[self.OPERANDS], ', '.join(repr(binding) for binding in self.OPERAND_BINDINGS)))
     self._attrs = attrs
 
   @property
@@ -303,9 +316,18 @@ class KernelAttributes:
     """Whether the kernel takes a per-element mask of elements to skip."""
     return bool(self._attrs.get(self.FLAGS, False))
 
+  @property
+  def runtimeOperands(self):
+    """Whether the kernel can also be reached with operands whose layout is known at run time."""
+    return self._attrs.get(self.OPERANDS, 'static') == 'runtime'
+
   def as_dict(self):
-    """The attributes as the external code generators want them."""
-    return dict(self._attrs)
+    """The attributes as the external code generators want them.
+
+    How the operands are bound is not among them: a kernel is generated the
+    same either way, and the way in for views is written around it.
+    """
+    return {key: value for key, value in self._attrs.items() if key != self.OPERANDS}
 
   def __eq__(self, other):
     if isinstance(other, KernelAttributes):

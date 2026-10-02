@@ -2,6 +2,7 @@
 #define YATETO_H_
 
 #include "yateto/CopyPolicy.h"
+#include "yateto/Descriptor.h"
 #include "yateto/InitTools.h"
 #include "yateto/LinearAllocator.h"
 #include "yateto/Marker.h"

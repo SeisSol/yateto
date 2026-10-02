@@ -47,3 +47,14 @@ def add(g):
   _(P['kc'].subslice('c', 5, 8) <= T['kc'].subslice('c', 2, 5) * Q['kc'].subslice('c', 5, 8))
   _(P['kc'].subslice('c', 0, 3) <= T['kc'].subslice('c', 2, 5) * Q['kc'].subslice('c', 0, 3))
   _(P['kc'] <= Q['kc'] * T['kc'])
+
+  # A temporary written a window at a time and read whole: the windows are
+  # parts of one buffer, or the read sees only the window stored last.
+  W = Tensor('W', (N, 3), temporary=True)
+  R = Tensor('R', (N, 3))
+  S = Tensor('S', (3, N))
+  _([
+    W['kc'].subslice('c', 0, 1) <= Q['kc'].subslice('c', 0, 1),
+    W['kc'].subslice('c', 1, 3) <= T['kl'] * R['lc'].subslice('c', 1, 3),
+    P['kn'] <= W['kc'] * S['cn'],
+  ])

@@ -92,7 +92,9 @@ class Kernel(object):
     self.cfg = ast2cf.cfg()
     self.cfg = LivenessAnalysis().visit(self.cfg)
 
-  def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool):
+  def prepareUntilCodeGen(self, cost_estimator, enableFusedGemm: bool, productsAsGemms: bool = False):
+    """`productsAsGemms`: the generators for this kernel do products as
+    GEMMs and know nothing element-wise, see ast.cost.ProductsAsGemms."""
     estimator = costEstimatorFor(cost_estimator, self.target)
     self.nonZeroFlops = 0
     for a in self.ast:
@@ -106,7 +108,7 @@ class Kernel(object):
     prefetch = copy.copy(self._prefetch)
     for ast in self.ast:
       ast = EquivalentSparsityPattern().visit(ast)
-      ast = StrengthReduction(estimator).visit(ast)
+      ast = StrengthReduction(estimator, productsAsGemms).visit(ast)
       ast = FindContractions().visit(ast)
       ast = ComputeMemoryLayout().visit(ast)
       permutationVariants = FindIndexPermutations().visit(ast)
@@ -210,9 +212,9 @@ class KernelFamily(object):
     for kernel in self._kernels.values():
       kernel.prepareUntilUnitTest(arch)
 
-  def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool):
+  def prepareUntilCodeGen(self, costEstimator, enableFusedGemm: bool, productsAsGemms=lambda target: False):
     for kernel in self._kernels.values():
-      kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm)
+      kernel.prepareUntilCodeGen(costEstimator, enableFusedGemm, productsAsGemms(kernel.target))
 
 def costEstimatorFor(costEstimator, target):
   """Which estimator a kernel for this target is reassociated with.
@@ -397,13 +399,17 @@ class Generator(object):
             CxxTest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
 
 
+    # A device kernel no exporter takes is generated here, from GEMMs and
+    # copy-scale-add alone; its products have to be GEMMs, then.
+    productsAsGemms = lambda target: target == 'gpu' and target not in routine_exporters
+
     print('Optimizing ASTs...')
     for kernel in self._kernels:
       print(f'{kernel.name} ({len(kernel.ast)} AST(s))')
-      kernel.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
+      kernel.prepareUntilCodeGen(cost_estimator, enableFusedGemm, productsAsGemms(kernel.target))
     for family in self._kernelFamilies.values():
       print(f'{family.name} ({sum(len(kernel.ast) for kernel in family.kernels())} AST(s))')
-      family.prepareUntilCodeGen(cost_estimator, enableFusedGemm)
+      family.prepareUntilCodeGen(cost_estimator, enableFusedGemm, productsAsGemms)
 
     # Create mapping from namespace to kernel/family
     kernel_dict = {}

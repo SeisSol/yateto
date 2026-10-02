@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 from .. import aspp
 from ..type import AddressingMode, Datatype
-from ..ast.indices import BoundingBox
+from ..ast.indices import BoundingBox, Range
 from ..ast.log import splitByDistance
 from ..memory import MemoryLayoutView
 from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, FloatingType, MemrefType, GroupType, IntImmValue, FloatImmValue, DYNAMIC, SubviewInst, LoadInst
@@ -387,6 +387,33 @@ class BatchedOperationsAux:
     if mode not in cls.FORGE_ADDRESSING:
       raise ValueError(f'gemmforge and chainforge cannot read an operand addressed as {mode}.')
     return cls.FORGE_ADDRESSING[mode]
+
+  @classmethod
+  def forge_region(cls, memoryLayout, ranges, transpose=False):
+    """Where in its storage gemmforge finds a two-dimensional operand.
+
+    gemmforge describes a matrix by the bounding box of the storage its
+    pointer points at, and by the region an operation touches within it. A
+    view is a window into a larger tensor, and the pointer it is handed is
+    the tensor's: so the region is shifted to where the window lies, and the
+    bounding box is the tensor's. Anything else is its own storage and comes
+    back as it is.
+
+    `ranges` are in the order the operation reads the operand, which is
+    transposed where the operand is, and they come back in that order,
+    together with the bounding box.
+    """
+    ranges = list(ranges)
+    if transpose:
+      ranges.reverse()
+    layout = memoryLayout
+    while isinstance(layout, MemoryLayoutView):
+      shifted = ranges[layout.index]
+      ranges[layout.index] = Range(shifted.start + layout.start, shifted.stop + layout.start)
+      layout = layout.base
+    if transpose:
+      ranges.reverse()
+    return layout.bbox(), tuple(ranges)
 
   @classmethod
   def deduce_ptr_arg(cls, term, as_const=False):

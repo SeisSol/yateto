@@ -491,6 +491,7 @@ class Generator(object):
       cpp.includeSys('cstring')
       cpp.includeSys('cstdlib')
       cpp.includeSys('limits')
+      cpp.includeSys('new')
 
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:

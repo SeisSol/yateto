@@ -244,12 +244,44 @@ def parameterSpaceFromRanges(*args):
   return list(itertools.product(*[list(i) for i in args]))
 
 class GlobalRoutineCache:
+  """The routines of several generators, written once for all of them.
+
+  The routines can come from other processes as well: `export` gives what a
+  process generated as plain data, which `merge` adds to the cache of the
+  process that writes them.
+  """
+
   def __init__(self):
     self.cache = RoutineCache()
     self.dirs = []
 
   def register(self, outputDir):
     self.dirs += [outputDir]
+
+  def export(self, root=None):
+    """The routines added so far, written, and the directories registered so
+    far, as plain data -- what `merge` takes.
+
+    With `root`, the directories are relative to it, and so is the data:
+    the same wherever the directories are.
+    """
+    return {
+      'dirs': [outputDir if root is None else os.path.relpath(outputDir, root)
+               for outputDir in self.dirs],
+      'routines': [[name, GeneratedRoutine.of(name, generator).asDict()]
+                   for name, generator in self.cache.routines()],
+    }
+
+  def merge(self, exported, root=None):
+    """Adds what `export` gave, of this process or of another one; `root` as
+    there."""
+    for outputDir in exported['dirs']:
+      if root is not None:
+        outputDir = os.path.join(root, outputDir)
+      if outputDir not in self.dirs:
+        self.register(outputDir)
+    for name, routine in exported['routines']:
+      self.cache.addRoutine(name, GeneratedRoutine.fromDict(routine))
 
   def generate(self, outputDir, namespace='yateto'):
     print('Calling external code generators...')

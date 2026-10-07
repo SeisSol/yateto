@@ -1,6 +1,8 @@
 import contextlib
 import functools
+import hashlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -370,6 +372,16 @@ class ExecuteGemmGen(RoutineGenerator):
            self._gemmDescr == other._gemmDescr and \
            self._sppA == other._sppA and \
            self._sppB == other._sppB
+
+  def identity(self):
+    """What `__eq__` compares -- the architecture, the GEMM and the sparsity
+    patterns of its operands -- as a digest that is the same in every process."""
+    def pattern(spp):
+      return None if spp is None else [[int(i) for i in entry] for entry in spp]
+    described = [self._arch.name, self._arch.host_name,
+                 sorted([key, str(value)] for key, value in self._gemmDescr.items()),
+                 pattern(self._sppA), pattern(self._sppB)]
+    return hashlib.sha256(json.dumps(described).encode()).hexdigest()
 
   def header(self, cpp):
     with cpp.PPIfndef('NDEBUG'):

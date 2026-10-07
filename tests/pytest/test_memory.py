@@ -321,6 +321,27 @@ class TestAddressesIn:
         assert view.addressesIn() == sorted([base.address((2, 1)), base.address((1, 2))])
 
 
+class TestNotWrittenAddresses:
+    def test_a_view_leaves_the_box_it_writes(self):
+        from yateto.memory import MemoryLayoutView
+
+        view = MemoryLayoutView(DenseMemoryLayout((3, 4)), 1, 1, 3)
+        # it writes its column 0, column 1 of the tensor; column 2 is left
+        written = BoundingBox([Range(0, 3), Range(0, 1)])
+        assert sorted(view.notWrittenAddresses(written)) == [6, 7, 8]
+
+    def test_a_view_answers_within_what_its_base_stores(self):
+        from yateto.memory import MemoryLayoutView
+
+        # 20 of 22 rows stored, and a window of rows 1 to 21: the window
+        # reaches past what the base stores, by two rows
+        base = DenseMemoryLayout((22, 2), BoundingBox([Range(0, 20), Range(0, 2)]))
+        view = MemoryLayoutView(base, 0, 1, 22)
+        assert view.notWrittenAddresses(BoundingBox([Range(0, 19), Range(0, 2)])) == []
+        assert sorted(view.notWrittenAddresses(BoundingBox([Range(0, 17), Range(0, 2)]))) == \
+            [base.address((18, 0)), base.address((19, 0)), base.address((18, 1)), base.address((19, 1))]
+
+
 class TestAlignmentArchIsCarriedByTheLayout:
     """Two architectures at once.
 

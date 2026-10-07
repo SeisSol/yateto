@@ -1,4 +1,10 @@
+import contextlib
+import functools
+import io
+import os
+import shutil
 import subprocess
+import sys
 import tempfile
 from abc import ABC
 import numpy as np
@@ -285,6 +291,68 @@ class GemmGen(object):
 
     return flops
 
+@functools.lru_cache(maxsize=None)
+def _pspammInProcess(cmd):
+  """Runs the command line of PSpaMM in this process, if the program `cmd`
+  is that command line run by the interpreter running this code; None if not.
+
+  The program PSpaMM installs is a script that runs the command line of its
+  package. Started by this interpreter, in this environment, it imports what
+  an import here imports, so the command line run here writes the routine the
+  program writes -- without starting an interpreter and importing the
+  dependencies of PSpaMM anew for every routine, which is most of the time a
+  routine takes.
+  """
+  path = shutil.which(cmd)
+  if path is None:
+    return None
+  try:
+    with open(path, 'rb') as file:
+      shebang, _, script = file.read(1 << 16).partition(b'\n')
+  except OSError:
+    return None
+  if not shebang.startswith(b'#!') or b'from pypspamm.cli import main' not in script:
+    return None
+  interpreter = shebang[2:].decode(errors='replace').split()
+  if len(interpreter) == 2 and os.path.basename(interpreter[0]) == 'env':
+    interpreter = [shutil.which(interpreter[1]) or interpreter[1]]
+  # The path as written, not the binary it names: a virtual environment links
+  # to the interpreter it was made from, and is an environment of its own.
+  if len(interpreter) != 1 or os.path.abspath(interpreter[0]) != os.path.abspath(sys.executable):
+    return None
+  try:
+    import pypspamm.cli
+    from pypspamm.codegen.forms import Loop
+  except ImportError:
+    return None
+  # PSpaMM numbers the loops it writes through the life of its process, and a
+  # run of the program starts from zero. So does every routine here, which
+  # keeps its code the code the program writes, whatever came before it.
+  if not isinstance(getattr(Loop, '_labels', None), list):
+    return None
+
+  def run(cmd, argList):
+    Loop._labels.clear()
+    output = io.StringIO()
+    argv = sys.argv
+    sys.argv = argList
+    error = None
+    try:
+      with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        # the program exits with what the command line returns
+        status = pypspamm.cli.main()
+    except SystemExit as stop:
+      status = stop.code
+    except Exception as exception:
+      status, error = 1, exception
+    finally:
+      sys.argv = argv
+    if status not in (None, 0):
+      raise RuntimeError(f"""GEMM code generator "{cmd}" failed (run in-process). Thus, the kernel generation may be incomplete.
+Given command: {' '.join(argList)}
+Output: {output.getvalue()}""") from error
+  return run
+
 class ExecuteGemmGen(RoutineGenerator):
   def __init__(self, arch, gemmDescr, sppA, sppARows, sppB, sppBRows, gemm_cfg):
     self._arch = arch
@@ -311,8 +379,12 @@ class ExecuteGemmGen(RoutineGenerator):
       cpp.includeSys('immintrin.h')
 
   def _callGenerator(self, argList):
+    strcmd = [str(arg) for arg in argList]
+    inProcess = _pspammInProcess(self._cmd) if self._mode == 'pspamm' else None
+    if inProcess is not None:
+      inProcess(self._cmd, strcmd)
+      return
     try:
-      strcmd = [str(arg) for arg in argList]
       result = subprocess.run(strcmd, capture_output=True, text=True)
     except OSError:
       raise RuntimeError(f'GEMM code generator executable "{self._cmd}" not found. (Make sure to add the folder containing the executable to your PATH environment variable.)')

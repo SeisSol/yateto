@@ -146,6 +146,13 @@ class TestSources:
             for path in m.device_sources(str(tmp_path))[name] + m.tests(str(tmp_path))[name]:
                 assert pathlib.Path(path).is_file()
 
+    def test_tests_are_listed_where_doctest_tests_are_written(self, tmp_path):
+        m = metagen(tmp_path, unit_tests='cxxtest')
+        for name in VARIANTS:
+            assert m.tests(str(tmp_path))[name] == []
+            assert (tmp_path / f'metagen_{name}' / 'KernelTest.t.h').is_file()
+            assert not (tmp_path / f'metagen_{name}' / 'test-kernel.cpp').exists()
+
     def test_a_shared_routine_cache_keeps_the_routines(self, tmp_path):
         cache = GlobalRoutineCache()
         m = metagen(tmp_path, routine_cache=cache)

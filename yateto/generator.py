@@ -274,6 +274,9 @@ class Generator(object):
   GPULIKE_ROUTINES_FILE_NAME = 'gpulike_subroutine'
   CXXTEST_FILE_NAME = 'KernelTest.t'
   DOCTEST_FILE_NAME = 'test-kernel'
+  #: What `generate` can write unit tests of the kernels for: the doctest
+  #: source DOCTEST_FILE_NAME.cpp and the CxxTest header CXXTEST_FILE_NAME.h.
+  UNIT_TEST_FRAMEWORKS = ('doctest', 'cxxtest')
   HEADER_GUARD_SUFFIX = 'H_'
   SUPPORT_LIBRARY_HEADER = 'yateto.h'
   MARKER_HEADER = 'yateto/Marker.h'
@@ -358,7 +361,10 @@ class Generator(object):
                cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set(),
                routine_cache=None,
-               routine_exporters={}
+               routine_exporters={},
+               # The frameworks to write unit tests of the kernels for, by the
+               # names of UNIT_TEST_FRAMEWORKS.
+               unit_tests=None
                ):
 
     if not gemm_cfg:
@@ -385,18 +391,30 @@ class Generator(object):
     fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
     fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
 
-    print('Generating unit tests...')
+    if unit_tests is None:
+      unit_tests = self.UNIT_TEST_FRAMEWORKS
+    elif isinstance(unit_tests, str):
+      unit_tests = (unit_tests,)
+    unknown = set(unit_tests) - set(self.UNIT_TEST_FRAMEWORKS)
+    if unknown:
+      raise ValueError(f'Unknown unit test frameworks: {", ".join(sorted(unknown))} '
+                       f'(known are {", ".join(self.UNIT_TEST_FRAMEWORKS)}).')
+
+    if unit_tests:
+      print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
         for kernel in self._kernels:
             UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, attrs=kernel.attrs)
         for family in self._kernelFamilies.values():
             for group, kernel in family.items():
                 UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, group, attrs=kernel.attrs)
-    with Cpp(fUTdoctest.cpp) as cpp:
-        Doctest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
-    with Cpp(fUTcxxtest.h) as cpp:
-        with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
-            CxxTest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+    if 'doctest' in unit_tests:
+      with Cpp(fUTdoctest.cpp) as cpp:
+          Doctest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+    if 'cxxtest' in unit_tests:
+      with Cpp(fUTcxxtest.h) as cpp:
+          with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
+              CxxTest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
 
 
     # A device kernel no exporter takes is generated here, from GEMMs and

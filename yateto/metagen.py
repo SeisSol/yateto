@@ -164,10 +164,14 @@ class MetaGenerator:
     def tests(self, outputDir=''):
         """Per generator name, the translation units of its generated unit tests.
 
-        The CxxTest header `KernelTest.t.h` lies next to each of them.
+        The CxxTest header `KernelTest.t.h` lies next to each of them, where
+        the generator writes tests for CxxTest.
         """
+        def written(gendata):
+            frameworks = gendata['kwargs'].get('unit_tests')
+            return frameworks is None or 'doctest' in ((frameworks,) if isinstance(frameworks, str) else frameworks)
         return collections.OrderedDict(
-            (gendata['name'], self._paths(gendata, outputDir, (self.TEST_SOURCE,)))
+            (gendata['name'], self._paths(gendata, outputDir, (self.TEST_SOURCE,) if written(gendata) else ()))
             for gendata in self.generators)
 
     def shared_sources(self, outputDir=''):

@@ -258,6 +258,25 @@ class GlobalRoutineCache:
   def register(self, outputDir):
     self.dirs += [outputDir]
 
+  @staticmethod
+  def sources(outputDir, shards=None):
+    """Per target ('cpu', 'gpu'), the files `generate` writes its routines into.
+
+    `shards` maps a target to the number of files its routines are spread
+    over; one by default, which is `subroutine.cpp` and
+    `gpulike_subroutine.cpp`. More are numbered, from `subroutine_0.cpp` on.
+    """
+    shards = shards or {}
+    names = {'cpu': Generator.ROUTINES_FILE_NAME, 'gpu': Generator.GPULIKE_ROUTINES_FILE_NAME}
+    files = {}
+    for target, name in names.items():
+      count = shards.get(target, 1)
+      if count < 1:
+        raise ValueError(f'The routines of {target} need at least one file, not {count}.')
+      stems = [name] if count == 1 else [f'{name}_{index}' for index in range(count)]
+      files[target] = [Generator.FileNames(outputDir, stem).cpp for stem in stems]
+    return files
+
   def export(self, root=None):
     """The routines added so far, written, and the directories registered so
     far, as plain data -- what `merge` takes.
@@ -283,13 +302,14 @@ class GlobalRoutineCache:
     for name, routine in exported['routines']:
       self.cache.addRoutine(name, GeneratedRoutine.fromDict(routine))
 
-  def generate(self, outputDir, namespace='yateto'):
+  def generate(self, outputDir, namespace='yateto', shards=None):
+    """Writes the routines, into the files `sources` names for `shards`."""
     print('Calling external code generators...')
+    files = self.sources(outputDir, shards)
     fRoutines = Generator.FileNames(outputDir, Generator.ROUTINES_FILE_NAME)
-    fGpulikeRoutines = Generator.FileNames(outputDir, Generator.GPULIKE_ROUTINES_FILE_NAME)
     with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(Generator._headerGuardName(namespace, Generator.ROUTINES_FILE_NAME)):
-        self.cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
+        self.cache.generate(header, files['cpu'], files['gpu'])
 
     for subdir in self.dirs:
       relpath = os.path.relpath(outputDir, subdir)

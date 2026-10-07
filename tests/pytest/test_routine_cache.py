@@ -3,12 +3,16 @@
 A GlobalRoutineCache collects the routines the kernels call -- those of GEMM
 tools and of device code generators -- and writes each of them once, with its
 declaration in `subroutine.h`. What a process generated can be handed to the
-process that writes the routines, as plain data (`export`, `merge`).
+process that writes the routines, as plain data (`export`, `merge`), and the
+routines of a target can be spread over several files that compile at the
+same time (`shards`).
 """
 from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -175,3 +179,72 @@ class TestIdentityOfAGemm:
 
     def test_a_sparsity_pattern_tells_two_apart(self):
         assert self.gemm(sppA=[(0, 0), (1, 1)]).identity() != self.gemm(sppA=[(0, 0), (2, 1)]).identity()
+
+
+class TestSources:
+    def test_one_file_per_target_by_default(self, tmp_path):
+        assert GlobalRoutineCache.sources(str(tmp_path)) == {
+            'cpu': [str(tmp_path / 'subroutine.cpp')],
+            'gpu': [str(tmp_path / 'gpulike_subroutine.cpp')],
+        }
+
+    def test_more_files_are_numbered(self, tmp_path):
+        assert GlobalRoutineCache.sources(str(tmp_path), {'gpu': 3}) == {
+            'cpu': [str(tmp_path / 'subroutine.cpp')],
+            'gpu': [str(tmp_path / f'gpulike_subroutine_{index}.cpp') for index in range(3)],
+        }
+
+    def test_a_target_takes_at_least_one_file(self, tmp_path):
+        with pytest.raises(ValueError, match='at least one file'):
+            GlobalRoutineCache.sources(str(tmp_path), {'cpu': 0})
+
+
+SHARDS = {'cpu': 2, 'gpu': 2}
+
+
+class TestShards:
+    @pytest.fixture
+    def out(self, tmp_path):
+        cache(ROUTINES).generate(str(tmp_path), shards=SHARDS)
+        return tmp_path
+
+    def test_every_routine_is_written_once(self, out):
+        for target, paths in GlobalRoutineCache.sources(str(out), SHARDS).items():
+            written = [name for path in paths for name in defined(out / path)]
+            assert sorted(written) == sorted(name for name, routine in ROUTINES.items()
+                                             if routine.target() == target)
+
+    def test_the_header_declares_them_in_the_order_they_were_added(self, out):
+        assert re.findall(r'void (\w+)\(', (out / 'subroutine.h').read_text()) == list(ROUTINES)
+
+    def test_every_file_includes_what_the_routines_of_its_target_need(self, out):
+        for target, includes in (('cpu', ['cmath', 'cstdio']), ('gpu', ['cstddef'])):
+            for path in GlobalRoutineCache.sources(str(out), SHARDS)[target]:
+                assert re.findall(r'#include <(\w+)>', (out / path).read_text()) == includes
+
+    def test_the_largest_go_first_into_the_smallest_file(self, out):
+        # by the size of their code: large, other, medium, small, tiny; each
+        # into the file that is the smaller one so far
+        assert defined(out / 'subroutine_0.cpp') == ['large', 'small']
+        # and in a file, in the order they were added
+        assert defined(out / 'subroutine_1.cpp') == ['tiny', 'medium', 'other']
+
+    def test_one_file_is_what_the_default_writes(self, tmp_path):
+        (tmp_path / 'default').mkdir()
+        (tmp_path / 'one').mkdir()
+        cache(ROUTINES).generate(str(tmp_path / 'default'))
+        cache(ROUTINES).generate(str(tmp_path / 'one'), shards={'cpu': 1, 'gpu': 1})
+        for name in ('subroutine.h', 'subroutine.cpp', 'gpulike_subroutine.cpp'):
+            assert (tmp_path / 'one' / name).read_text() == (tmp_path / 'default' / name).read_text(), name
+
+    @pytest.mark.skipif(shutil.which('c++') is None, reason='needs a C++ compiler')
+    def test_the_files_link_into_one_program(self, out):
+        calls = ''.join(f'  {name}(&x);\n' for name in ROUTINES)
+        (out / 'main.cpp').write_text(
+            f'#include "subroutine.h"\nint main() {{\n  double x = 0.0;\n{calls}'
+            f'  return x == {sum(routine.size for routine in ROUTINES.values())}.0 ? 0 : 1;\n}}\n')
+        sources = [path for paths in GlobalRoutineCache.sources(str(out), SHARDS).values() for path in paths]
+        built = subprocess.run(['c++', '-std=c++17', '-Wall', '-Werror', str(out / 'main.cpp'), *sources,
+                                '-o', str(out / 'linked')], capture_output=True, text=True)
+        assert built.returncode == 0, built.stderr
+        assert subprocess.run([str(out / 'linked')]).returncode == 0

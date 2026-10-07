@@ -78,6 +78,9 @@ class GeneratedRoutine(object):
     """The class of the generator that wrote it."""
     return self._kind
 
+  def size(self):
+    return len(self._code)
+
   def header(self, cpp):
     cpp.out.write(self._header)
 
@@ -127,24 +130,48 @@ class RoutineCache(object):
     return list(self._routines.items())
 
   def generate(self, header, cppFileName, gpuFileName):
-    with Cpp(gpuFileName) as gpucpp:
-      with Cpp(cppFileName) as cpp:
-        for generator in self._generators.values():
-          if generator.target() == 'gpu':
-            generator.header(gpucpp)
-          elif generator.target() == 'cpu':
-            generator.header(cpp)
-          else:
-            raise NotImplementedError(f'Unknown target: {generator.target()}')
+    """Writes every routine into the file of its target, and its declaration
+    into `header`.
 
-    for name, generator in self._routines.items():
-      if generator.target() == 'gpu':
-        declaration = generator(name, gpuFileName)
-      elif generator.target() == 'cpu':
-        declaration = generator(name, cppFileName)
-      else:
+    A target can have a list of files instead. Every file of it gets the
+    includes of all its routines, and the routines are spread over the files
+    by the size of their code, the largest first, each into the file that is
+    the smallest so far: compiled one by one, the files then take about the
+    same time, where the time of the largest is the time of all of them. A
+    file holds its routines in the order they were added.
+    """
+    files = {'cpu': cppFileName, 'gpu': gpuFileName}
+    for target in files:
+      if isinstance(files[target], str):
+        files[target] = [files[target]]
+    for generator in self._routines.values():
+      if generator.target() not in files:
         raise NotImplementedError(f'Unknown target: {generator.target()}')
-      header(declaration)
+
+    for target, fileNames in files.items():
+      for fileName in fileNames:
+        with Cpp(fileName) as cpp:
+          for generator in self._generators.values():
+            if generator.target() == target:
+              generator.header(cpp)
+
+    placement = dict()
+    for target, fileNames in files.items():
+      routines = [(name, generator) for name, generator in self._routines.items()
+                  if generator.target() == target]
+      if len(fileNames) == 1:
+        placement.update((name, (generator, fileNames[0])) for name, generator in routines)
+        continue
+      generated = [(name, GeneratedRoutine.of(name, generator)) for name, generator in routines]
+      sizes = [0] * len(fileNames)
+      for name, routine in sorted(generated, key=lambda item: -item[1].size()):
+        smallest = sizes.index(min(sizes))
+        sizes[smallest] += routine.size()
+        placement[name] = (routine, fileNames[smallest])
+
+    for name in self._routines:
+      generator, fileName = placement[name]
+      header(generator(name, fileName))
 
 class TinytcWriter(GpuRoutineGenerator):
   def __init__(self, signature, source):

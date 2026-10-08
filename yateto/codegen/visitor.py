@@ -1326,12 +1326,12 @@ class UnitTestGenerator(KernelGenerator):
 class ViewArrayPool(object):
   """The index arrays the views need, each spelled once.
 
-  Tensors that share a sparsity pattern need the same row indices, and
-  tensors of the same shape the same bounds. One array per tensor repeats
-  them; naming them by content spells each once and lets the tensors refer to
-  it. They stay constant expressions on both sides of that, which is what
-  lets a lookup with constant indices fold to a single address instead of a
-  search through the pattern.
+  Tensors that share a sparsity pattern need the same row indices. One array
+  per tensor repeats them; naming them by content spells each once and lets
+  the tensors refer to it. They stay constant expressions on both sides of
+  that, which is what lets a lookup with constant indices fold to a single
+  address instead of a search through the pattern. The bounds of a view are
+  not among them (see `TensorView.OWN_ARRAYS`).
 
   Named after the text that gets emitted, the way the constant pool is: two
   arrays are the same array exactly when the generated source cannot tell
@@ -1435,6 +1435,11 @@ class InitializerGenerator(object):
     #: code may not refer to them, and a marked factory that does stops every
     #: CUDA translation unit including init.h, called or not.
     DEVICE_CALLABLE = True
+    #: The arrays of `arrayData` each tensor spells as an array of its own
+    #: instead of a reference to the shared one: the bounds, which device
+    #: code reads. A static data member of reference type is no constant to
+    #: SYCL, whose device code may not use it.
+    OWN_ARRAYS = ()
 
     def __init__(self, datatype, arrayPool=None):
       self._datatype = datatype
@@ -1471,7 +1476,8 @@ class InitializerGenerator(object):
     def arrays(self, cpp, memLayout, arch, namespace, index, numberType, declarationOnly):
       for suffix, values in self.arrayData(memLayout):
         cpp(self.formatArray(numberType, namespace + suffix + index, values,
-                             declarationOnly, hint=suffix))
+                             declarationOnly, hint=suffix,
+                             shared=suffix not in self.OWN_ARRAYS))
 
     #: The storage a descriptor names, and which of its arrays this kind of
     #: view fills, by the name of the member of the descriptor.
@@ -1491,16 +1497,17 @@ class InitializerGenerator(object):
 
     def internArrays(self, memLayout, numberType):
       for suffix, values in self.arrayData(memLayout):
-        self._arrayPool.intern(numberType, values, suffix)
+        if suffix not in self.OWN_ARRAYS:
+          self._arrayPool.intern(numberType, values, suffix)
 
-    def formatArray(self, numberType, name, values, declarationOnly, hint='array'):
+    def formatArray(self, numberType, name, values, declarationOnly, hint='array', shared=True):
       if declarationOnly:
         return ''
-      if self._arrayPool is None:
+      if self._arrayPool is None or not shared:
         return f'{DATA_MODIFIERS} {numberType} {name}[] = {self.listToInitializerList(values)};'
-      shared, length = self._arrayPool.intern(numberType, values, hint)
+      symbol, length = self._arrayPool.intern(numberType, values, hint)
       return '{} {} (&{})[{}] = {}::{};'.format(
-        DATA_MODIFIERS, numberType, name, length, ViewArrayPool.STRUCT_NAME, shared)
+        DATA_MODIFIERS, numberType, name, length, ViewArrayPool.STRUCT_NAME, symbol)
 
   class DenseTensorView(TensorView):
     START_NAME = 'Start'
@@ -1508,6 +1515,7 @@ class InitializerGenerator(object):
     STRIDE_NAME = 'Stride'
     STORAGE = 'Dense'
     DESCRIPTOR_ARRAYS = {'start': START_NAME, 'stop': STOP_NAME, 'stride': STRIDE_NAME}
+    OWN_ARRAYS = (START_NAME, STOP_NAME, STRIDE_NAME)
 
     def generate(self, cpp, memLayout, arch, index, const):
       cpp( 'return {}({}, {}, {}, {});'.format(
@@ -1561,6 +1569,7 @@ class InitializerGenerator(object):
     STORAGE = 'Pattern'
     DESCRIPTOR_ARRAYS = {'start': START_NAME, 'stop': STOP_NAME, 'stride': STRIDE_NAME,
                          'pattern': PATTERN_NAME}
+    OWN_ARRAYS = (START_NAME, STOP_NAME, STRIDE_NAME)
 
     def typename(self, dim, arch, const):
       constStr = 'true' if const else 'false'

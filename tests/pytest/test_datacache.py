@@ -23,7 +23,7 @@ from yateto import Tensor, useArchitectureIdentifiedBy
 from yateto.codegen.code import Cpp
 from yateto.codegen.arrangement import Arrangement
 from yateto.codegen.datacache import DataCache
-from yateto.memory import CSCMemoryLayout, DenseMemoryLayout
+from yateto.memory import CSCMemoryLayout, DenseMemoryLayout, PatternMemoryLayout
 from yateto.codegen.visitor import POOL_ALIGNMENT, InitializerGenerator, PoolGenerator
 from yateto.type import Datatype
 
@@ -582,12 +582,28 @@ class TestViewArrayPool:
             if '(&RowInd)' in line or 'RowInd_' in line:
                 assert line.strip().startswith('constexpr static')
 
-    def test_dense_bounds_are_shared_too(self):
+    def test_the_bounds_are_arrays_of_their_own(self):
+        """Device code reads the bounds of a view, and SYCL counts a static
+        data member of reference type as a non-const static variable, which
+        its device code may not use."""
         header = self._initH([Tensor('a', (4, 4)), Tensor('b', (4, 4))])
 
-        starts = [line for line in header.splitlines() if 'Start_' in line and '= {' in line]
-        assert len(starts) == 1
-        assert header.count('(&Start)[2] = viewdata::') == 2
+        assert header.count('constexpr static unsigned const Start[] = {0, 0};') == 2
+        assert header.count('constexpr static unsigned const Stop[] = {4, 4};') == 2
+        assert header.count('constexpr static unsigned const Stride[] = {1, 4};') == 2
+        assert 'viewdata' not in header
+
+    def test_a_pattern_shares_its_entries_but_not_its_bounds(self):
+        spp = np.zeros((4, 4))
+        spp[0, 0] = spp[1, 1] = 1.0
+        a = Tensor('a', (4, 4), spp, PatternMemoryLayout)
+        b = Tensor('b', (4, 4), spp, PatternMemoryLayout)
+
+        header = self._initH([a, b])
+
+        assert header.count('(&Pattern)[') == 2
+        assert '(&Start)' not in header and '(&Stop)' not in header and '(&Stride)' not in header
+        assert header.count('constexpr static unsigned const Start[] = {0, 0};') == 2
 
     def test_a_pool_with_nothing_in_it_emits_nothing(self):
         header = self._initH([])

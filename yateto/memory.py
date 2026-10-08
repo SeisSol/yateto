@@ -247,6 +247,12 @@ class MemoryLayout(ABC):
     """
     return sys.maxsize
 
+  def storesOutside(self, rowRange, colRange):
+    """Whether the layout stores entries in the columns `colRange` outside the
+    rows `rowRange`, which `entries` lists as well. Only a layout that keeps
+    whole columns does."""
+    return False
+
   def sparsityBlockShape(self):
     """Per-dimension block sizes, as a tuple.
 
@@ -614,6 +620,10 @@ class CSCMemoryLayout(MemoryLayout):
     assert topLeftEntry in self._bbox
     assert topLeftEntry[0] <= self._bbox[0].start
     return self._colPtr[ topLeftEntry[1] ]
+
+  def storesOutside(self, rowRange, colRange):
+    return any(not rowRange.start <= self._rowIndex[i] < rowRange.stop
+               for col in colRange for i in range(self._colPtr[col], self._colPtr[col+1]))
 
   def entries(self, rowRange, colRange):
     assert self._bbox[0].start >= rowRange.start
@@ -1087,6 +1097,9 @@ class MemoryLayoutView(MemoryLayout):
 
   def entries(self, *rng):
     return self.base.entries(*self._shiftedRanges(rng))
+
+  def storesOutside(self, *rng):
+    return self.base.storesOutside(*self._shiftedRanges(rng))
 
   def entriesRel(self, *rng):
     return self.base.entriesRel(*self._shiftedRanges(rng))

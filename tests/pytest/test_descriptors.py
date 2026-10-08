@@ -64,11 +64,11 @@ class TestWhatADescriptorSays:
         assert descriptor(files['init.h'], 'a') == [
             '::yateto::Datatype::F64', '::yateto::Storage::Dense', '2', 'Shape',
             'Start', 'Stop', 'Stride', 'nullptr', 'nullptr', 'nullptr', 'Size', '8']
-        assert re.search(r'\(&Stride\)\[2\] = viewdata::Stride_\w+;', struct(files['init.h'], 'a'))
+        assert 'unsigned const Stride[] = {1, 5};' in struct(files['init.h'], 'a')
 
     def test_the_strides_are_the_layouts(self, tmp_path):
         _, files = generate(tmp_path, matmul)
-        strides = re.findall(r'unsigned const Stride_\w+\[2\] = \{(.*?)\};', files['init.h'])
+        strides = re.findall(r'unsigned const Stride\[\] = \{(.*?)\};', files['init.h'])
         # a is 5 x 3 and c is 5 x 4, both stored by columns without padding
         assert '1, 5' in strides
 
@@ -80,7 +80,7 @@ class TestWhatADescriptorSays:
         padded = descriptor(files['init.h'], 'p')
         assert padded[-1] == '32'  # hsw, 32 bytes
         # padded to eight rows
-        assert re.search(r'Stop_\w+\[2\] = \{8, 3\};', files['init.h'])
+        assert 'unsigned const Stop[] = {8, 3};' in struct(files['init.h'], 'p')
         assert descriptor(files['init.h'], 'q')[-1] == '8'
 
     def test_the_element_type_is_the_tensors_own(self, tmp_path):

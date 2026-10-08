@@ -1063,9 +1063,14 @@ class MemoryLayoutView(MemoryLayout):
     return self.base.addressesIn(shifted)
 
   def notWrittenAddresses(self, writeBB):
-    # focus only on the subview
-    outside = set(self.base.notWrittenAddresses(self.bbox()))
-    return list(set(self.base.notWrittenAddresses(self.relbox(writeBB))) - outside)
+    """The addresses the window stores, but for those within `writeBB`.
+
+    Both as `addressesIn` answers them: in the window, and in what the base
+    stores, which can end before the window does -- a box of the base,
+    shifted into the window, would reach past it.
+    """
+    written = set(self.addressesIn(writeBB))
+    return [address for address in self.addressesIn() if address not in written]
 
   def bbox(self):
     return self.relbox(self.base.bbox())

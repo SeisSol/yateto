@@ -203,6 +203,23 @@ class CSCMatrixViewTestSuite : public CxxTest::TestSuite {
     TS_ASSERT_EQUALS(data_[1], 0.0);
     TS_ASSERT_EQUALS(data_[2], 0.0);
   }
+
+  void testCopyToViewSkipsPadding() {
+    // a 3x2 matrix in an aligned layout, which stores each column with 4 rows; row 3 is padding
+    double values[8] = {1.0, 2.0, 3.0, 0.0, 4.0, 5.0, 6.0, 0.0};
+    const unsigned rowInd[8] = {0, 1, 2, 3, 0, 1, 2, 3};
+    const unsigned colPtr[3] = {0, 4, 8};
+    CSCMatrixView<double, unsigned> matrix(values, {3, 2}, rowInd, colPtr);
+
+    // one more element than the 3x2 target has, to see a write beyond its end
+    double dense[7] = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
+    DenseTensorView<2, double, unsigned> target(dense, {3, 2});
+    matrix.copyToView(target);
+    for (unsigned i = 0; i < 6; ++i) {
+      TS_ASSERT_EQUALS(dense[i], static_cast<double>(i + 1));
+    }
+    TS_ASSERT_EQUALS(dense[6], -1.0);
+  }
 };
 
 class PatternTensorViewTestSuite : public CxxTest::TestSuite {

@@ -477,12 +477,17 @@ class CSCMatrixView : public TensorView<2, real_t, uint_t> {
     assert(this->shape(0) == other.shape(0) && this->shape(1) == other.shape(1));
 
     uint_t entry[2];
-    uint_t ncols = this->shape(1);
+    const uint_t nrows = this->shape(0);
+    const uint_t ncols = this->shape(1);
     for (uint_t col = 0; col < ncols; ++col) {
       entry[1] = col;
       for (uint_t i = m_colPtr[col]; i < m_colPtr[col + 1]; ++i) {
         entry[0] = m_rowInd[i];
-        other[entry] = m_values[i];
+        // an aligned layout may store padding rows beyond the shape (as zeros); these have no
+        // counterpart in the target view
+        if (entry[0] < nrows) {
+          other[entry] = m_values[i];
+        }
       }
     }
   }

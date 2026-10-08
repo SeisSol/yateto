@@ -38,8 +38,6 @@ def _indexedTensors(node):
     yield from _indexedTensors(child)
 
 class KernelFactory(object):
-  ERROR_NAME = '_error'
-
   def __init__(self, cpp, arch, target, attrs=None, dataCache=None):
     self._cpp = cpp
     self._arch = arch
@@ -132,10 +130,10 @@ class KernelFactory(object):
     if self._target == 'cpu':
       # NOTE: onHeap() works on bytes, whereas size is an element count
       if self._arch.onHeap(size * datatype.size()):
-        if len(self._freeList) == 0:
-          self._cpp(f'int {self.ERROR_NAME};')
-        self._cpp(f'{datatype.ctype()}* {bufname};')
-        self._cpp(f'{self.ERROR_NAME} = posix_memalign(reinterpret_cast<void**>(&{bufname}), {self._arch.cacheline}, {size}*sizeof({datatype.ctype()}));')
+        # (the aligned operator new is available everywhere, including Windows; it is paired with
+        # the aligned operator delete in freeTmp)
+        ctype = datatype.ctype()
+        self._cpp(f'{ctype}* {bufname} = static_cast<{ctype}*>(::operator new({size}*sizeof({ctype}), std::align_val_t({self._arch.cacheline})));')
         if iniZero:
           self._cpp.memset(bufname, size, datatype.ctype())
         if memory:
@@ -197,7 +195,7 @@ class KernelFactory(object):
   def freeTmp(self):
     if self._target == 'cpu':
       for free in self._freeList:
-        self._cpp(f'free({free});')
+        self._cpp(f'::operator delete({free}, std::align_val_t({self._arch.cacheline}));')
     elif self._target == 'gpu':
       self._cpp('linearAllocator.free();')
     else:

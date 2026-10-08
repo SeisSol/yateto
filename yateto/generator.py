@@ -244,6 +244,13 @@ def parameterSpaceFromRanges(*args):
   return list(itertools.product(*[list(i) for i in args]))
 
 class GlobalRoutineCache:
+  """The routines of several generators, written once for all of them.
+
+  The routines can come from other processes as well: `export` gives what a
+  process generated as plain data, which `merge` adds to the cache of the
+  process that writes them.
+  """
+
   def __init__(self):
     self.cache = RoutineCache()
     self.dirs = []
@@ -251,13 +258,58 @@ class GlobalRoutineCache:
   def register(self, outputDir):
     self.dirs += [outputDir]
 
-  def generate(self, outputDir, namespace='yateto'):
+  @staticmethod
+  def sources(outputDir, shards=None):
+    """Per target ('cpu', 'gpu'), the files `generate` writes its routines into.
+
+    `shards` maps a target to the number of files its routines are spread
+    over; one by default, which is `subroutine.cpp` and
+    `gpulike_subroutine.cpp`. More are numbered, from `subroutine_0.cpp` on.
+    """
+    shards = shards or {}
+    names = {'cpu': Generator.ROUTINES_FILE_NAME, 'gpu': Generator.GPULIKE_ROUTINES_FILE_NAME}
+    files = {}
+    for target, name in names.items():
+      count = shards.get(target, 1)
+      if count < 1:
+        raise ValueError(f'The routines of {target} need at least one file, not {count}.')
+      stems = [name] if count == 1 else [f'{name}_{index}' for index in range(count)]
+      files[target] = [Generator.FileNames(outputDir, stem).cpp for stem in stems]
+    return files
+
+  def export(self, root=None):
+    """The routines added so far, written, and the directories registered so
+    far, as plain data -- what `merge` takes.
+
+    With `root`, the directories are relative to it, and so is the data:
+    the same wherever the directories are.
+    """
+    return {
+      'dirs': [outputDir if root is None else os.path.relpath(outputDir, root)
+               for outputDir in self.dirs],
+      'routines': [[name, GeneratedRoutine.of(name, generator).asDict()]
+                   for name, generator in self.cache.routines()],
+    }
+
+  def merge(self, exported, root=None):
+    """Adds what `export` gave, of this process or of another one; `root` as
+    there."""
+    for outputDir in exported['dirs']:
+      if root is not None:
+        outputDir = os.path.join(root, outputDir)
+      if outputDir not in self.dirs:
+        self.register(outputDir)
+    for name, routine in exported['routines']:
+      self.cache.addRoutine(name, GeneratedRoutine.fromDict(routine))
+
+  def generate(self, outputDir, namespace='yateto', shards=None):
+    """Writes the routines, into the files `sources` names for `shards`."""
     print('Calling external code generators...')
+    files = self.sources(outputDir, shards)
     fRoutines = Generator.FileNames(outputDir, Generator.ROUTINES_FILE_NAME)
-    fGpulikeRoutines = Generator.FileNames(outputDir, Generator.GPULIKE_ROUTINES_FILE_NAME)
     with Cpp(fRoutines.h) as header:
       with header.HeaderGuard(Generator._headerGuardName(namespace, Generator.ROUTINES_FILE_NAME)):
-        self.cache.generate(header, fRoutines.cpp, fGpulikeRoutines.cpp)
+        self.cache.generate(header, files['cpu'], files['gpu'])
 
     for subdir in self.dirs:
       relpath = os.path.relpath(outputDir, subdir)
@@ -274,6 +326,9 @@ class Generator(object):
   GPULIKE_ROUTINES_FILE_NAME = 'gpulike_subroutine'
   CXXTEST_FILE_NAME = 'KernelTest.t'
   DOCTEST_FILE_NAME = 'test-kernel'
+  #: What `generate` can write unit tests of the kernels for: the doctest
+  #: source DOCTEST_FILE_NAME.cpp and the CxxTest header CXXTEST_FILE_NAME.h.
+  UNIT_TEST_FRAMEWORKS = ('doctest', 'cxxtest')
   HEADER_GUARD_SUFFIX = 'H_'
   SUPPORT_LIBRARY_HEADER = 'yateto.h'
   MARKER_HEADER = 'yateto/Marker.h'
@@ -358,7 +413,10 @@ class Generator(object):
                cost_estimator=BoundingBoxCostEstimator,
                include_tensors=set(),
                routine_cache=None,
-               routine_exporters={}
+               routine_exporters={},
+               # The frameworks to write unit tests of the kernels for, by the
+               # names of UNIT_TEST_FRAMEWORKS.
+               unit_tests=None
                ):
 
     if not gemm_cfg:
@@ -385,18 +443,30 @@ class Generator(object):
     fRoutines = self.FileNames(outputDir, self.ROUTINES_FILE_NAME)
     fGpulikeRoutines = self.FileNames(outputDir, self.GPULIKE_ROUTINES_FILE_NAME)
 
-    print('Generating unit tests...')
+    if unit_tests is None:
+      unit_tests = self.UNIT_TEST_FRAMEWORKS
+    elif isinstance(unit_tests, str):
+      unit_tests = (unit_tests,)
+    unknown = set(unit_tests) - set(self.UNIT_TEST_FRAMEWORKS)
+    if unknown:
+      raise ValueError(f'Unknown unit test frameworks: {", ".join(sorted(unknown))} '
+                       f'(known are {", ".join(self.UNIT_TEST_FRAMEWORKS)}).')
+
+    if unit_tests:
+      print('Generating unit tests...')
     def unit_test_body(cpp, testFramework):
         for kernel in self._kernels:
             UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, kernel.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, attrs=kernel.attrs)
         for family in self._kernelFamilies.values():
             for group, kernel in family.items():
                 UnitTestGenerator(self._arch).generate(cpp, kernel.namespace, kernel.name, family.name, kernel.cfg, kernel.target, gemm_cfg, testFramework, group, attrs=kernel.attrs)
-    with Cpp(fUTdoctest.cpp) as cpp:
-        Doctest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
-    with Cpp(fUTcxxtest.h) as cpp:
-        with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
-            CxxTest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+    if 'doctest' in unit_tests:
+      with Cpp(fUTdoctest.cpp) as cpp:
+          Doctest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
+    if 'cxxtest' in unit_tests:
+      with Cpp(fUTcxxtest.h) as cpp:
+          with cpp.HeaderGuard(self._headerGuardName(namespace, self.CXXTEST_FILE_NAME.replace('.', '_'))):
+              CxxTest(self._arch).generate(cpp, namespace, fKernels.hName, fInit.hName, unit_test_body)
 
 
     # A device kernel no exporter takes is generated here, from GEMMs and
@@ -491,6 +561,7 @@ class Generator(object):
       cpp.includeSys('cstring')
       cpp.includeSys('cstdlib')
       cpp.includeSys('limits')
+      cpp.includeSys('new')
 
       cpp.include(fRoutines.hName)
       with Cpp(fKernels.h) as header:

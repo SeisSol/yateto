@@ -18,18 +18,29 @@ class Sparsity:
   `blockShape` is per-dimension and measured from the pattern the layout
   actually stores, never from an `alignStride` request. A dense operand has no
   restriction and reports `None`.
+
+  `outside` says whether the layout stores entries in the columns a GEMM reads
+  but outside the rows it multiplies. A GEMM takes its rows from where its
+  operands overlap, and a layout that keeps whole columns keeps those entries
+  as well: their values lie among the ones the GEMM reads, so a tool has to
+  step over them by the pattern the layout stores.
   """
 
-  __slots__ = ('blockShape',)
+  __slots__ = ('blockShape', 'outside')
 
-  def __init__(self, blockShape=None):
+  def __init__(self, blockShape=None, outside=False):
     self.blockShape = blockShape
+    self.outside = outside
 
   @classmethod
-  def of(cls, memoryLayout):
+  def of(cls, memoryLayout, rows=None, cols=None):
+    """The sparsity of an operand stored in `memoryLayout`; given the rows and
+    columns of it a GEMM multiplies, also whether it stores entries outside
+    them (see `outside`)."""
     if not memoryLayout.isSparse():
       return cls(None)
-    return cls(tuple(memoryLayout.sparsityBlockShape()))
+    outside = rows is not None and cols is not None and memoryLayout.storesOutside(rows, cols)
+    return cls(tuple(memoryLayout.sparsityBlockShape()), outside)
 
   @property
   def dense(self):
@@ -46,13 +57,16 @@ class Sparsity:
     return not self.dense
 
   def __repr__(self):
-    return 'Sparsity(dense)' if self.dense else 'Sparsity{}'.format(self.blockShape)
+    if self.dense:
+      return 'Sparsity(dense)'
+    return 'Sparsity{}{}'.format(self.blockShape, ', entries outside' if self.outside else '')
 
   def __eq__(self, other):
-    return isinstance(other, Sparsity) and self.blockShape == other.blockShape
+    return isinstance(other, Sparsity) and self.blockShape == other.blockShape \
+      and self.outside == other.outside
 
   def __hash__(self):
-    return hash(self.blockShape)
+    return hash((self.blockShape, self.outside))
 
 DENSE = Sparsity(None)
 
@@ -282,6 +296,11 @@ class LIBXSMM(CodeGenerator):
 
   def supported(self, m, n, k, sparseA, sparseB, transA, transB, alpha,
                 beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
+    # The generator takes the pattern of a sparse operand as all of it, within
+    # the rows of the GEMM: it rejects entries outside them, and could not
+    # step over their values either.
+    if sparseA.outside or sparseB.outside:
+      return False
     return self.archSupported() and not (sparseA and sparseB) and (not transA and not transB) and alpha == 1.0 and beta in [0.0, 1.0] and target == 'cpu' and (self._equalType(datatypeA, datatypeB, datatypeC) or (self._equalType(datatypeA, datatypeB, datatypeC, (Datatype.I16,)) and not sparseA and not sparseB))
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):

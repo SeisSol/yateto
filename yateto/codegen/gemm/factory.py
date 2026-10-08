@@ -31,12 +31,6 @@ class Description(object):
     self.isACsc = self.leftTerm.memoryLayout.isSparse()
     self.isBCsc = self.rightTerm.memoryLayout.isSparse()
 
-    # Classify by the pattern the layout really stores. A layout that merely
-    # *asked* for aligned strides is not a promise that its sparsity is
-    # SIMD-block-complete, and tools such as PSpaMM need that distinction.
-    self.sparsityA = Sparsity.of(self.leftTerm.memoryLayout)
-    self.sparsityB = Sparsity.of(self.rightTerm.memoryLayout)
-
     if self.result.memoryLayout.isSparse():
       raise NotImplementedError(
         'yateto: sparse memory layouts are not supported for GEMM results (yet); '
@@ -72,6 +66,12 @@ class Description(object):
       self.alignedC = self.alignedC & mStartAligned
 
     self._mnk = (m, n, k)
+
+    # Classify by the pattern the layout really stores. A layout that merely
+    # *asked* for aligned strides is not a promise that its sparsity is
+    # SIMD-block-complete, and tools such as PSpaMM need that distinction.
+    self.sparsityA = Sparsity.of(self.leftTerm.memoryLayout, *((k, m) if transA else (m, k)))
+    self.sparsityB = Sparsity.of(self.rightTerm.memoryLayout, *((n, k) if transB else (k, n)))
 
   def mnk(self):
     return self._mnk

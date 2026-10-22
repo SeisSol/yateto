@@ -317,6 +317,12 @@ class PSpaMM(CodeGenerator):
     super().__init__('pspamm', [], cmd, arch)
     self._threshold = threshold
 
+  def capabilities(self):
+    """What the PSpaMM run as `cmd` supports beyond the GEMM itself, as it
+    says (pspamm-generator --capabilities); nothing for one that does not."""
+    from .codegen.gemm.gemmgen import pspammCapabilities
+    return pspammCapabilities(self.cmd)
+
   def archSupported(self):
     supported_set = {'rvv128', 'rvv256', 'rvv512', 'rvv1024', 'rvv2048', 'rvv4096', 'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'turin', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1', 'apple-m2', "apple-m3", "apple-m4", 'avx2-128', 'avx2-256', 'avx10-128', 'avx10-256', 'avx10-512', 'lsx', 'lasx'}
     return self._arch.host_name.lower() in supported_set

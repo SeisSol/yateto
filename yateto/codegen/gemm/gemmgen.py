@@ -353,7 +353,34 @@ def _pspammInProcess(cmd):
       raise RuntimeError(f"""GEMM code generator "{cmd}" failed (run in-process). Thus, the kernel generation may be incomplete.
 Given command: {' '.join(argList)}
 Output: {output.getvalue()}""") from error
+    return output.getvalue()
   return run
+
+@functools.lru_cache(maxsize=None)
+def pspammCapabilities(cmd):
+  """What the PSpaMM run as `cmd` supports beyond the GEMM itself, as its
+  --capabilities says, in this process where it can run here; nothing for a
+  PSpaMM that does not say, or that is not there."""
+  argList = [cmd, '--capabilities']
+  inProcess = _pspammInProcess(cmd)
+  if inProcess is not None:
+    try:
+      output = inProcess(cmd, argList)
+    except RuntimeError:
+      return {}
+  else:
+    try:
+      result = subprocess.run(argList, capture_output=True, text=True)
+    except OSError:
+      return {}
+    if result.returncode != 0:
+      return {}
+    output = result.stdout
+  try:
+    capabilities = json.loads(output)
+  except ValueError:
+    return {}
+  return capabilities if isinstance(capabilities, dict) else {}
 
 class ExecuteGemmGen(RoutineGenerator):
   def __init__(self, arch, gemmDescr, sppA, sppARows, sppB, sppBRows, gemm_cfg):

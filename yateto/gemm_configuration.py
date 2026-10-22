@@ -24,23 +24,29 @@ class Sparsity:
   operands overlap, and a layout that keeps whole columns keeps those entries
   as well: their values lie among the ones the GEMM reads, so a tool has to
   step over them by the pattern the layout stores.
+
+  `constant` says whether the values of a sparse operand are known when the
+  code is generated. A tool that builds them into its routine reads nothing of
+  the operand, so neither the tiles of its pattern nor how it is stored are
+  any concern of it.
   """
 
-  __slots__ = ('blockShape', 'outside')
+  __slots__ = ('blockShape', 'outside', 'constant')
 
-  def __init__(self, blockShape=None, outside=False):
+  def __init__(self, blockShape=None, outside=False, constant=False):
     self.blockShape = blockShape
     self.outside = outside
+    self.constant = constant
 
   @classmethod
-  def of(cls, memoryLayout, rows=None, cols=None):
+  def of(cls, memoryLayout, rows=None, cols=None, constant=False):
     """The sparsity of an operand stored in `memoryLayout`; given the rows and
     columns of it a GEMM multiplies, also whether it stores entries outside
-    them (see `outside`)."""
+    them (see `outside`), and whether its values are known (see `constant`)."""
     if not memoryLayout.isSparse():
       return cls(None)
     outside = rows is not None and cols is not None and memoryLayout.storesOutside(rows, cols)
-    return cls(tuple(memoryLayout.sparsityBlockShape()), outside)
+    return cls(tuple(memoryLayout.sparsityBlockShape()), outside, bool(constant))
 
   @property
   def dense(self):
@@ -59,14 +65,16 @@ class Sparsity:
   def __repr__(self):
     if self.dense:
       return 'Sparsity(dense)'
-    return 'Sparsity{}{}'.format(self.blockShape, ', entries outside' if self.outside else '')
+    return 'Sparsity{}{}{}'.format(self.blockShape,
+                                   ', entries outside' if self.outside else '',
+                                   ', constant' if self.constant else '')
 
   def __eq__(self, other):
     return isinstance(other, Sparsity) and self.blockShape == other.blockShape \
-      and self.outside == other.outside
+      and self.outside == other.outside and self.constant == other.constant
 
   def __hash__(self):
-    return hash((self.blockShape, self.outside))
+    return hash((self.blockShape, self.outside, self.constant))
 
 DENSE = Sparsity(None)
 
@@ -323,6 +331,12 @@ class PSpaMM(CodeGenerator):
     from .codegen.gemm.gemmgen import pspammCapabilities
     return pspammCapabilities(self.cmd)
 
+  def bakes(self, sparseA):
+    """Whether a routine takes the values of the sparse A into its code: PSpaMM
+    builds them in where it says it can, with --abake, and lays out A
+    itself."""
+    return not sparseA.dense and sparseA.constant and bool(self.capabilities().get('abake'))
+
   def archSupported(self):
     supported_set = {'rvv128', 'rvv256', 'rvv512', 'rvv1024', 'rvv2048', 'rvv4096', 'thunderx2t99', 'knl', 'skx', 'a64fx', 'hsw', 'naples', 'rome', 'milan', 'bergamo', 'turin', 'neon', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'apple-m1', 'apple-m2', "apple-m3", "apple-m4", 'avx2-128', 'avx2-256', 'avx10-128', 'avx10-256', 'avx10-512', 'lsx', 'lasx'}
     return self._arch.host_name.lower() in supported_set
@@ -333,18 +347,20 @@ class PSpaMM(CodeGenerator):
     # also, it supports for AVX512/10 and SVE unaligned matmuls in 0.3.1
     noAlign = self._arch.host_name.lower() in {'thunderx2t99', 'knl', 'skx', 'a64fx', 'bergamo', 'turin', 'sve128', 'sve256', 'sve512', 'sve1024', 'sve2048', 'avx10-128', 'avx10-256', 'avx10-512'}
     # PSpaMM vectorizes over rows of A: it needs whole `alignedReals`-row
-    # columns, and move_register_block() raises NotImplementedError otherwise.
+    # columns, and move_register_block() raises NotImplementedError otherwise,
+    # but for an A whose values it builds in, which it lays out itself.
+    baked = self.bakes(sparseA)
     vectorTile = (self._arch.alignedReals, 1)
-    if not sparseA.respects(vectorTile):
+    if not baked and not sparseA.respects(vectorTile):
       return False
-    alignment = (not sparseA.dense) and alignedA \
+    alignment = (not sparseA.dense) and (alignedA or baked) \
              or sparseA.dense and (noAlign or alignedA)
     return self.archSupported() and (alignedC or noAlign) and alignment and (not transA and not transB) and target == 'cpu' and self._equalType(datatypeA, datatypeB, datatypeC, [Datatype.BF16, Datatype.F16, Datatype.F32, Datatype.F64])
 
   def preference(self, m, n, k, sparseA, sparseB, transA, transB, alpha, beta, alignedA, alignedC, datatypeA, datatypeB, datatypeC, target):
     if sparseB:
       return Preference.HIGH
-    if sparseA and alignedA:
+    if sparseA and (alignedA or self.bakes(sparseA)):
       return Preference.HIGH
     if (m*n*k)**(1./3.) <= self._threshold:
       return Preference.HIGH

@@ -88,9 +88,14 @@ class Generic(object):
     Ceqspp = self._reduce(d.result, C, CmemLayout, fixed)
 
     immediate = lambda term: immediateByAddress(term) if isImmediate(term) else None
+    # The values of an operand that the GEMM takes as the tensor is laid out,
+    # for a generator that builds them into its routine. Where the GEMM sees
+    # the operand folded to a matrix or a vector, its entries are no longer
+    # the tensor's, and the values stay behind.
+    values = lambda term, layout: term.values if layout is term.memoryLayout else None
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, datatype=d.leftTerm.datatype, immediate=immediate(d.leftTerm)),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, datatype=d.rightTerm.datatype, immediate=immediate(d.rightTerm)),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, values=values(d.leftTerm, AmemLayout), datatype=d.leftTerm.datatype, immediate=immediate(d.leftTerm)),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, values=values(d.rightTerm, BmemLayout), datatype=d.rightTerm.datatype, immediate=immediate(d.rightTerm)),
       result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary, datatype=d.result.datatype),
       transA = d.transA,
       transB = d.transB,

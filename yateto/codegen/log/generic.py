@@ -12,7 +12,7 @@ class Generic(object):
     # kernel is emitted and the batch flags have to be named or not
     self._attrs = attrs
 
-  def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True):
+  def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True, maybeUnused=False):
     if isImmediate(term):
       # nothing to point at: the GEMM writes its numbers into the code, and
       # it has no loop index, so they are the same in every iteration
@@ -21,7 +21,8 @@ class Generic(object):
     addressStr = term.memoryLayout.addressString(term.indices, indices, fixed) if len(indices) > 0 else ''
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
-    cpp('{} {}* {} = {}{};'.format(term.datatype.ctype(), 'const' if const else '', targetName, baseName, addressStr))
+    attribute = '[[maybe_unused]] ' if maybeUnused else ''
+    cpp('{}{} {}* {} = {}{};'.format(attribute, term.datatype.ctype(), 'const' if const else '', targetName, baseName, addressStr))
 
   def _alignedStart(self, term, loopIndices, fixed):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices, fixed)
@@ -123,7 +124,9 @@ class Generic(object):
           self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices, fixed)
           self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, fixed, const=False)
           if outerPrefetchName is not None:
-            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices, fixed)
+            # not every GEMM generator reads it
+            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices, fixed,
+                          maybeUnused=True)
         generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target,
                                    self._attrs)
         return generator.generate(cpp, routineCache)
@@ -136,7 +139,10 @@ class Generic(object):
           self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices, fixed)
           self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices, fixed, const=False)
           if d.prefetchName is not None:
-            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices, fixed)
+            # not every GEMM generator reads it, directly or through the
+            # pointer of an inner loop
+            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices, fixed,
+                          maybeUnused=True)
 
         if d.assignLoopRanges is not None:
           gemmDescr.setBeta(0.0)

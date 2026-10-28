@@ -12,7 +12,7 @@ class Generic(object):
     # kernel is emitted and the batch flags have to be named or not
     self._attrs = attrs
 
-  def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True):
+  def _pointer(self, cpp, targetName, baseName, term, loopIndices, fixed, const=True, maybeUnused=False):
     if isImmediate(term):
       # nothing to point at: the GEMM writes its numbers into the code, and
       # it has no loop index, so they are the same in every iteration
@@ -21,7 +21,8 @@ class Generic(object):
     addressStr = term.memoryLayout.addressString(term.indices, indices, fixed) if len(indices) > 0 else ''
     if len(addressStr) > 0:
       addressStr = ' + ' + addressStr
-    cpp('{} {}* {} = {}{};'.format(term.datatype.ctype(), 'const' if const else '', targetName, baseName, addressStr))
+    attribute = '[[maybe_unused]] ' if maybeUnused else ''
+    cpp('{}{} {}* {} = {}{};'.format(attribute, term.datatype.ctype(), 'const' if const else '', targetName, baseName, addressStr))
 
   def _alignedStart(self, term, loopIndices, fixed):
     return term.memoryLayout.isAlignedAddressString(term.indices, term.indices & loopIndices, fixed)
@@ -88,9 +89,14 @@ class Generic(object):
     Ceqspp = self._reduce(d.result, C, CmemLayout, fixed)
 
     immediate = lambda term: immediateByAddress(term) if isImmediate(term) else None
+    # The values of an operand that the GEMM takes as the tensor is laid out,
+    # for a generator that builds them into its routine. Where the GEMM sees
+    # the operand folded to a matrix or a vector, its entries are no longer
+    # the tensor's, and the values stay behind.
+    values = lambda term, layout: term.values if layout is term.memoryLayout else None
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, datatype=d.leftTerm.datatype, immediate=immediate(d.leftTerm)),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, datatype=d.rightTerm.datatype, immediate=immediate(d.rightTerm)),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, values=values(d.leftTerm, AmemLayout), datatype=d.leftTerm.datatype, immediate=immediate(d.leftTerm)),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, values=values(d.rightTerm, BmemLayout), datatype=d.rightTerm.datatype, immediate=immediate(d.rightTerm)),
       result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary, datatype=d.result.datatype),
       transA = d.transA,
       transB = d.transB,
@@ -118,7 +124,9 @@ class Generic(object):
           self._pointer(cpp, innerBname, outerBname, d.rightTerm, d.innerLoopIndices, fixed)
           self._pointer(cpp, innerCname, outerCname, d.result, d.innerLoopIndices, fixed, const=False)
           if outerPrefetchName is not None:
-            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices, fixed)
+            # not every GEMM generator reads it
+            self._pointer(cpp, innerPrefetchName, outerPrefetchName, d.result, d.innerLoopIndices, fixed,
+                          maybeUnused=True)
         generator = gemm.generator(self._arch, gemmDescr, gemm_cfg, self._target,
                                    self._attrs)
         return generator.generate(cpp, routineCache)
@@ -131,7 +139,10 @@ class Generic(object):
           self._pointer(cpp, outerBname, d.rightTerm.name, d.rightTerm, d.outerLoopIndices, fixed)
           self._pointer(cpp, outerCname, d.result.name, d.result, d.outerLoopIndices, fixed, const=False)
           if d.prefetchName is not None:
-            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices, fixed)
+            # not every GEMM generator reads it, directly or through the
+            # pointer of an inner loop
+            self._pointer(cpp, outerPrefetchName, d.prefetchName, d.result, d.outerLoopIndices, fixed,
+                          maybeUnused=True)
 
         if d.assignLoopRanges is not None:
           gemmDescr.setBeta(0.0)

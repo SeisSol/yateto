@@ -70,8 +70,15 @@ class Description(object):
     # Classify by the pattern the layout really stores. A layout that merely
     # *asked* for aligned strides is not a promise that its sparsity is
     # SIMD-block-complete, and tools such as PSpaMM need that distinction.
-    self.sparsityA = Sparsity.of(self.leftTerm.memoryLayout, *((k, m) if transA else (m, k)))
-    self.sparsityB = Sparsity.of(self.rightTerm.memoryLayout, *((n, k) if transB else (k, n)))
+    # Constant where the values come along, keyed by the operand's entries.
+    self.sparsityA = Sparsity.of(self.leftTerm.memoryLayout, *((k, m) if transA else (m, k)),
+                                 constant=self._valuesKnown(self.leftTerm))
+    self.sparsityB = Sparsity.of(self.rightTerm.memoryLayout, *((n, k) if transB else (k, n)),
+                                 constant=self._valuesKnown(self.rightTerm))
+
+  @staticmethod
+  def _valuesKnown(term):
+    return term.is_compute_constant and term.values is not None
 
   def mnk(self):
     return self._mnk

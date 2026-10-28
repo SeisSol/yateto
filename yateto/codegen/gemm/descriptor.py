@@ -12,14 +12,18 @@ _FIELDS = [
   'transA', 'transB',
   'datatypeA', 'datatypeB', 'datatypeC',
   'sppA', 'sppB',
+  'valuesA',
 ]
 
 
-class GemmDescriptor(collections.namedtuple('GemmDescriptor', _FIELDS)):
+class GemmDescriptor(collections.namedtuple('GemmDescriptor', _FIELDS,
+                                            defaults=(None,))):
   """Everything the identity of a GEMM routine rests on, as plain data.
 
   The name a routine is called by follows from this and from nothing else:
-  no values, no layout objects, no architecture object. A routine can
+  no layout objects, no architecture object, and no values but those of a
+  sparse A the routine carries in its code (valuesA, by the entries of its
+  pattern), which two routines of one pattern differ by. A routine can
   therefore be named where its kernel is written and emitted somewhere else
   entirely -- in another run, in another process, from a file -- and the two
   still agree on what to call it.
@@ -40,15 +44,16 @@ class GemmDescriptor(collections.namedtuple('GemmDescriptor', _FIELDS)):
     (False, False): 'absparse',
   }
 
-  _NAME = ('{operation}_{sparsity}{patterns}'
+  _NAME = ('{operation}_{sparsity}{patterns}{values}'
            '_{datatypeA}_{datatypeB}_{datatypeC}_{arch}'
            '_m{m}_n{n}_k{k}_ldA{ldA}_ldB{ldB}_ldC{ldC}'
            '_alpha{alpha}_beta{beta}_alignedA{alignedA}_alignedC{alignedC}'
            '_transA{transA}_transB{transB}_{prefetch}')
 
   @classmethod
-  def create(cls, operation, arch, gemm, sppA=None, sppB=None):
-    """Reads one off a GEMM's parameters, the sparsity patterns given apart.
+  def create(cls, operation, arch, gemm, sppA=None, sppB=None, valuesA=None):
+    """Reads one off a GEMM's parameters, the sparsity patterns and the values
+    of a sparse A built into the routine given apart.
 
     ``gemm`` carries alpha and beta already reduced to the cases the
     generators treat specially, since which cases those are is the
@@ -67,14 +72,17 @@ class GemmDescriptor(collections.namedtuple('GemmDescriptor', _FIELDS)):
       datatypeB=str(gemm['datatypeB']),
       datatypeC=str(gemm['datatypeC']),
       sppA=cls._pattern(sppA), sppB=cls._pattern(sppB),
+      valuesA=cls._values(valuesA),
     )
 
   def routineName(self):
     patterns = ''.join('_' + self._digest(spp) for spp in (self.sppA, self.sppB)
                        if spp is not None)
+    values = '' if self.valuesA is None else '_v' + self._valuesDigest(self.valuesA)
     return self._NAME.format(
       sparsity=self._SPARSITY[(self.sppA is None, self.sppB is None)],
       patterns=patterns,
+      values=values,
       **self._asdict())
 
   def asJson(self):
@@ -83,6 +91,8 @@ class GemmDescriptor(collections.namedtuple('GemmDescriptor', _FIELDS)):
     for side in ('sppA', 'sppB'):
       if data[side] is not None:
         data[side] = [list(entry) for entry in data[side]]
+    if data['valuesA'] is not None:
+      data['valuesA'] = list(data['valuesA'])
     return data
 
   @classmethod
@@ -91,6 +101,7 @@ class GemmDescriptor(collections.namedtuple('GemmDescriptor', _FIELDS)):
     for side in ('sppA', 'sppB'):
       if fields.get(side) is not None:
         fields[side] = tuple(tuple(int(i) for i in entry) for entry in fields[side])
+    fields['valuesA'] = cls._values(fields.get('valuesA'))
     return cls(**fields)
 
   @staticmethod
@@ -98,6 +109,21 @@ class GemmDescriptor(collections.namedtuple('GemmDescriptor', _FIELDS)):
     if spp is None:
       return None
     return tuple(tuple(int(i) for i in entry) for entry in spp)
+
+  @staticmethod
+  def _values(values):
+    # as plain floats, which JSON carries exactly and which spell the same
+    # whatever array library or string they came from
+    if values is None:
+      return None
+    return tuple(float(value) for value in values)
+
+  @staticmethod
+  def _valuesDigest(values):
+    # repr spells a float so that it reads back as the same float
+    sha = hashlib.new('md5', usedforsecurity=False)
+    sha.update(repr(tuple(values)).encode())
+    return sha.hexdigest()
 
   @staticmethod
   def _digest(spp):

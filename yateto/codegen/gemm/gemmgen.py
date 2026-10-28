@@ -15,7 +15,7 @@ from collections import namedtuple
 from ..cache import RoutineGenerator, GpuRoutineGenerator, TinytcWriter
 from .descriptor import GemmDescriptor
 from ...gemm_configuration import BLASlike, CodeGenerator, GemmForge, tinytc
-from ..common import BatchedOperationsAux, KernelAttributes, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, toTinyTCType, toTinyTCImmediate
+from ..common import BatchedOperationsAux, KernelAttributes, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, toTinyTCType, toTinyTCImmediate, immediateValue
 from ..tiny_tensor_language import *
 from ...type import Datatype
 
@@ -67,10 +67,26 @@ class GemmGen(object):
   def _beta(self, beta):
     return self._is_special(beta, {0,1})
 
-  def describe(self, gemm, sppA, sppB):
+  def describe(self, gemm, sppA, sppB, valuesA=None):
     """The identity of the routine this GEMM needs, as data."""
     return GemmDescriptor.create(self._gemm_cfg.operation_name, self._arch.name,
-                                 gemm, sppA, sppB)
+                                 gemm, sppA, sppB, valuesA)
+
+  def _bakedA(self, d, m, k, sppA):
+    """The pattern and the values of a sparse A that PSpaMM builds into its
+    routine, or None where it reads A.
+
+    The routine reads nothing of A then, so the entries the layout stores
+    beyond the rows of the GEMM do not concern it; the others take their
+    values from the tensor, by where they are in it.
+    """
+    if self._mode != 'pspamm' or not d.isACsc or d.transA \
+       or not self._gemm_cfg.bakes(d.sparsityA):
+      return None
+    inside = [(r, c) for r, c in sppA if r < m.size()]
+    values = [float(immediateValue(d.leftTerm, (r + m.start, c + k.start)))
+              for r, c in inside]
+    return inside, values
 
   def _offset(self, term, offset2, transpose):
     if transpose:
@@ -257,7 +273,12 @@ class GemmGen(object):
         'datatypeC': d.result.datatype,
       }
 
-      routineName = self.describe(gemm, sppA, sppB).routineName()
+      valuesA = None
+      baked = self._bakedA(d, m, k, sppA)
+      if baked is not None:
+        sppA, valuesA = baked
+
+      routineName = self.describe(gemm, sppA, sppB, valuesA).routineName()
 
       if self._mode == 'pspamm':
         cpp( '{}({}, {}, {}, {}, {}, {});'.format(
@@ -289,7 +310,7 @@ class GemmGen(object):
         routineCache.addRoutine(routineName, LibxsmmGemmGen(
           self._arch, gemm, sppA, sppARows, sppB, sppBRows, self._gemm_cfg))
       else:
-        routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, sppA, sppARows, sppB, sppBRows, self._gemm_cfg))
+        routineCache.addRoutine(routineName, ExecuteGemmGen(self._arch, gemm, sppA, sppARows, sppB, sppBRows, self._gemm_cfg, valuesA))
 
     return flops
 
@@ -353,16 +374,47 @@ def _pspammInProcess(cmd):
       raise RuntimeError(f"""GEMM code generator "{cmd}" failed (run in-process). Thus, the kernel generation may be incomplete.
 Given command: {' '.join(argList)}
 Output: {output.getvalue()}""") from error
+    return output.getvalue()
   return run
 
+@functools.lru_cache(maxsize=None)
+def pspammCapabilities(cmd):
+  """What the PSpaMM run as `cmd` supports beyond the GEMM itself, as its
+  --capabilities says, in this process where it can run here; nothing for a
+  PSpaMM that does not say, or that is not there."""
+  argList = [cmd, '--capabilities']
+  inProcess = _pspammInProcess(cmd)
+  if inProcess is not None:
+    try:
+      output = inProcess(cmd, argList)
+    except RuntimeError:
+      return {}
+  else:
+    try:
+      result = subprocess.run(argList, capture_output=True, text=True)
+    except OSError:
+      return {}
+    if result.returncode != 0:
+      return {}
+    output = result.stdout
+  try:
+    capabilities = json.loads(output)
+  except ValueError:
+    return {}
+  return capabilities if isinstance(capabilities, dict) else {}
+
 class ExecuteGemmGen(RoutineGenerator):
-  def __init__(self, arch, gemmDescr, sppA, sppARows, sppB, sppBRows, gemm_cfg):
+  def __init__(self, arch, gemmDescr, sppA, sppARows, sppB, sppBRows, gemm_cfg, valuesA=None):
+    """valuesA, by the entries of sppA, are the values of a sparse A for the
+    generator to build into the routine (PSpaMM's --abake); None where the
+    routine reads A."""
     self._arch = arch
     self._gemmDescr = gemmDescr
     self._sppA = sppA
     self._sppARows = sppARows
     self._sppB = sppB
     self._sppBRows = sppBRows
+    self._valuesA = None if valuesA is None else [float(value) for value in valuesA]
     self._mode = gemm_cfg.operation_name
     self._cmd = gemm_cfg.cmd
     self._blockSize = gemm_cfg.blockSize(gemmDescr['M'], gemmDescr['N'], gemmDescr['K']) if hasattr(gemm_cfg, 'blockSize') else dict()
@@ -371,16 +423,20 @@ class ExecuteGemmGen(RoutineGenerator):
     return self._arch == other._arch and \
            self._gemmDescr == other._gemmDescr and \
            self._sppA == other._sppA and \
-           self._sppB == other._sppB
+           self._sppB == other._sppB and \
+           self._valuesA == other._valuesA
 
   def identity(self):
-    """What `__eq__` compares -- the architecture, the GEMM and the sparsity
-    patterns of its operands -- as a digest that is the same in every process."""
+    """What `__eq__` compares -- the architecture, the GEMM, the sparsity
+    patterns of its operands and the values built in -- as a digest that is
+    the same in every process."""
     def pattern(spp):
       return None if spp is None else [[int(i) for i in entry] for entry in spp]
     described = [self._arch.name, self._arch.host_name,
                  sorted([key, str(value)] for key, value in self._gemmDescr.items()),
                  pattern(self._sppA), pattern(self._sppB)]
+    if self._valuesA is not None:
+      described.append([repr(value) for value in self._valuesA])
     return hashlib.sha256(json.dumps(described).encode()).hexdigest()
 
   def header(self, cpp):
@@ -502,9 +558,12 @@ Stderr: {result.stderr}""")
         precision
       ]
     class SparsityWrapper:
-      def __init__(self, shape, spp):
+      def __init__(self, shape, spp, values=None):
         self._shape = shape
         self._spp = spp
+        # the pattern alone, unless the generator builds the values in: one
+        # that reads them would take an entry of value zero for none
+        self._values = values
         self._temp = None
 
       def __enter__(self):
@@ -514,8 +573,9 @@ Stderr: {result.stderr}""")
           self._temp.write('%%MatrixMarket matrix coordinate real general\n'.encode())
           self._temp.write('%\n'.encode())
           self._temp.write('{} {} {}\n'.format(self._shape[0], self._shape[1], len(self._spp)).encode())
-          for r,c in self._spp:
-            self._temp.write('{} {} 1.0\n'.format(r+1,c+1).encode())
+          values = self._values if self._values is not None else [1.0] * len(self._spp)
+          for (r,c), value in zip(self._spp, values):
+            self._temp.write('{} {} {!r}\n'.format(r+1,c+1,value).encode())
           self._temp.flush()
           return self._temp.name
         return None
@@ -524,7 +584,7 @@ Stderr: {result.stderr}""")
         if self._spp is not None:
           self._temp.__exit__(exc_type, exc_val, exc_tb)
 
-    with SparsityWrapper((self._gemmDescr['M'], self._gemmDescr['K']), self._sppA) as afile:
+    with SparsityWrapper((self._gemmDescr['M'], self._gemmDescr['K']), self._sppA, self._valuesA) as afile:
       with SparsityWrapper((self._sppBRows if self._mode=='pspamm' else self._gemmDescr['K'], self._gemmDescr['N']), self._sppB) as bfile:
         if self._mode == 'libxsmm':
           assert afile is None or bfile is None
@@ -537,6 +597,8 @@ Stderr: {result.stderr}""")
         if self._mode == 'pspamm':
           if afile is not None:
             argList.extend(['--amtx_filename', afile])
+            if self._valuesA is not None:
+              argList.append('--abake')
           if bfile is not None:
             # actually bmtx_filename
             # take mtx_filename (alias) instead for backwards compatibility

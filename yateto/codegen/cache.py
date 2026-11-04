@@ -2,7 +2,7 @@ import io
 import os
 import tempfile
 
-from .code import Cpp
+from .code import Cpp, writeIfChanged
 
 class RoutineGenerator(object):
   def __call__(self, routineName, fileName):
@@ -139,6 +139,11 @@ class RoutineCache(object):
     the smallest so far: compiled one by one, the files then take about the
     same time, where the time of the largest is the time of all of them. A
     file holds its routines in the order they were added.
+
+    A generator appends the code of a routine to the file it is given, some
+    by a program of their own. They are given a file in a directory of their
+    own, and a file of a target is written from it once it holds all its
+    routines, where its code changes (see `writeIfChanged`).
     """
     files = {'cpu': cppFileName, 'gpu': gpuFileName}
     for target in files:
@@ -148,30 +153,38 @@ class RoutineCache(object):
       if generator.target() not in files:
         raise NotImplementedError(f'Unknown target: {generator.target()}')
 
-    for target, fileNames in files.items():
-      for fileName in fileNames:
-        with Cpp(fileName) as cpp:
-          for generator in self._generators.values():
-            if generator.target() == target:
-              generator.header(cpp)
+    with tempfile.TemporaryDirectory() as directory:
+      # the file in the directory that takes the code of a file of a target
+      staged = dict()
+      for target, fileNames in files.items():
+        for fileName in fileNames:
+          staged[fileName] = os.path.join(directory, f'{len(staged)}.cpp')
+          with Cpp(staged[fileName]) as cpp:
+            for generator in self._generators.values():
+              if generator.target() == target:
+                generator.header(cpp)
 
-    placement = dict()
-    for target, fileNames in files.items():
-      routines = [(name, generator) for name, generator in self._routines.items()
-                  if generator.target() == target]
-      if len(fileNames) == 1:
-        placement.update((name, (generator, fileNames[0])) for name, generator in routines)
-        continue
-      generated = [(name, GeneratedRoutine.of(name, generator)) for name, generator in routines]
-      sizes = [0] * len(fileNames)
-      for name, routine in sorted(generated, key=lambda item: -item[1].size()):
-        smallest = sizes.index(min(sizes))
-        sizes[smallest] += routine.size()
-        placement[name] = (routine, fileNames[smallest])
+      placement = dict()
+      for target, fileNames in files.items():
+        routines = [(name, generator) for name, generator in self._routines.items()
+                    if generator.target() == target]
+        if len(fileNames) == 1:
+          placement.update((name, (generator, fileNames[0])) for name, generator in routines)
+          continue
+        generated = [(name, GeneratedRoutine.of(name, generator)) for name, generator in routines]
+        sizes = [0] * len(fileNames)
+        for name, routine in sorted(generated, key=lambda item: -item[1].size()):
+          smallest = sizes.index(min(sizes))
+          sizes[smallest] += routine.size()
+          placement[name] = (routine, fileNames[smallest])
 
-    for name in self._routines:
-      generator, fileName = placement[name]
-      header(generator(name, fileName))
+      for name in self._routines:
+        generator, fileName = placement[name]
+        header(generator(name, staged[fileName]))
+
+      for fileName, stagedName in staged.items():
+        with open(stagedName, encoding='utf-8') as file:
+          writeIfChanged(fileName, file.read())
 
 class TinytcWriter(GpuRoutineGenerator):
   def __init__(self, signature, source):

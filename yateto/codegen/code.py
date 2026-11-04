@@ -37,7 +37,26 @@
 # @section DESCRIPTION
 #
 
+import io
 import sys
+
+def writeIfChanged(fileName, content):
+  """Writes `content` into the file `fileName`, unless the file holds it
+  already, and returns whether it wrote it.
+
+  A build tool compares the time of a file with the times of what it built
+  from it: a file written anew with the code it holds already would build
+  again all that depends on it.
+  """
+  try:
+    with open(fileName, encoding='utf-8') as file:
+      if file.read() == content:
+        return False
+  except (FileNotFoundError, UnicodeDecodeError):
+    pass
+  with open(fileName, 'w', encoding='utf-8') as file:
+    file.write(content)
+  return True
 
 class NoScope:
   def __enter__(self):
@@ -106,15 +125,23 @@ class PPIfBlock:
     self.writer('#endif')
 
 class Cpp:
+  """Writes C++ code into a stream, or into the file of the name it is given.
+
+  The file is written at the end of the `with` block, once its code is
+  complete, and only where the code changes (see `writeIfChanged`); a block
+  that ends with an exception leaves it as it is.
+  """
   def __init__(self, streamOrFileName = sys.stdout):
     self.fileHandle = streamOrFileName
     self.indent = 0
 
   def __enter__(self):
-    self.out = open(self.fileHandle, 'w+') if isinstance(self.fileHandle, str) else self.fileHandle
+    self.out = io.StringIO() if isinstance(self.fileHandle, str) else self.fileHandle
     return self
 
   def __exit__(self, type, value, traceback):
+    if isinstance(self.fileHandle, str) and type is None:
+      writeIfChanged(self.fileHandle, self.out.getvalue())
     if self.out is not sys.stdout:
       self.out.close()
     self.out = None

@@ -315,7 +315,8 @@ class GlobalRoutineCache:
       relpath = os.path.relpath(outputDir, subdir)
       rfRoutines = Generator.FileNames(subdir, Generator.ROUTINES_FILE_NAME)
       with Cpp(rfRoutines.h) as header:
-        header.include(os.path.join(relpath, fRoutines.hName))
+        # (with forward slashes, which an include takes on every platform)
+        header.include(os.path.join(relpath, fRoutines.hName).replace(os.sep, '/'))
 
 class Generator(object):
   INIT_FILE_NAME = 'init'

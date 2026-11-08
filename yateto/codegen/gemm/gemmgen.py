@@ -568,21 +568,27 @@ Stderr: {result.stderr}""")
 
       def __enter__(self):
         if self._spp is not None:
-          self._temp = tempfile.NamedTemporaryFile()
-          self._temp.__enter__()
-          self._temp.write('%%MatrixMarket matrix coordinate real general\n'.encode())
-          self._temp.write('%\n'.encode())
-          self._temp.write('{} {} {}\n'.format(self._shape[0], self._shape[1], len(self._spp)).encode())
-          values = self._values if self._values is not None else [1.0] * len(self._spp)
-          for (r,c), value in zip(self._spp, values):
-            self._temp.write('{} {} {!r}\n'.format(r+1,c+1,value).encode())
-          self._temp.flush()
+          # The generator opens the file by its name. Windows lets no other process
+          # open it while it is open here, so it is closed before the generator
+          # runs, and removed on exit.
+          self._temp = tempfile.NamedTemporaryFile(delete=False)
+          try:
+            with self._temp:
+              self._temp.write('%%MatrixMarket matrix coordinate real general\n'.encode())
+              self._temp.write('%\n'.encode())
+              self._temp.write('{} {} {}\n'.format(self._shape[0], self._shape[1], len(self._spp)).encode())
+              values = self._values if self._values is not None else [1.0] * len(self._spp)
+              for (r,c), value in zip(self._spp, values):
+                self._temp.write('{} {} {!r}\n'.format(r+1,c+1,value).encode())
+          except BaseException:
+            os.remove(self._temp.name)
+            raise
           return self._temp.name
         return None
 
       def __exit__(self, exc_type, exc_val, exc_tb):
         if self._spp is not None:
-          self._temp.__exit__(exc_type, exc_val, exc_tb)
+          os.remove(self._temp.name)
 
     with SparsityWrapper((self._gemmDescr['M'], self._gemmDescr['K']), self._sppA, self._valuesA) as afile:
       with SparsityWrapper((self._sppBRows if self._mode=='pspamm' else self._gemmDescr['K'], self._gemmDescr['N']), self._sppB) as bfile:

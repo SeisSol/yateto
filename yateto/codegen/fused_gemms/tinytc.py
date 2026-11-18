@@ -1,4 +1,4 @@
-from ..common import TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, makeMemrefType, makeBatchType, makeLoad
+from ..common import TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, makeMemrefType, makeBatchType, makeLoad, refuseUnreadableAddressing
 from ...ast.indices import BoundingBox
 from ..cache import TinytcWriter
 from ...ast.node import IndexedTensor
@@ -35,6 +35,10 @@ class FusedGemmsTinytc:
                     name = ''
                 is_constant[var] = node.tensor.is_compute_constant(
                 ) if isinstance(node, IndexedTensor) else False
+                # The batch types below know the modes at their defaults
+                # only, whatever the tensor states.
+                if isinstance(node, IndexedTensor):
+                    refuseUnreadableAddressing(str(var), node.tensor.addressing, 'tinytc')
                 arg = LocalValue(
                     makeBatchType(toTinyTCType(var.datatype), node.memoryLayout(),
                                   is_constant[var], var.is_temporary), name)

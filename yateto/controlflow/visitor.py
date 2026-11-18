@@ -190,7 +190,10 @@ class AST2ControlFlow(Visitor):
                                 'temporary' if bound.temporary else 'tensor'),
                                ('addressing', tensor.addressing, bound.addressing),
                                ('datatype', datatype, boundType),
-                               ('memory layout', tensor.memoryLayout(), bound.memoryLayout())):
+                               ('memory layout', tensor.memoryLayout(), bound.memoryLayout()),
+                               # what the caller claims about the data is
+                               # declared with it: an exporter reads it per name
+                               ('attribute', tensor.attributes(), bound.attributes())):
       if mine != theirs:
         raise ValueError(
           f'"{name}" is used with two different {what}s ({mine} vs. {theirs}); '

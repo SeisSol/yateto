@@ -10,7 +10,7 @@ from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, Float
 import hashlib
 
 class TensorDescription(object):
-  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, immediate=None):
+  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, immediate=None, attrs=None):
     """
 
     Args:
@@ -26,6 +26,9 @@ class TensorDescription(object):
       addressing (AddressingMode): the addressing mode for the tensor
       immediate (Union[list, None]): for an operand whose numbers are written
           into the code, the numbers by the address the layout gives them
+      attrs (Union[TensorAttributes, None]): what the caller states about the
+          tensor's data; None for an intermediate result, which has no tensor
+          to state anything
     """
     self.name = name
     self.memoryLayout = memoryLayout
@@ -36,14 +39,27 @@ class TensorDescription(object):
     self.datatype = datatype
     self.addressing = addressing
     self.immediate = immediate
+    self.attrs = attrs
 
   @classmethod
   def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())
 
+  @staticmethod
+  def attributesOf(var):
+    """The attributes of the tensor a variable names, or None.
+
+    Asked of the variable rather than of the node it stands for. The two
+    differ for a result: the node is an operation, with no tensor to ask,
+    while the variable written is the tensor named -- and every occurrence of
+    one name has to be described alike, the one that writes it included.
+    """
+    tensor = getattr(var, 'tensor', None)
+    return None if tensor is None else tensor.attributes()
+
 class IndexedTensorDescription(TensorDescription):
-  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
-    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing)
+  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, attrs=None):
+    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing, attrs=attrs)
     self.indices = indices
 
   @classmethod
@@ -60,7 +76,8 @@ class IndexedTensorDescription(TensorDescription):
       if is_const:
         values = baseNode.tensor.values()
       addressing = baseNode.tensor.addressing
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing,
+               attrs=cls.attributesOf(var))
 
   @classmethod
   def fromVar(cls, var, indices):
@@ -75,7 +92,8 @@ class IndexedTensorDescription(TensorDescription):
         if is_const:
           values = var.tensor.values()
         addressing = var.tensor.addressing
-    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing,
+               attrs=cls.attributesOf(var))
 
 def hasStorage(term):
   """Whether an operand is read through its memory layout.

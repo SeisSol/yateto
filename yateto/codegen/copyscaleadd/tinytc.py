@@ -1,7 +1,7 @@
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
 
-from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, makeMemrefType, makeBatchType, makeLoad
+from ..common import TensorDescription, IndexedTensorDescription, BatchedOperationsAux, TinytcKernelArgument, TinytcScalarKernelArgument, TinytcWrapper, makeMemrefType, makeBatchType, makeLoad, refuseUnreadableAddressing
 from ..cache import TinytcWriter
 from ..tiny_tensor_language import *
 
@@ -15,6 +15,9 @@ class CopyScaleAddTinytc:
 
     def generate(self, cpp, routineCache):
         d = self._descr
+        # The batch types below know the modes at their defaults only.
+        for term in (d.term, d.result):
+            refuseUnreadableAddressing(term.name, term.addressing, 'tinytc')
 
         ty = toTinyTCType(d.result.datatype)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from .. import aspp
-from ..type import AddressingMode, Datatype
+from ..type import AddressingMode, Datatype, ElementAddressing
 from ..ast.indices import BoundingBox, Range
 from ..ast.log import splitByDistance
 from ..memory import MemoryLayoutView
@@ -60,6 +60,13 @@ class IndexedTensorDescription(TensorDescription):
       if is_const:
         values = baseNode.tensor.values()
       addressing = baseNode.tensor.addressing
+    elif getattr(var, 'tensor', None) is not None:
+      # The node is the operation computing `var`, not a read of a tensor:
+      # the result is addressed as the tensor it is written into, which is
+      # what `fromVar` says for that tensor's every other occurrence. Left
+      # to be deduced here, a result stating its mode was described twice,
+      # differently, and the export refused it.
+      addressing = var.tensor.addressing
     return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
 
   @classmethod
@@ -338,12 +345,50 @@ class KernelAttributes:
     return f'KernelAttributes({self._attrs!r})'
 
 
+def _unreadableWhy(mode):
+  """Why a generator that knows the modes at their defaults cannot take
+  `mode`, as the end of a sentence; empty for a mode it simply does not know."""
+  if mode is not None and mode.isIndexed():
+    return ': it reaches an element through the launch\'s index list, which it has none of'
+  if isinstance(mode, ElementAddressing):
+    return (': its parameters would be read as the defaults -- the element size as '
+            'the stride, no offset -- which addresses another element\'s data')
+  return ''
+
+
+def refuseUnreadableAddressing(name, addressing, reader):
+  """Raise where `reader` -- gemmforge, chainforge, tinytc -- would read
+  `addressing` as something else.
+
+  They know the modes at their default parameters: an element's data at the
+  element size from the last one's, or through a pointer of its own. An
+  indexed mode or a mode with parameters of its own is refused here rather
+  than generated as its default, which would compile and read the wrong data.
+  """
+  if isinstance(addressing, ElementAddressing) or (
+      addressing is not None and addressing.isIndexed()):
+    raise NotImplementedError(
+      f'{reader} cannot read {name or "an operand"}, addressed as {addressing}'
+      f'{_unreadableWhy(addressing)}. Generate the kernel through an exporter '
+      f'that reads the binding (TensorForge), or address the operand plainly.')
+
+
 class BatchedOperationsAux:
   NUM_ELEMENTS_NAME = 'numElements'
   EXTRA_OFFSET_NAME = 'extraOffset'
   STREAM_PTR_NAME = 'streamPtr'
   FLAGS_NAME = 'flags'
   FORBIDDEN_STREAM_PTR = 'reinterpret_cast<void*>(std::numeric_limits<uintptr_t>::max())'
+  #: The launch's index list: element `n` of the launch is cell
+  #: `elementIndices[n]` of every operand addressed `INDEXED` or
+  #: `INDEXED_POINTER`. One per launch, as long as `numElements`.
+  ELEMENT_INDICES_NAME = 'elementIndices'
+
+  @classmethod
+  def parameterName(cls, parameter, baseName):
+    """The member a family's run-time `parameter` -- `'stride'` or `'slot'`
+    -- is set through: `stride_<name>`, as the offset is `extraOffset_<name>`."""
+    return f'{parameter}_{baseName.rsplit("::", 1)[-1]}'
 
   @classmethod
   def _get_ptr_type(cls, addressing: AddressingMode):
@@ -362,6 +407,8 @@ class BatchedOperationsAux:
 
   @classmethod
   def deduce_addresing(cls, term):
+    # A mode stated with parameters (`ElementAddressing`) is returned as it
+    # is: what reads it has to read the parameters too, or refuse it.
     if term.addressing is not None:
       return term.addressing
 
@@ -385,8 +432,23 @@ class BatchedOperationsAux:
     """The addressing of `term`, as gemmforge and chainforge name it."""
     mode = cls.deduce_addresing(term)
     if mode not in cls.FORGE_ADDRESSING:
-      raise ValueError(f'gemmforge and chainforge cannot read an operand addressed as {mode}.')
+      name = getattr(term, 'name', None)
+      raise ValueError(f'gemmforge and chainforge cannot read an operand addressed as {mode}'
+                       f'{f" ({name})" if name else ""}{_unreadableWhy(mode)}.')
     return cls.FORGE_ADDRESSING[mode]
+
+  @classmethod
+  def classicAddressing(cls, term, reader):
+    """The mode of `term`, where `reader` -- a generator before the exporters,
+    which knows the modes at their default parameters only -- can read it.
+
+    A free stride, a compile-time offset or an index list would be read as
+    that default: another element's data, at an address that compiles. So
+    they are refused, by the operand's name, rather than generated.
+    """
+    mode = cls.deduce_addresing(term)
+    refuseUnreadableAddressing(getattr(term, 'name', None), mode, reader)
+    return mode
 
   @classmethod
   def forge_region(cls, memoryLayout, ranges, transpose=False):

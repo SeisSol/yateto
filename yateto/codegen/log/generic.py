@@ -94,10 +94,14 @@ class Generic(object):
     # the operand folded to a matrix or a vector, its entries are no longer
     # the tensor's, and the values stay behind.
     values = lambda term, layout: term.values if layout is term.memoryLayout else None
+    # The operands' addressing goes along: a device GEMM generator reads it
+    # to know how an element is reached, and refuses what it cannot read
+    # (`BatchedOperationsAux.forge_addressing`) rather than deducing a mode
+    # the tensor never stated.
     gemmDescr = gemm.Description(
-      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, values=values(d.leftTerm, AmemLayout), datatype=d.leftTerm.datatype, immediate=immediate(d.leftTerm)),
-      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, values=values(d.rightTerm, BmemLayout), datatype=d.rightTerm.datatype, immediate=immediate(d.rightTerm)),
-      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary, datatype=d.result.datatype),
+      leftTerm = TensorDescription(innerAname, AmemLayout, Aeqspp, d.leftTerm.is_compute_constant, d.leftTerm.is_temporary, values=values(d.leftTerm, AmemLayout), datatype=d.leftTerm.datatype, addressing=d.leftTerm.addressing, immediate=immediate(d.leftTerm)),
+      rightTerm = TensorDescription(innerBname, BmemLayout, Beqspp, d.rightTerm.is_compute_constant, d.rightTerm.is_temporary, values=values(d.rightTerm, BmemLayout), datatype=d.rightTerm.datatype, addressing=d.rightTerm.addressing, immediate=immediate(d.rightTerm)),
+      result = TensorDescription(innerCname, CmemLayout, Ceqspp, d.result.is_compute_constant, d.result.is_temporary, datatype=d.result.datatype, addressing=d.result.addressing),
       transA = d.transA,
       transB = d.transB,
       alpha = d.alpha,

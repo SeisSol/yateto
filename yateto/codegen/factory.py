@@ -9,7 +9,7 @@ from .. import aspp
 from .common import forLoops, zeroFill, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes, reduceSpp
 from . import copyscaleadd, log, fused_gemms, elementwise, reduction, gemm
 from .gemm.generic import Generic as GenericGemm
-from ..type import Datatype, AddressingMode, Scalar, Tensor
+from ..type import Datatype, AddressingMode, RUNTIME, Scalar, Tensor, elementAddressing
 from ..controlflow.graph import Guard
 from ..ops import Add, Mul
 
@@ -376,7 +376,8 @@ class OptimizedKernelFactory(KernelFactory):
 
     def describe(term, layout, spp):
       return TensorDescription(term.name, layout, spp, term.is_compute_constant,
-                               term.is_temporary, datatype=term.datatype)
+                               term.is_temporary, datatype=term.datatype,
+                               addressing=term.addressing)
 
     def one(term):
       return describe(term, DenseMemoryLayout((1, 1)), aspp.dense((1, 1)))
@@ -774,6 +775,20 @@ class ExportGenerator:
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
+  #: 8: a tensor states its `binding`: where an element's data is, in numbers
+  #:    the formula leaves at its default. `null` for a tensor whose formula
+  #:    names no element (`'&'`, `''`, `null`); otherwise `stride` (null: the
+  #:    stored size of one element, a number, or `'runtime'`), `offset` (a
+  #:    number, added to the run-time `extraOffset`), `slots` and `slot` (a
+  #:    number, or `'runtime'` for the slot). `'runtime'` is a kernel
+  #:    argument, which the kernel struct has a member for (`stride_<name>`,
+  #:    `slot_<name>`). Two formulas are new, `'i*N+o&'` (indexed) and
+  #:    `'i*K+k&+o&'` (indexed pointer), over one index list per launch,
+  #:    `elementIndices`, as long as the launch has elements. An exporter
+  #:    ignoring the field reads a strided operand with a stride of its own
+  #:    at the element size -- another element's data -- and has no reading
+  #:    at all for an indexed one.
+  #:
   #: 7: a tensor states its `residence`: `memory`, `argument` or `code`.
   #:    `code` means its data is nowhere at run time -- the exporter writes
   #:    the `values` the description carries into the kernel, nothing is
@@ -811,7 +826,7 @@ class ExportGenerator:
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 7
+  INTERFACE_VERSION = 8
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -963,32 +978,59 @@ class ExportFactory(KernelFactory):
     return self._handleTensorDesc(IndexedTensorDescription.fromVar(var, indices))
 
   def _handleAddressing(self, desc):
-    if desc.addressing is None:
-      addressing = BatchedOperationsAux.deduce_addresing(desc)
-    else:
-      addressing = desc.addressing
+    # Asked of the mode, not compared against it: a mode with parameters is
+    # never equal to the bare one, and the parameters go out in `binding`.
+    mode = BatchedOperationsAux.deduce_addresing(desc).mode
 
     # & == deref
     # n == current element
-    # N == element size
-    # o == extraOffset
+    # N == element size: the stride (binding.stride; the stored size of one
+    #      element where that is null)
+    # o == extraOffset (plus binding.offset, known when generating)
+    # i == the current element's entry in the launch's index list
+    # K == pointers per entry (binding.slots)
+    # k == which of them (binding.slot)
     # *,+ == default add and mul
     # read left to right
-    if addressing == AddressingMode.DIRECT:
+    if mode == AddressingMode.DIRECT:
       return '&'
-    elif addressing == AddressingMode.STRIDED:
+    elif mode == AddressingMode.STRIDED:
       return 'n*N+o&'
-    elif addressing == AddressingMode.INDIRECT:
+    elif mode == AddressingMode.INDIRECT:
       return 'n&+o&'
-    elif addressing == AddressingMode.SCALAR:
+    elif mode == AddressingMode.INDEXED:
+      return 'i*N+o&'
+    elif mode == AddressingMode.INDEXED_POINTER:
+      return 'i*K+k&+o&'
+    elif mode == AddressingMode.SCALAR:
       return ''
-    elif not addressing.isPassedAsArgument():
+    elif not mode.isPassedAsArgument():
       # There is no parameter to start from, so there is no formula. `null`
       # rather than the empty string: the empty string is a formula, the one
       # that says the parameter is the value.
       return None
 
-    raise NotImplementedError(addressing)
+    raise NotImplementedError(mode)
+
+  @staticmethod
+  def _binding(desc):
+    """Where an element's data is, in the numbers the formula leaves at its
+    default; `None` for a tensor whose formula names no element.
+
+    Every key, with its default where it does not apply, so that the far side
+    reads one shape for every mode rather than a different one per formula.
+    `'runtime'` is a kernel argument: the struct has a member for it.
+    """
+    element = elementAddressing(BatchedOperationsAux.deduce_addresing(desc))
+    if element is None:
+      return None
+    spelled = lambda value: str(RUNTIME) if value is RUNTIME else value
+    return {
+      'stride': spelled(element.stride),
+      'offset': element.offset,
+      'slots': element.slots,
+      'slot': spelled(element.slot),
+    }
 
   @staticmethod
   def _residence(desc):
@@ -1060,6 +1102,7 @@ class ExportFactory(KernelFactory):
     tensor = {
       'name': tensorIndexed.name,
       'addressing': self._handleAddressing(tensorIndexed),
+      'binding': self._binding(tensorIndexed),
       'residence': self._residence(tensorIndexed),
       #'eqspp': spp,
       'datatype': str(tensorIndexed.datatype),
@@ -1156,6 +1199,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': name,
         'addressing': '',
+        'binding': None,
         'residence': 'argument',
         'datatype': str(self._arch.datatype),
         'storage': {
@@ -1174,6 +1218,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': scalar.name(),
         'addressing': '',
+        'binding': None,
         'residence': 'argument',
         'datatype': str(scalar.getDatatype(self._arch)),
         'storage': {

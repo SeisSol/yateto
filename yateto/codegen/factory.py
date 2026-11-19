@@ -176,16 +176,35 @@ class KernelFactory(object):
     the reads itself may know better than the tensor does -- an order that
     lets the loads be vectorised, say -- and says so here, by tensor name.
 
-    An offering is data: ``{'order': [axis, ...]}`` names the axes fastest
-    first, and nothing else is defined yet. Data rather than a layout,
-    because the one offering need not be in this process, and because what
-    it asks for has to be checked against what the tensor is before it is
-    granted.
+    An offering is data, with one key per kind of request:
+
+    - ``order``: the axes, fastest first;
+    - ``data``: the numbers themselves, arranged as the reads want them, with
+      ``parts`` -- the scalars one element is stored as -- and ``planar`` --
+      whether those parts lie apart rather than side by side -- saying how.
+
+    Data rather than a layout, because the one offering need not be in this
+    process, and because what it asks for has to be checked against what the
+    tensor is before it is granted. It is granted whole or refused by name
+    (`OptimizedKernelGenerator._grantOffering`): an arrangement granted in
+    part is one nobody asked for.
 
     Asked once the kernel is generated, because that is when the answer
     exists. What comes back holds for this kernel alone: another kernel
     reading the same matrix may read it another way, and the pool then holds
     it both ways.
+
+    A further kind gets a key of its own, never a new meaning of one of
+    these, so that a side that does not know it refuses it. The ones in view
+    -- elements held in blocks of several, values scaled by powers of two, a
+    narrower storage type -- are about buffers the caller fills rather than
+    constants yateto fills, which changes who has to agree. Such a kind may
+    only be offered for a tensor whose caller has said it takes it, as an
+    attribute of the tensor (one that permits, see `TensorAttributes`), and a
+    factory must not generate reads of it otherwise: a caller that never says
+    so keeps the format the tensor gives itself. And the caller fills one
+    buffer for every kernel that names it, so unlike the pool it cannot hold
+    two arrangements: the offerings of all those kernels have to agree.
     """
     return {}
 
@@ -772,6 +791,32 @@ class UnitTestFactory(KernelFactory):
     return value
 
 class ExportGenerator:
+  """A code generator outside yateto, which gets each kernel as data.
+
+  `INTERFACE_VERSION` counts what an exporter has to understand. Some things
+  travel outside it, because an exporter that ignores them gets nothing
+  wrong:
+
+  - what an exporter answers -- `layout_offerings`, `flop_report` -- which it
+    may leave unanswered, and yateto then does without (see
+    `ExportFactory.layoutOfferings`);
+  - a tensor's `attrs`: what the caller states about its data
+    (`TensorAttributes`), present only where it states something. Every
+    attribute in there permits an optimization and asks for none -- `temporal:
+    'invariant'` permits computing what depends on such data alone once,
+    ahead of the time loop -- so an exporter that does not read one builds the
+    kernel it built before, which is correct. Being among `attrs` is what
+    lists a key as safe to ignore: a reader skips the ones it does not know.
+
+  An attribute that changes what the stored numbers *mean* -- a scale, a
+  storage precision, an inner layout -- cannot travel that way, since an
+  exporter ignoring it computes with the wrong numbers. It gets a field of its
+  own and raises `INTERFACE_VERSION`, as every such field has: an exporter
+  that does not speak the new version is refused before it sees a kernel, and
+  one that speaks it but cannot honor the field for some tensor refuses that
+  tensor by name rather than builds around it.
+  """
+
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
   #:
@@ -933,6 +978,12 @@ class ExportFactory(KernelFactory):
     tensor gives itself, which is what every exporter got before there was
     anywhere to say otherwise. A missing answer is therefore not a dropped
     field but no request, and that degrades to the right thing.
+
+    The kinds of request are those `KernelFactory.layoutOfferings` lists. The
+    direction is the reverse of a tensor's `attrs`, and so is the rule: an
+    attribute only permits, so a reader may skip one it does not know, while
+    an offering asks for something, so a kind this yateto does not know is
+    refused by name rather than skipped.
     """
     offer = getattr(self.generator, 'layout_offerings', None)
     if offer is None:
@@ -1120,9 +1171,22 @@ class ExportFactory(KernelFactory):
         'constant': tensorIndexed.is_compute_constant
       }
     }
+    tensor.update(self._attributes(tensorIndexed.attrs))
 
     return self._handleTensor(tensor, tensorIndexed.indices,
                               self._logicalBox(tensorIndexed), offset, sliced)
+
+  @staticmethod
+  def _attributes(attrs):
+    """The `attrs` field of a tensor: what the caller states about its data.
+
+    Present only where the tensor states something. No attribute is no
+    claim, and a description that carries none is the one an exporter got
+    before there was the field -- so recording one before and after compares
+    equal, and nothing reads a key it did not ask for.
+    """
+    stated = attrs.as_dict() if attrs is not None else {}
+    return {'attrs': stated} if stated else {}
 
   @classmethod
   def _values(cls, values):
@@ -1233,6 +1297,7 @@ class ExportFactory(KernelFactory):
           'constant': True
         }
       }
+      tensor.update(self._attributes(scalar.attributes()))
     else:
       assert False
 

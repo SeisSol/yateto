@@ -15,7 +15,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from yateto import Generator, GeneratorCollection, Tensor, simpleParameterSpace
+from yateto import Generator, GeneratorCollection, Scalar, Tensor, simpleParameterSpace
 from yateto.arch import useArchitectureIdentifiedBy
 from yateto.codegen.factory import ExportGenerator
 from yateto.type import Datatype
@@ -344,6 +344,84 @@ class TestConstantValues:
         assert json.loads(json.dumps(collector.kernel)) == collector.kernel
 
 
+class TestExportedAttributes:
+    """What the caller states about a tensor's data reaches the exporter.
+
+    Outside the interface version: every attribute only permits, so an
+    exporter that does not read `attrs` builds the kernel it always built.
+    And present only where a tensor states something, so a kernel whose
+    tensors state nothing is described exactly as before.
+    """
+
+    @staticmethod
+    def _product(star_attrs=None):
+        star = Tensor('star', (N, N), attrs=star_attrs)
+        Q = Tensor('Q', (N, N))
+        out = Tensor('out', (N, N))
+        collector = export([out['ij'] <= Q['ik'] * star['kj']])
+        return collector.kernel, {d['name']: d for d in collector.tensors}
+
+    def test_a_tensor_that_states_nothing_has_no_field(self):
+        _, described = self._product()
+        assert all('attrs' not in d for d in described.values())
+
+    def test_a_claim_reaches_the_tensor_it_is_about(self):
+        _, described = self._product({'temporal': 'invariant'})
+        assert described['star']['attrs'] == {'temporal': 'invariant'}
+        assert 'attrs' not in described['Q']
+        assert 'attrs' not in described['out']
+
+    def test_the_claim_is_the_only_difference(self):
+        # Including the version: ignoring it gets nothing wrong.
+        plain, _ = self._product()
+        claimed, _ = self._product({'temporal': 'invariant'})
+        for tensor in claimed['tensors']:
+            tensor.pop('attrs', None)
+        assert claimed == plain
+        assert claimed['version'] == ExportGenerator.INTERFACE_VERSION
+
+    def test_an_intermediate_result_states_nothing(self):
+        star = Tensor('star', (N, N), attrs={'temporal': 'invariant'})
+        A = Tensor('A', (N, N), attrs={'temporal': 'invariant'})
+        out = Tensor('out', (N, N))
+        collector = export([out['ij'] <= yf.sqrt(A['ik'] * star['kj'])])
+        temporaries = [d for d in collector.tensors if d['flags']['temporary']]
+        assert temporaries, 'the product is computed into a temporary'
+        assert all('attrs' not in d for d in temporaries)
+
+    def test_a_tensor_written_and_read_is_described_alike(self):
+        # The occurrence that writes it is described from the operation's
+        # result, the one that reads it from a variable: both have to say the
+        # same, or the exporter refuses the name.
+        A = Tensor('A', (N, N), attrs={'temporal': 'invariant'})
+        B = Tensor('B', (N, N))
+        out = Tensor('out', (N, N))
+        collector = export([[A['ij'] <= B['ik'] * B['kj'],
+                             out['ij'] <= A['ik'] * B['kj']]])
+        described = [d for d in collector.tensors if d['name'] == 'A']
+        assert [d['attrs'] for d in described] == [{'temporal': 'invariant'}]
+
+    def test_a_named_factor_states_its_own(self):
+        scale = Scalar('scale', attrs={'temporal': 'invariant'})
+        A, out = Tensor('A', (N, N)), Tensor('out', (N, N))
+        collector = export([out['ij'] <= scale * A['ij']])
+        described = {d['name']: d for d in collector.tensors}
+        assert described['scale']['attrs'] == {'temporal': 'invariant'}
+
+    def test_the_claim_survives_a_json_round_trip(self):
+        kernel, _ = self._product({'temporal': 'invariant'})
+        assert json.loads(json.dumps(kernel)) == kernel
+
+    def test_one_name_with_two_claims_is_refused(self):
+        # One name is one declaration on the far side, and it states the
+        # claim once.
+        claimed = Tensor('star', (N, N), attrs={'temporal': 'invariant'})
+        plain = Tensor('star', (N, N))
+        out = Tensor('out', (N, N))
+        with pytest.raises(ValueError, match=r'"star" is used with two different attributes'):
+            export([out['ij'] <= claimed['ik'] * plain['kj']])
+
+
 class TestConflictingOccurrences:
     """Two occurrences of one name that describe two different tensors.
 
@@ -578,6 +656,19 @@ class TestLayoutOfferings:
     def test_an_offering_for_a_writable_operand_is_refused(self):
         with pytest.raises(ValueError, match='out'):
             self._generate({'out': {'order': [1, 0]}})
+
+    def test_a_format_for_a_buffer_the_caller_fills_is_refused(self):
+        # Until a caller can say it takes one -- a kind of its own, granted
+        # only then -- a buffer the caller fills keeps its own format, whatever
+        # the exporter asks.
+        with pytest.raises(ValueError, match=r'\bB\b.*not a constant'):
+            self._generate({'B': {'blocks': 4}})
+
+    def test_a_kind_this_yateto_does_not_know_is_refused_rather_than_skipped(self):
+        # An attribute only permits and may be skipped; an offering asks, and
+        # granting part of it grants something nobody asked for.
+        with pytest.raises(ValueError, match='scale'):
+            self._generate({'A': {'order': [1, 0], 'scale': [1, 2, 4, 8]}})
 
 
 class TestPreparedConstants:

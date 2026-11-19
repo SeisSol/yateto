@@ -560,6 +560,75 @@ class IdentifiedType(AbstractType):
   def __hash__(self):
     return hash(self._name)
 
+class TensorAttributes:
+  """What the caller states about a tensor's data, beyond what the data is.
+
+  The counterpart of `KernelAttributes` for one operand, and checked the same
+  way: an unknown key, or a value a known key does not take, is rejected here
+  rather than ignored, since an attribute that does nothing looks exactly
+  like a typo in one that would have.
+
+  `temporal` says how the data behaves over the time loop. `'invariant'`
+  claims it does not change while the kernels that read it run -- SeisSol's
+  star matrices, flux solvers and geometry are written at setup and read in
+  every time step -- so a generator may compute what depends on such data
+  alone once, ahead of the loop, rather than in every call. Without it there
+  is no claim either way. Data that a time step changes, such as the material
+  of a damage or a plasticity model, must not claim it, and neither can a
+  temporary, which lives for one call.
+
+  Every attribute so far *permits*: it allows an optimization and asks for
+  none, so a generator that ignores it builds the kernel it built before,
+  which is correct. That is why they travel outside the interface version,
+  among the `attrs` a reader may skip (see `ExportGenerator`). An attribute
+  that changes what the stored numbers *mean* -- a scale, a storage
+  precision, an inner layout -- is the other kind: a generator ignoring it
+  computes with the wrong numbers. One joins `KNOWN` only together with a
+  field of its own in the description, an interface version bump and a
+  reading in yateto's own generators, so that whatever cannot honor it
+  refuses the kernel rather than builds it.
+  """
+
+  TEMPORAL = 'temporal'
+  #: The attributes, and the values each one takes.
+  KNOWN = {TEMPORAL: ('invariant',)}
+
+  def __init__(self, attrs=None):
+    attrs = dict(attrs) if attrs else {}
+    unknown = sorted(set(attrs) - set(self.KNOWN))
+    if unknown:
+      raise ValueError(
+        'unknown tensor attribute(s) {}; known are {}'.format(
+          ', '.join(repr(key) for key in unknown),
+          ', '.join(repr(key) for key in sorted(self.KNOWN))))
+    for key, value in attrs.items():
+      if value not in self.KNOWN[key]:
+        raise ValueError('tensor attribute {!r} takes {}, not {!r}'.format(
+          key, ', '.join(repr(known) for known in self.KNOWN[key]), value))
+    self._attrs = attrs
+
+  @property
+  def timeInvariant(self):
+    """Whether the data is claimed not to change over the time loop."""
+    return self._attrs.get(self.TEMPORAL) == 'invariant'
+
+  def as_dict(self):
+    """The attributes as the external code generators get them.
+
+    Only what was set: no attribute means no claim, and an exporter told
+    nothing gets nothing, so a tensor without attributes is described as it
+    was before there were any.
+    """
+    return dict(self._attrs)
+
+  def __eq__(self, other):
+    if isinstance(other, TensorAttributes):
+      return self._attrs == other._attrs
+    return NotImplemented
+
+  def __repr__(self):
+    return f'TensorAttributes({self._attrs!r})'
+
 class Tensor(IdentifiedType):
   def __init__(self,
                name,
@@ -570,7 +639,8 @@ class Tensor(IdentifiedType):
                namespace=None,
                datatype=None,
                addressing=None,
-               temporary=False):
+               temporary=False,
+               attrs=None):
     super().__init__(name, namespace=namespace, datatype=datatype)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
@@ -591,6 +661,8 @@ class Tensor(IdentifiedType):
     self.addressing = addressing
 
     self.temporary = temporary
+
+    self.setAttributes(attrs)
 
     if namespace is None:
       self.namespace = ''
@@ -677,6 +749,26 @@ class Tensor(IdentifiedType):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp,
                                                    alignStride=alignStride,
                                                    alignmentArch=alignmentArch)
+
+  def attributes(self):
+    """What the caller states about this tensor's data; see TensorAttributes."""
+    return self._attrs
+
+  def setAttributes(self, attrs):
+    """Replaces what the caller states about this tensor's data.
+
+    Settable after construction, as a memory layout is, because many tensors
+    are not constructed by the caller who knows: the matrices of a file and
+    the members of a family come out of a parser that takes no attributes.
+    Not part of the hash, which only covers what cannot change.
+    """
+    attributes = TensorAttributes(attrs)
+    if attributes.timeInvariant and self.temporary:
+      # A temporary is the kernel's own scratch and lives for one call, so
+      # there is no time loop for it to be invariant over.
+      raise ValueError(f'{self._name} is a temporary; it cannot claim to stay '
+                       f'the same over the time loop.')
+    self._attrs = attributes
 
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
@@ -812,9 +904,9 @@ class Scalar(Tensor):
   convention differs, and that is what AddressingMode.SCALAR says.
   """
 
-  def __init__(self, name, namespace=None, datatype=None):
+  def __init__(self, name, namespace=None, datatype=None, attrs=None):
     super().__init__(name, (), namespace=namespace, datatype=datatype,
-                     addressing=AddressingMode.SCALAR)
+                     addressing=AddressingMode.SCALAR, attrs=attrs)
 
   def __str__(self):
     # a scalar spells itself as its name: it is a value in the generated code,

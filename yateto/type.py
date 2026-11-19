@@ -1,5 +1,7 @@
 import copy
+import dataclasses
 import re
+from typing import ClassVar
 from numpy import ndarray, zeros, float64
 from .memory import DenseMemoryLayout
 from . import aspp
@@ -199,11 +201,42 @@ class AddressingMode(Enum):
   #: selector can therefore be spelled out in the element-wise statement that
   #: reads it and be a pool constant in the GEMM that reads it too.
   IMMEDIATE = 4
+  #: An element's data at `base + index[n] * stride + offset`.
+  #:
+  #: The data of a subset of the cells, or of all of them in another order,
+  #: where the cells are stored one after the other: the launch is handed one
+  #: list of cell indices, `elementIndices`, and element `n` of the launch is
+  #: cell `index[n]`. One list per launch, shared by every operand addressed
+  #: this way, and as long as the launch has elements.
+  #:
+  #: An input may name a cell twice and in any order. An output written
+  #: through two entries that name one cell is undefined: two elements write
+  #: the same memory at the same time, and an accumulation adds up neither
+  #: sum completely.
+  INDEXED = 5
+  #: An element's data at `vars[index[n] * slots + slot] + offset`.
+  #:
+  #: The cell's own pointer, one indirection deeper than `INDEXED`: `vars`
+  #: holds `slots` pointers a cell -- one for each face of it, say -- and the
+  #: operand is the data the `slot`-th of them points at. What a pointer list
+  #: per operand reaches through a table built per launch, this reaches
+  #: through what the cells already hold, by the same index list.
+  INDEXED_POINTER = 6
 
   def __str__(self):
     # the messages that name a mode are read by whoever wrote the kernel
     # description, and `AddressingMode.IMMEDIATE` is not how they wrote it
     return self.name.lower()
+
+  @property
+  def mode(self):
+    """The mode itself, which is what an `ElementAddressing` is a mode of.
+
+    So that a site asking which mode an operand has asks one question of
+    either form, rather than comparing a parameterized one against a bare
+    mode -- which it never equals.
+    """
+    return self
 
   def isPassedAsArgument(self):
     """Whether the operand appears in the kernel's signature."""
@@ -219,11 +252,17 @@ class AddressingMode(Enum):
     """
     return self in (AddressingMode.DIRECT,
                     AddressingMode.STRIDED,
-                    AddressingMode.INDIRECT)
+                    AddressingMode.INDIRECT,
+                    AddressingMode.INDEXED,
+                    AddressingMode.INDEXED_POINTER)
 
   def isPassedByValue(self):
     """Whether the operand is handed over as a value rather than a pointer."""
     return self is AddressingMode.SCALAR
+
+  def isIndexed(self):
+    """Whether an element's data is reached through the launch's index list."""
+    return self in (AddressingMode.INDEXED, AddressingMode.INDEXED_POINTER)
 
   def pointer_type(self):
     if not self.isPassedAsArgument():
@@ -235,7 +274,213 @@ class AddressingMode(Enum):
       AddressingMode.STRIDED: '*',
       AddressingMode.INDIRECT: '**',
       AddressingMode.SCALAR: '',
+      AddressingMode.INDEXED: '*',
+      AddressingMode.INDEXED_POINTER: '**',
     }[self]
+
+
+class _Runtime(Enum):
+  """The value of a parameter a kernel is handed when it runs.
+
+  An enum member rather than a string or a bare object, so that it stays
+  itself through `copy.deepcopy` and pickling: a generator that copies a
+  description it then asks `is RUNTIME` gets the answer it would have got
+  from the original.
+  """
+  RUNTIME = 'runtime'
+
+  def __str__(self):
+    return self.value
+
+  def __repr__(self):
+    return 'RUNTIME'
+
+
+#: A parameter of an element's address that is not a number yet: the kernel
+#: takes it as an argument, and its struct has a member for the caller to set
+#: (`stride_<name>`, `slot_<name>`), as it has `extraOffset_<name>` today.
+RUNTIME = _Runtime.RUNTIME
+
+
+def _parameter(value, what, minimum, runtime):
+  """`value` as a plain int of at least `minimum`, or RUNTIME where admitted."""
+  if value is RUNTIME:
+    if not runtime:
+      raise ValueError(f'{what} has to be a number; it cannot be bound at run time.')
+    return value
+  if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+    raise ValueError(f'{what} has to be an integer{" or RUNTIME" if runtime else ""}, '
+                     f'got {value!r}.')
+  if int(value) < minimum:
+    raise ValueError(f'{what} has to be at least {minimum}, got {value}.')
+  return int(value)
+
+
+@dataclasses.dataclass(frozen=True)
+class ElementAddressing:
+  """An addressing mode with the parameters its address takes.
+
+  The modes say how an element of the batch is reached; these say where, in
+  numbers, which the bare modes leave at the default every generator assumes:
+
+  * `stride` (`STRIDED`, `INDEXED`): elements from one cell's data to the
+    next one's. `None` is the stored size of one element, which is what a
+    bare `STRIDED` means; a number is anything else -- a member of a struct
+    is a struct apart. `RUNTIME` makes it a kernel argument.
+  * `offset` (every mode that reaches an element): elements from where the
+    address points to the data, known when the kernel is generated -- the
+    member's place in the struct. What is only known at run time is the
+    `extraOffset_<name>` every such operand already has, and it adds to this.
+  * `slots`, `slot` (`INDEXED_POINTER`): how many pointers a cell holds, and
+    which of them the operand is. `slot` may be `RUNTIME`.
+
+  Equal to another one with the same mode and parameters, and never to a
+  bare `AddressingMode`: a site that compares an operand's addressing with
+  `AddressingMode.STRIDED` does so to assume the default stride, and a
+  strided operand with a stride of its own is exactly the one it must not
+  match. Such a site falls through to whatever it does with a mode it does
+  not know, which refuses rather than miscompiles; a site that understands
+  the parameters asks `mode` and reads them.
+
+  Made through `strided`, `indexed`, `indexedPointer` and `indirect`, which
+  hand back the bare mode where every parameter is its default -- so that a
+  description stating the defaults is the description that states nothing.
+
+  A device kernel's business. A kernel on the host is handed one element's
+  data per call, as it always was for `STRIDED` and `INDIRECT`: the caller
+  points its members at the element itself, and the mode and its parameters
+  change nothing there. The alignment a layout promises is a promise about
+  every element's address, so a stride or an offset has to keep it.
+  """
+
+  mode: AddressingMode
+  stride: object = None
+  offset: int = 0
+  slots: int = 1
+  slot: object = 0
+
+  #: The modes that reach an element of the batch, and so take parameters.
+  MODES: ClassVar[tuple] = (AddressingMode.STRIDED, AddressingMode.INDIRECT,
+                            AddressingMode.INDEXED, AddressingMode.INDEXED_POINTER)
+
+  def __post_init__(self):
+    mode = self.mode
+    if not isinstance(mode, AddressingMode) or mode not in self.MODES:
+      raise ValueError(f'{mode} takes no parameters: only the modes that reach an '
+                       f'element of the batch do ({", ".join(str(m) for m in self.MODES)}).')
+    stride = self.stride
+    if stride is not None:
+      if mode not in (AddressingMode.STRIDED, AddressingMode.INDEXED):
+        raise ValueError(f'a stride means nothing to {mode}: an element is reached '
+                         f'through a pointer of its own, not at a distance from the last.')
+      stride = _parameter(stride, 'the stride', 1, runtime=True)
+    offset = _parameter(self.offset, 'the offset', 0, runtime=False)
+    slots = _parameter(self.slots, 'the number of slots', 1, runtime=False)
+    slot = _parameter(self.slot, 'the slot', 0, runtime=True)
+    if mode is not AddressingMode.INDEXED_POINTER and (slots != 1 or slot != 0):
+      raise ValueError(f'slots mean nothing to {mode}: only {AddressingMode.INDEXED_POINTER} '
+                       f'reaches a cell\'s data through one of several pointers.')
+    if slot is not RUNTIME and slot >= slots:
+      raise ValueError(f'slot {slot} of {slots}: a cell holds {slots} pointer'
+                       f'{"s" if slots != 1 else ""}, numbered from 0.')
+    # Plain ints, so that the description these end up in is data: `json`
+    # refuses a numpy integer.
+    for name, value in (('stride', stride), ('offset', offset), ('slots', slots),
+                        ('slot', slot)):
+      object.__setattr__(self, name, value)
+
+  def __str__(self):
+    parts = []
+    if self.stride is not None:
+      parts.append(f'stride={self.stride}')
+    if self.offset:
+      parts.append(f'offset={self.offset}')
+    if self.slots != 1:
+      parts.append(f'slots={self.slots}')
+    if self.slot != 0:
+      parts.append(f'slot={self.slot}')
+    return f'{self.mode}({", ".join(parts)})' if parts else str(self.mode)
+
+  def isDefault(self):
+    """Whether every parameter is the one the bare mode means."""
+    return (self.stride is None and self.offset == 0 and self.slots == 1
+            and self.slot == 0)
+
+  def normalized(self):
+    """The bare mode where the parameters are its defaults, else this."""
+    return self.mode if self.isDefault() else self
+
+  def isRuntime(self, parameter):
+    """Whether `parameter` ('stride' or 'slot') is a kernel argument."""
+    return getattr(self, parameter) is RUNTIME
+
+  def isPassedAsArgument(self):
+    return self.mode.isPassedAsArgument()
+
+  def hasStorage(self):
+    return self.mode.hasStorage()
+
+  def isPassedByValue(self):
+    return self.mode.isPassedByValue()
+
+  def isIndexed(self):
+    return self.mode.isIndexed()
+
+  def pointer_type(self):
+    return self.mode.pointer_type()
+
+
+def strided(stride=None, offset=0):
+  """`STRIDED`, with a stride and an offset of its own; the bare mode where
+  both are the defaults."""
+  return ElementAddressing(AddressingMode.STRIDED, stride=stride, offset=offset).normalized()
+
+
+def indexed(stride=None, offset=0):
+  """`INDEXED`, with a stride and an offset of its own; the bare mode where
+  both are the defaults."""
+  return ElementAddressing(AddressingMode.INDEXED, stride=stride, offset=offset).normalized()
+
+
+def indexedPointer(slots=1, slot=0, offset=0):
+  """`INDEXED_POINTER` over `slots` pointers a cell, the `slot`-th of them;
+  the bare mode where every parameter is the default."""
+  return ElementAddressing(AddressingMode.INDEXED_POINTER, slots=slots, slot=slot,
+                           offset=offset).normalized()
+
+
+def indirect(offset=0):
+  """`INDIRECT`, with an offset into what each pointer points at; the bare
+  mode where it is 0."""
+  return ElementAddressing(AddressingMode.INDIRECT, offset=offset).normalized()
+
+
+def elementAddressing(addressing):
+  """The parameters of `addressing`, as an `ElementAddressing` with the
+  defaults filled in; `None` for a mode that reaches no element of the batch
+  (`DIRECT`, `SCALAR`, `IMMEDIATE`) and for no mode at all.
+
+  An operand that states no mode gets one deduced for it; deduce first
+  (`BatchedOperationsAux.deduce_addresing`) to ask about that one.
+  """
+  if addressing is None:
+    return None
+  if isinstance(addressing, ElementAddressing):
+    return addressing
+  if addressing in ElementAddressing.MODES:
+    return ElementAddressing(addressing)
+  return None
+
+
+def _normalizedAddressing(addressing, name):
+  """What a tensor stores as its addressing: a bare mode, a parameterized one
+  whose parameters are not all defaults, or None."""
+  if addressing is None or isinstance(addressing, AddressingMode):
+    return addressing
+  if isinstance(addressing, ElementAddressing):
+    return addressing.normalized()
+  raise ValueError(f'{name}: the addressing has to be an AddressingMode or an '
+                   f'ElementAddressing (strided, indexed, ...), got {addressing!r}.')
 
 class Symbol(object):
   def __init__(self, datatype):
@@ -315,6 +560,75 @@ class IdentifiedType(AbstractType):
   def __hash__(self):
     return hash(self._name)
 
+class TensorAttributes:
+  """What the caller states about a tensor's data, beyond what the data is.
+
+  The counterpart of `KernelAttributes` for one operand, and checked the same
+  way: an unknown key, or a value a known key does not take, is rejected here
+  rather than ignored, since an attribute that does nothing looks exactly
+  like a typo in one that would have.
+
+  `temporal` says how the data behaves over the time loop. `'invariant'`
+  claims it does not change while the kernels that read it run -- SeisSol's
+  star matrices, flux solvers and geometry are written at setup and read in
+  every time step -- so a generator may compute what depends on such data
+  alone once, ahead of the loop, rather than in every call. Without it there
+  is no claim either way. Data that a time step changes, such as the material
+  of a damage or a plasticity model, must not claim it, and neither can a
+  temporary, which lives for one call.
+
+  Every attribute so far *permits*: it allows an optimization and asks for
+  none, so a generator that ignores it builds the kernel it built before,
+  which is correct. That is why they travel outside the interface version,
+  among the `attrs` a reader may skip (see `ExportGenerator`). An attribute
+  that changes what the stored numbers *mean* -- a scale, a storage
+  precision, an inner layout -- is the other kind: a generator ignoring it
+  computes with the wrong numbers. One joins `KNOWN` only together with a
+  field of its own in the description, an interface version bump and a
+  reading in yateto's own generators, so that whatever cannot honor it
+  refuses the kernel rather than builds it.
+  """
+
+  TEMPORAL = 'temporal'
+  #: The attributes, and the values each one takes.
+  KNOWN = {TEMPORAL: ('invariant',)}
+
+  def __init__(self, attrs=None):
+    attrs = dict(attrs) if attrs else {}
+    unknown = sorted(set(attrs) - set(self.KNOWN))
+    if unknown:
+      raise ValueError(
+        'unknown tensor attribute(s) {}; known are {}'.format(
+          ', '.join(repr(key) for key in unknown),
+          ', '.join(repr(key) for key in sorted(self.KNOWN))))
+    for key, value in attrs.items():
+      if value not in self.KNOWN[key]:
+        raise ValueError('tensor attribute {!r} takes {}, not {!r}'.format(
+          key, ', '.join(repr(known) for known in self.KNOWN[key]), value))
+    self._attrs = attrs
+
+  @property
+  def timeInvariant(self):
+    """Whether the data is claimed not to change over the time loop."""
+    return self._attrs.get(self.TEMPORAL) == 'invariant'
+
+  def as_dict(self):
+    """The attributes as the external code generators get them.
+
+    Only what was set: no attribute means no claim, and an exporter told
+    nothing gets nothing, so a tensor without attributes is described as it
+    was before there were any.
+    """
+    return dict(self._attrs)
+
+  def __eq__(self, other):
+    if isinstance(other, TensorAttributes):
+      return self._attrs == other._attrs
+    return NotImplemented
+
+  def __repr__(self):
+    return f'TensorAttributes({self._attrs!r})'
+
 class Tensor(IdentifiedType):
   def __init__(self,
                name,
@@ -325,7 +639,8 @@ class Tensor(IdentifiedType):
                namespace=None,
                datatype=None,
                addressing=None,
-               temporary=False):
+               temporary=False,
+               attrs=None):
     super().__init__(name, namespace=namespace, datatype=datatype)
     if not isinstance(shape, tuple):
       raise ValueError('shape must be a tuple')
@@ -340,10 +655,14 @@ class Tensor(IdentifiedType):
     self._shape = shape
     self._values = None
 
-    # default addressing mode. If not given, deduce it
+    # default addressing mode. If not given, deduce it. A mode with
+    # parameters (`strided`, `indexed`, ...) is stored as the bare mode where
+    # its parameters are the defaults (`addressing`).
     self.addressing = addressing
 
     self.temporary = temporary
+
+    self.setAttributes(attrs)
 
     if namespace is None:
       self.namespace = ''
@@ -396,6 +715,20 @@ class Tensor(IdentifiedType):
     """Whether this tensor appears in the kernel's signature."""
     return self.addressing is None or self.addressing.isPassedAsArgument()
 
+  @property
+  def addressing(self):
+    """How an element of the batch reaches this tensor's data: an
+    `AddressingMode`, an `ElementAddressing` (a mode with parameters), or None
+    for the mode deduced from what the tensor is."""
+    return self._addressing
+
+  @addressing.setter
+  def addressing(self, addressing):
+    # One spelling per meaning: a mode with every parameter at its default is
+    # the bare mode, so that the two are one tensor and one description, and
+    # whatever compares against the bare mode finds it.
+    self._addressing = _normalizedAddressing(addressing, self._name)
+
   def inMemory(self):
     """This tensor, read through an address rather than written into the code.
 
@@ -416,6 +749,26 @@ class Tensor(IdentifiedType):
     self._memoryLayout = memoryLayoutClass.fromSpp(self._groupSpp,
                                                    alignStride=alignStride,
                                                    alignmentArch=alignmentArch)
+
+  def attributes(self):
+    """What the caller states about this tensor's data; see TensorAttributes."""
+    return self._attrs
+
+  def setAttributes(self, attrs):
+    """Replaces what the caller states about this tensor's data.
+
+    Settable after construction, as a memory layout is, because many tensors
+    are not constructed by the caller who knows: the matrices of a file and
+    the members of a family come out of a parser that takes no attributes.
+    Not part of the hash, which only covers what cannot change.
+    """
+    attributes = TensorAttributes(attrs)
+    if attributes.timeInvariant and self.temporary:
+      # A temporary is the kernel's own scratch and lives for one call, so
+      # there is no time loop for it to be invariant over.
+      raise ValueError(f'{self._name} is a temporary; it cannot claim to stay '
+                       f'the same over the time loop.')
+    self._attrs = attributes
 
   def _setSparsityPattern(self, spp, setOnlyGroupSpp=False):
     if spp.shape != self._shape:
@@ -551,9 +904,9 @@ class Scalar(Tensor):
   convention differs, and that is what AddressingMode.SCALAR says.
   """
 
-  def __init__(self, name, namespace=None, datatype=None):
+  def __init__(self, name, namespace=None, datatype=None, attrs=None):
     super().__init__(name, (), namespace=namespace, datatype=datatype,
-                     addressing=AddressingMode.SCALAR)
+                     addressing=AddressingMode.SCALAR, attrs=attrs)
 
   def __str__(self):
     # a scalar spells itself as its name: it is a value in the generated code,

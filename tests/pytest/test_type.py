@@ -13,7 +13,7 @@ import pytest
 
 from yateto import Tensor, Scalar
 from yateto.memory import DenseMemoryLayout
-from yateto.type import AddressingMode, Collection, Datatype, IdentifiedType
+from yateto.type import AddressingMode, Collection, Datatype, IdentifiedType, TensorAttributes
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +271,90 @@ class TestScalar:
     def test_invalid_scalar_name(self):
         with pytest.raises(ValueError):
             Scalar("0alpha")
+
+
+# ---------------------------------------------------------------------------
+# Tensor attributes
+# ---------------------------------------------------------------------------
+
+
+class TestTensorAttributes:
+    """What the caller states about a tensor's data: checked like the kernel's.
+
+    Only `temporal` exists so far, and it only permits: a tensor that claims
+    nothing is no different from one before there were attributes.
+    """
+
+    def test_no_attributes_is_no_claim(self):
+        attrs = Tensor("A", (2, 2)).attributes()
+        assert attrs.timeInvariant is False
+        assert attrs.as_dict() == {}
+        assert attrs == TensorAttributes()
+
+    def test_a_tensor_can_claim_to_stay_the_same_over_the_time_loop(self):
+        star = Tensor("star", (9, 9), attrs={"temporal": "invariant"})
+        assert star.attributes().timeInvariant is True
+        assert star.attributes().as_dict() == {"temporal": "invariant"}
+
+    def test_an_unknown_attribute_is_rejected_with_the_known_ones(self):
+        # A misspelt claim does nothing, and nothing tells it from a claim
+        # that was never made.
+        with pytest.raises(ValueError, match=r"'temporl'.*known are 'temporal'"):
+            Tensor("A", (2, 2), attrs={"temporl": "invariant"})
+
+    def test_a_value_the_attribute_does_not_take_is_rejected(self):
+        with pytest.raises(ValueError, match=r"'temporal' takes 'invariant', not 'constant'"):
+            Tensor("A", (2, 2), attrs={"temporal": "constant"})
+
+    def test_attributes_can_be_set_after_construction(self):
+        # A parser makes most of SeisSol's matrices, and it takes none.
+        star = Tensor("star(0)", (9, 9))
+        star.setAttributes({"temporal": "invariant"})
+        assert star.attributes().timeInvariant is True
+        star.setAttributes(None)
+        assert star.attributes().as_dict() == {}
+
+    def test_setting_them_is_checked_as_well(self):
+        with pytest.raises(ValueError, match="'temporl'"):
+            Tensor("A", (2, 2)).setAttributes({"temporl": "invariant"})
+
+    def test_a_temporary_cannot_stay_the_same_over_the_time_loop(self):
+        # It lives for one call.
+        with pytest.raises(ValueError, match="temporary"):
+            Tensor("T", (2, 2), temporary=True, attrs={"temporal": "invariant"})
+
+    def test_a_scalar_takes_attributes_too(self):
+        scale = Scalar("scale", attrs={"temporal": "invariant"})
+        assert scale.attributes().timeInvariant is True
+
+    def test_they_are_not_part_of_the_identity(self):
+        # Set after construction, so hashing them would lose a tensor already
+        # sitting in a set; and they say something about the data, not which
+        # tensor this is.
+        plain = Tensor("A", (2, 2))
+        claimed = Tensor("A", (2, 2), attrs={"temporal": "invariant"})
+        before = hash(plain)
+        plain.setAttributes({"temporal": "invariant"})
+        assert hash(plain) == before
+        assert Tensor("A", (2, 2)) == claimed
+
+    def test_as_dict_does_not_alias_the_input(self):
+        source = {"temporal": "invariant"}
+        attrs = TensorAttributes(source)
+        attrs.as_dict()["temporal"] = "variant"
+        source["temporal"] = "variant"
+        assert attrs.timeInvariant is True
+
+    def test_equality_is_by_content(self):
+        assert TensorAttributes({"temporal": "invariant"}) == TensorAttributes({"temporal": "invariant"})
+        assert TensorAttributes({"temporal": "invariant"}) != TensorAttributes()
+
+    def test_every_known_attribute_permits(self):
+        # The export lists every attribute as safe to ignore, which only holds
+        # while each one permits. One that changes what the stored numbers mean
+        # needs a field of its own and an interface version, not an entry here
+        # (TensorAttributes, ExportGenerator); this is the place that notices.
+        assert set(TensorAttributes.KNOWN) == {"temporal"}
 
 
 # ---------------------------------------------------------------------------

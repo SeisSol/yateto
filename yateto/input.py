@@ -1,7 +1,7 @@
 import re
 import itertools
 import json
-from . import Collection, Tensor
+from . import Collection, Tensor, TensorAttributes
 from .memory import AlignedCSCMemoryLayout, CSCMemoryLayout, DenseMemoryLayout, PatternMemoryLayout, AlignedPatternMemoryLayout
 from . import aspp
 from .util import create_collection
@@ -22,7 +22,35 @@ def __transposeMatrix(matrix):
     matrixT[tuple(entry[::-1])] = value
   return matrixT
 
-def __processMatrix(name, shape, entries, clones, transpose, alignStride, namespace, legacy):
+def __checkedAttributes(fileName, attrs):
+  """The attributes asked for per matrix, checked before anything is read.
+
+  Keyed by the name a matrix has in the file, as `clones` is, so one entry
+  covers every tensor made from that matrix -- the family a clone list makes
+  of it included. A mapping rather than a function of the name, as
+  `transpose` and `alignStride` are: a mapping can be checked against the
+  file, and a claim made for a matrix the file does not contain attaches to
+  nothing, which nothing would report.
+  """
+  checked = dict()
+  for name, given in (attrs or {}).items():
+    try:
+      checked[name] = TensorAttributes(given).as_dict()
+    except ValueError as error:
+      raise ValueError(f'{fileName}, matrix {name!r}: {error}') from error
+  return checked
+
+def __checkAllNamed(fileName, attrs, named):
+  """Refuses attributes for a matrix the file does not contain."""
+  missing = sorted(set(attrs) - set(named))
+  if missing:
+    raise ValueError(
+      '{} contains no matrix named {}, so the attributes given for it would '
+      'attach to nothing. Name a matrix as the file does -- a clone by the '
+      'matrix it is cloned from; the file has {}.'.format(
+        fileName, ', '.join(repr(name) for name in missing), ', '.join(sorted(named))))
+
+def __processMatrix(name, shape, entries, clones, transpose, alignStride, namespace, legacy, attrs=None):
   matrix = dict()
 
   dim = len(shape)
@@ -66,7 +94,8 @@ def __processMatrix(name, shape, entries, clones, transpose, alignStride, namesp
                             shape=tuple(shape),
                             spp=mtx,
                             alignStride=alignStride(name),
-                            namespace=namespace)
+                            namespace=namespace,
+                            attrs=attrs)
   return matrices
 
 def __complain(child):
@@ -80,15 +109,23 @@ def openMaybeCompressed(basefilename):
   else:
     raise FileNotFoundError(basefilename)
 
-def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
+def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None, attrs=None):
+  """The matrices of an XML file, as a collection of tensors.
+
+  `attrs` maps a matrix's name in the file to the attributes of every tensor
+  made from it, as `parseJSONMatrixFile` takes them.
+  """
+  attrs = __checkedAttributes(xmlFile, attrs)
   with openMaybeCompressed(xmlFile) as file:
     root = etree.fromstring(file.read())
 
   matrices = dict()
+  named = []
 
   for node in root:
     if node.tag == 'matrix':
       name = node.get('name')
+      named.append(name)
       rows = int( node.get('rows') )
       columns = int( node.get('columns') )
 
@@ -102,18 +139,30 @@ def parseXMLMatrixFile(xmlFile, clones=dict(), transpose=lambda name: False, ali
         else:
           __complain(child)
 
-      matrices.update( __processMatrix(name, (rows, columns), entries, clones, transpose, alignStride, namespace, True) )
+      matrices.update( __processMatrix(name, (rows, columns), entries, clones, transpose, alignStride, namespace, True, attrs.get(name)) )
     else:
       __complain(node)
 
+  __checkAllNamed(xmlFile, attrs, named)
   return create_collection(matrices)
 
-def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None):
+def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, alignStride=lambda name: False, namespace=None, attrs=None):
+  """The matrices of a JSON file, as a collection of tensors.
+
+  `attrs` maps a matrix's name in the file to the attributes of every tensor
+  made from it (see `TensorAttributes`): ``{'star': {'temporal':
+  'invariant'}}``, with ``star`` cloned into ``star(0)`` to ``star(2)``,
+  gives all three. The parse is where these tensors are declared, so that is
+  where they are given, and a name the file does not contain is refused.
+  """
+  attrs = __checkedAttributes(jsonFile, attrs)
   matrices = dict()
+  named = []
 
   with openMaybeCompressed(jsonFile) as j:
     content = json.load(j)
     for m in content:
+      named.append(m['name'])
       entries = m['entries']
       if 'rows' in m:
         shape = [m['rows']]
@@ -124,8 +173,9 @@ def parseJSONMatrixFile(jsonFile, clones=dict(), transpose=lambda name: False, a
       dim = len(shape)
       if len(next(iter(entries))) == dim:
         entries = [(*entry, True) for entry in entries]
-      matrices.update( __processMatrix(m['name'], shape, entries, clones, transpose, alignStride, namespace, False) )
+      matrices.update( __processMatrix(m['name'], shape, entries, clones, transpose, alignStride, namespace, False, attrs.get(m['name'])) )
 
+  __checkAllNamed(jsonFile, attrs, named)
   return create_collection(matrices)
 
 def memoryLayoutFromFile(xmlFile, db, clones, strict=False):

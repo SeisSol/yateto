@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from .. import aspp
-from ..type import AddressingMode, Datatype
+from ..type import AddressingMode, Datatype, ElementAddressing
 from ..ast.indices import BoundingBox, Range
 from ..ast.log import splitByDistance
 from ..memory import MemoryLayoutView
@@ -10,7 +10,7 @@ from .tiny_tensor_language import Dump, Function, ScalarType, IntegerType, Float
 import hashlib
 
 class TensorDescription(object):
-  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, immediate=None):
+  def __init__(self, name, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, immediate=None, attrs=None):
     """
 
     Args:
@@ -26,6 +26,9 @@ class TensorDescription(object):
       addressing (AddressingMode): the addressing mode for the tensor
       immediate (Union[list, None]): for an operand whose numbers are written
           into the code, the numbers by the address the layout gives them
+      attrs (Union[TensorAttributes, None]): what the caller states about the
+          tensor's data; None for an intermediate result, which has no tensor
+          to state anything
     """
     self.name = name
     self.memoryLayout = memoryLayout
@@ -36,14 +39,27 @@ class TensorDescription(object):
     self.datatype = datatype
     self.addressing = addressing
     self.immediate = immediate
+    self.attrs = attrs
 
   @classmethod
   def fromNode(cls, name, node):
     return cls(name, node.memoryLayout(), node.eqspp())
 
+  @staticmethod
+  def attributesOf(var):
+    """The attributes of the tensor a variable names, or None.
+
+    Asked of the variable rather than of the node it stands for. The two
+    differ for a result: the node is an operation, with no tensor to ask,
+    while the variable written is the tensor named -- and every occurrence of
+    one name has to be described alike, the one that writes it included.
+    """
+    tensor = getattr(var, 'tensor', None)
+    return None if tensor is None else tensor.attributes()
+
 class IndexedTensorDescription(TensorDescription):
-  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None):
-    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing)
+  def __init__(self, name, indices, memoryLayout, eqspp, is_compute_constant=False, is_temporary=False, values=None, datatype=None, addressing=None, attrs=None):
+    super().__init__(name, memoryLayout, eqspp, is_compute_constant, is_temporary, values, datatype, addressing, attrs=attrs)
     self.indices = indices
 
   @classmethod
@@ -60,7 +76,15 @@ class IndexedTensorDescription(TensorDescription):
       if is_const:
         values = baseNode.tensor.values()
       addressing = baseNode.tensor.addressing
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+    elif getattr(var, 'tensor', None) is not None:
+      # The node is the operation computing `var`, not a read of a tensor:
+      # the result is addressed as the tensor it is written into, which is
+      # what `fromVar` says for that tensor's every other occurrence. Left
+      # to be deduced here, a result stating its mode was described twice,
+      # differently, and the export refused it.
+      addressing = var.tensor.addressing
+    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing,
+               attrs=cls.attributesOf(var))
 
   @classmethod
   def fromVar(cls, var, indices):
@@ -75,7 +99,8 @@ class IndexedTensorDescription(TensorDescription):
         if is_const:
           values = var.tensor.values()
         addressing = var.tensor.addressing
-    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing)
+    return cls(str(var), indices, var.memoryLayout(), var.eqspp(), is_const, var.is_temporary, values, datatype, addressing,
+               attrs=cls.attributesOf(var))
 
 def hasStorage(term):
   """Whether an operand is read through its memory layout.
@@ -338,12 +363,50 @@ class KernelAttributes:
     return f'KernelAttributes({self._attrs!r})'
 
 
+def _unreadableWhy(mode):
+  """Why a generator that knows the modes at their defaults cannot take
+  `mode`, as the end of a sentence; empty for a mode it simply does not know."""
+  if mode is not None and mode.isIndexed():
+    return ': it reaches an element through the launch\'s index list, which it has none of'
+  if isinstance(mode, ElementAddressing):
+    return (': its parameters would be read as the defaults -- the element size as '
+            'the stride, no offset -- which addresses another element\'s data')
+  return ''
+
+
+def refuseUnreadableAddressing(name, addressing, reader):
+  """Raise where `reader` -- gemmforge, chainforge, tinytc -- would read
+  `addressing` as something else.
+
+  They know the modes at their default parameters: an element's data at the
+  element size from the last one's, or through a pointer of its own. An
+  indexed mode or a mode with parameters of its own is refused here rather
+  than generated as its default, which would compile and read the wrong data.
+  """
+  if isinstance(addressing, ElementAddressing) or (
+      addressing is not None and addressing.isIndexed()):
+    raise NotImplementedError(
+      f'{reader} cannot read {name or "an operand"}, addressed as {addressing}'
+      f'{_unreadableWhy(addressing)}. Generate the kernel through an exporter '
+      f'that reads the binding (TensorForge), or address the operand plainly.')
+
+
 class BatchedOperationsAux:
   NUM_ELEMENTS_NAME = 'numElements'
   EXTRA_OFFSET_NAME = 'extraOffset'
   STREAM_PTR_NAME = 'streamPtr'
   FLAGS_NAME = 'flags'
   FORBIDDEN_STREAM_PTR = 'reinterpret_cast<void*>(std::numeric_limits<uintptr_t>::max())'
+  #: The launch's index list: element `n` of the launch is cell
+  #: `elementIndices[n]` of every operand addressed `INDEXED` or
+  #: `INDEXED_POINTER`. One per launch, as long as `numElements`.
+  ELEMENT_INDICES_NAME = 'elementIndices'
+
+  @classmethod
+  def parameterName(cls, parameter, baseName):
+    """The member a family's run-time `parameter` -- `'stride'` or `'slot'`
+    -- is set through: `stride_<name>`, as the offset is `extraOffset_<name>`."""
+    return f'{parameter}_{baseName.rsplit("::", 1)[-1]}'
 
   @classmethod
   def _get_ptr_type(cls, addressing: AddressingMode):
@@ -362,6 +425,8 @@ class BatchedOperationsAux:
 
   @classmethod
   def deduce_addresing(cls, term):
+    # A mode stated with parameters (`ElementAddressing`) is returned as it
+    # is: what reads it has to read the parameters too, or refuse it.
     if term.addressing is not None:
       return term.addressing
 
@@ -385,8 +450,23 @@ class BatchedOperationsAux:
     """The addressing of `term`, as gemmforge and chainforge name it."""
     mode = cls.deduce_addresing(term)
     if mode not in cls.FORGE_ADDRESSING:
-      raise ValueError(f'gemmforge and chainforge cannot read an operand addressed as {mode}.')
+      name = getattr(term, 'name', None)
+      raise ValueError(f'gemmforge and chainforge cannot read an operand addressed as {mode}'
+                       f'{f" ({name})" if name else ""}{_unreadableWhy(mode)}.')
     return cls.FORGE_ADDRESSING[mode]
+
+  @classmethod
+  def classicAddressing(cls, term, reader):
+    """The mode of `term`, where `reader` -- a generator before the exporters,
+    which knows the modes at their default parameters only -- can read it.
+
+    A free stride, a compile-time offset or an index list would be read as
+    that default: another element's data, at an address that compiles. So
+    they are refused, by the operand's name, rather than generated.
+    """
+    mode = cls.deduce_addresing(term)
+    refuseUnreadableAddressing(getattr(term, 'name', None), mode, reader)
+    return mode
 
   @classmethod
   def forge_region(cls, memoryLayout, ranges, transpose=False):

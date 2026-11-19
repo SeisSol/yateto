@@ -16,7 +16,7 @@ from .code import Block, Cpp
 from .factory import *
 from .flops import FlopCount
 from .common import BatchedOperationsAux, KernelAttributes
-from ..type import Scalar, Tensor, Datatype
+from ..type import AddressingMode, Scalar, Tensor, Datatype, elementAddressing
 
 import numpy as np
 
@@ -212,7 +212,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                  attrs,
                  inMemory=None,
                  reads=None,
-                 offered=None):
+                 offered=None,
+                 addressing=None):
 
       self.nonZeroFlops = nonZeroFlops
       self.hwFlops = hwFlops
@@ -244,6 +245,11 @@ class OptimizedKernelGenerator(KernelGenerator):
       #: Per family, the members this kernel reads in an arrangement its
       #: generator asked for, which only the pool holds.
       self.offered = offered if offered is not None else {}
+      #: Per family, how each member this kernel reads states it is
+      #: addressed (`Tensor.addressing`, None where it leaves it to be
+      #: deduced). What the struct's members are -- a pointer or a table of
+      #: them, an index list, a stride or a slot to set -- follows from it.
+      self.addressing = addressing if addressing is not None else {}
 
     @classmethod
     def _addTensor(cls, tensor, tensors):
@@ -268,6 +274,7 @@ class OptimizedKernelGenerator(KernelGenerator):
     scalars = collections.OrderedDict()
     datatype = dict()
     members = dict()
+    addressing = dict()
 
     inConstTensors = {}
     inTensors = {}
@@ -324,6 +331,8 @@ class OptimizedKernelGenerator(KernelGenerator):
       # put together into one once every operand has been seen.
       members.setdefault(bn, collections.OrderedDict())[var.tensor.group()] = \
         var.tensor.memoryLayout()
+      addressing.setdefault(bn, collections.OrderedDict())[var.tensor.group()] = \
+        var.tensor.addressing
 
       nm = var.tensor.nameWithNamespace()
 
@@ -415,7 +424,8 @@ class OptimizedKernelGenerator(KernelGenerator):
                               attrs,
                               inMemory,
                               {baseName: frozenset(byGroup) for baseName, byGroup in members.items()},
-                              {baseName: frozenset(groups) for baseName, groups in offeredMembers.items()})
+                              {baseName: frozenset(groups) for baseName, groups in offeredMembers.items()},
+                              addressing)
 
   def arrangements(self):
     """Per tensor, the arrangements the kernels actually read it in."""
@@ -675,6 +685,70 @@ class OptimizedKernelGenerator(KernelGenerator):
         raise RuntimeError("kernels within the same family were given different "
                            "attributes.")
 
+    # How each family is addressed, over every variant and every member the
+    # generator knows of: one member of the struct holds the whole family, so
+    # a member no variant reads is in it all the same.
+    addressing = collections.OrderedDict()
+    for ko in kernelOutlines:
+      if ko:
+        for baseName, byGroup in ko.addressing.items():
+          addressing.setdefault(baseName, collections.OrderedDict()).update(byGroup)
+    for baseName in tensors:
+      for group, tensor in self._families.get(baseName, {}).items():
+        addressing.setdefault(baseName, collections.OrderedDict()).setdefault(
+          group, tensor.addressing)
+
+    def familyMode(baseName):
+      """The mode every member of a family the caller fills is addressed in.
+
+      One, because the members share one member of the struct and so one
+      type: a pointer to the element, or to a table of pointers. A member that
+      states none is deduced the way everything else deduces it, through a
+      pointer of its own.
+      """
+      modes = []
+      for addr in addressing.get(baseName, {}).values():
+        mode = AddressingMode.INDIRECT if addr is None else addr.mode
+        if mode not in modes:
+          modes.append(mode)
+      if len(modes) > 1:
+        raise ValueError('The members of {} are addressed in different modes ({}); they share '
+                         'one member of {}, which can only have one type.'.format(
+                           Tensor.splitBasename(baseName)[1], ', '.join(map(str, modes)), name))
+      return modes[0] if modes else AddressingMode.INDIRECT
+
+    def elementParameters(baseName, groups=None):
+      """`(group, ElementAddressing)` for the members of a family that state a
+      mode reaching an element, of all of them or of `groups`."""
+      return [(group, elementAddressing(addr))
+              for group, addr in addressing.get(baseName, {}).items()
+              if (groups is None or group in groups) and elementAddressing(addr) is not None]
+
+    def runtimeIn(baseName, parameter, groups=None):
+      """The members of a family whose `parameter` the caller sets at run time."""
+      return [(group, element) for group, element in elementParameters(baseName, groups)
+              if element.isRuntime(parameter)]
+
+    def indexedIn(baseName, groups=None):
+      return any(element.isIndexed() for _, element in elementParameters(baseName, groups))
+
+    #: The members the batch is reached through beyond the pointers: the index
+    #: list, where an operand reaches its element through it, and a stride or a
+    #: slot per family that leaves it to run time. A device kernel's only; a
+    #: kernel on the host is handed one element's data, whatever the mode.
+    indexListed = target == 'gpu' and any(indexedIn(baseName) for baseName in tensors)
+    runtimeStrides = [baseName for baseName in tensors
+                      if target == 'gpu' and runtimeIn(baseName, 'stride')]
+    runtimeSlots = [baseName for baseName in tensors
+                    if target == 'gpu' and runtimeIn(baseName, 'slot')]
+    generated = ([BatchedOperationsAux.ELEMENT_INDICES_NAME] if indexListed else []) \
+      + [BatchedOperationsAux.parameterName('stride', baseName) for baseName in runtimeStrides] \
+      + [BatchedOperationsAux.parameterName('slot', baseName) for baseName in runtimeSlots]
+    for member in generated:
+      if member in taken:
+        raise ValueError('{} needs a member {} to reach its operands by, and a tensor of '
+                         'that name is already one.'.format(name, member))
+
     if familyStride is not None:
       executeName = lambda index: self.EXECUTE_NAME + str(index)
       formatArray = lambda lst: '{{{}}}'.format(', '.join([str(l) for l in lst]))
@@ -741,7 +815,12 @@ class OptimizedKernelGenerator(KernelGenerator):
           prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
           member = member if member is not None else base_name
           typ = datatype.ctype()
-          ptr_type = '**' if not is_constant and target == 'gpu' else '*'
+          # What a device kernel is handed for an operand the caller fills:
+          # the element's data or a table of pointers to it, as its mode says
+          # -- through its own pointer, unless it states otherwise. A constant
+          # is the pool's one copy, and the host is handed one element.
+          ptr_type = (familyMode(base_name_with_namespace).pointer_type()
+                      if not is_constant and target == 'gpu' else '*')
           if not writable:
             typ += ' const'
           if len(next(iter(groups))) > 0:
@@ -845,6 +924,12 @@ class OptimizedKernelGenerator(KernelGenerator):
           # kernel that computes all of them.
           if attrs.flags:
             header(f'unsigned *{BatchedOperationsAux.FLAGS_NAME} = nullptr;')
+          # One index list a launch, shared by every operand that reaches its
+          # element through one, and as long as `numElements`. Only where some
+          # operand does: without the member, a caller binding a list to a
+          # kernel that reads none fails to compile.
+          if indexListed:
+            header(f'unsigned const* {BatchedOperationsAux.ELEMENT_INDICES_NAME} = nullptr;')
 
           def generate_extra_offset_args(base_name_with_namespace, groups):
             prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
@@ -859,6 +944,25 @@ class OptimizedKernelGenerator(KernelGenerator):
 
           for base_name, groups in tensors.items():
             generate_extra_offset_args(base_name, groups)
+
+          # What reaches an element beyond its pointer: the stride and the
+          # slot of a family that leaves them to run time, styled as the
+          # offset is. A stride of 0 is unset, which `execute` asserts
+          # against; like the offsets, they stay bound across launches.
+          def generate_parameter_args(base_name_with_namespace, groups, parameter, typ):
+            prefix, base_name = Tensor.splitBasename(base_name_with_namespace)
+            member_name = BatchedOperationsAux.parameterName(parameter, base_name_with_namespace)
+            if len(next(iter(groups))) > 0:
+              class_name = f'{prefix}{InitializerGenerator.TENSOR_NAMESPACE}::{base_name}'
+              container_type = f'{InitializerGenerator.CONTAINER_CLASS_NAME}<{typ}>'
+              header(f'{class_name}::{container_type} {member_name};')
+            else:
+              header(f'{typ} {member_name}{{}};')
+
+          for base_name in runtimeStrides:
+            generate_parameter_args(base_name, tensors[base_name], 'stride', 'std::size_t')
+          for base_name in runtimeSlots:
+            generate_parameter_args(base_name, tensors[base_name], 'slot', 'unsigned')
         header.emptyline()
 
         if len(prefetch) > 0:
@@ -964,6 +1068,18 @@ class OptimizedKernelGenerator(KernelGenerator):
         if target == 'gpu':
           cpp(f'assert({BatchedOperationsAux.NUM_ELEMENTS_NAME} != 0);')
           cpp(f'assert({BatchedOperationsAux.STREAM_PTR_NAME} != {BatchedOperationsAux.FORBIDDEN_STREAM_PTR});')
+          # What this variant reaches its operands through, beyond the
+          # pointers: set, and the slots in range.
+          read = kernelOutline.tensors
+          if any(indexedIn(baseName, groups) for baseName, groups in read.items()):
+            cpp(f'assert({BatchedOperationsAux.ELEMENT_INDICES_NAME} != nullptr);')
+          for baseName, groups in read.items():
+            for parameter, check in (('stride', lambda element: '!= 0'),
+                                     ('slot', lambda element: f'< {element.slots}')):
+              member = BatchedOperationsAux.parameterName(parameter, baseName)
+              for group, element in runtimeIn(baseName, parameter, groups):
+                index = '({})'.format(','.join(str(g) for g in group)) if len(group) > 0 else ''
+                cpp(f'assert({member}{index} {check(element)});')
 
         cpp(kernelOutline.function)
 
@@ -979,6 +1095,8 @@ class UnitTestGenerator(KernelGenerator):
   TMP_SIZE = '_tmpMemSize'
   FLAGS_MEM = '_flags'
   DEV_FLAGS_MEM = '_dev_flags'
+  INDICES_MEM = '_elementIndices'
+  DEV_INDICES_MEM = '_dev_elementIndices'
   DEV_POOL_MEM = '_dev_pool'
 
   def __init__(self, arch):
@@ -1012,10 +1130,46 @@ class UnitTestGenerator(KernelGenerator):
   def _devTensorKernelArgument(self, var, writable):
     if var.tensor.is_compute_constant():
       return self._devTensorName(var)
-    elif writable[var.tensor.baseNameWithNamespace()]:
-      return self._devPtrTensorName(var)
-    else:
-      return f'const_cast<{var.datatype.ctype()} const**>({self._devPtrTensorName(var)})'
+    # A member for the element's data rather than for a table of pointers to
+    # it, where the operand is addressed that way (`OptimizedKernelGenerator`).
+    stars = '*' if self._reachedDirectly(var) else '**'
+    name = self._devTensorName(var) if stars == '*' else self._devPtrTensorName(var)
+    if writable[var.tensor.baseNameWithNamespace()]:
+      return name
+    return f'const_cast<{var.datatype.ctype()} const{stars}>({name})'
+
+  @staticmethod
+  def _element(var):
+    """The parameters `var`'s tensor states, or None where it states none."""
+    return elementAddressing(var.tensor.addressing)
+
+  @classmethod
+  def _reachedDirectly(cls, var):
+    """Whether the kernel takes the element's data, not a table of pointers:
+    a mode that says so, where the default is a pointer of its own."""
+    addressing = var.tensor.addressing
+    mode = AddressingMode.INDIRECT if addressing is None else addressing.mode
+    return mode.pointer_type() == '*'
+
+  @classmethod
+  def _offsetOf(cls, var):
+    """Elements in front of the data, as the tensor's own offset says: the
+    kernel reads at the address it is handed plus this."""
+    element = cls._element(var)
+    return element.offset if element is not None else 0
+
+  @classmethod
+  def _slotsOf(cls, var):
+    """Pointers per cell in the table the kernel reads the element's pointer
+    out of: every one of them the element's, so that any slot reads it."""
+    element = cls._element(var)
+    return element.slots if element is not None else 1
+
+  @classmethod
+  def _devData(cls, var):
+    """Where on the device the element's data starts."""
+    offset = cls._offsetOf(var)
+    return cls._devTensorName(var) + (f' + {offset}' if offset else '')
 
   @classmethod
   def _nameS(cls, var):
@@ -1153,6 +1307,9 @@ class UnitTestGenerator(KernelGenerator):
     # buffer of its own like any other operand, filled from that same value.
     byValue = [var for var in variables if var.tensor.isPassedByValue()]
     variables = [var for var in variables if not var.tensor.isPassedByValue()]
+    # Whether the kernel has an index list to be handed (`elementIndices`).
+    indexed = device_test and any(self._element(var) is not None and self._element(var).isIndexed()
+                                  for var in variables)
     scalars = {scalar.name(): scalar for scalar in scalars}
     for var in byValue:
       scalars.setdefault(var.tensor.name(), var.tensor)
@@ -1227,11 +1384,32 @@ class UnitTestGenerator(KernelGenerator):
            cpp(f'unsigned {self.FLAGS_MEM}[1] = {{1}};')
            data_malloc(self.DEV_FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', 'unsigned*', self.STREAM)
          for var in variables:
-           data_malloc(self._devTensorName(var), f'sizeof({self._tensorName(var)})', f'{var.datatype.ctype()}*', self.STREAM)
-           data_malloc(self._devPtrTensorName(var), f'sizeof({var.datatype.ctype()}*)', f'{var.datatype.ctype()}**', self.STREAM)
+           ctype = var.datatype.ctype()
+           # Room in front of the data for the offset the tensor states, and a
+           # pointer per slot of the table where it reads one of several.
+           offset, slots = self._offsetOf(var), self._slotsOf(var)
+           data_malloc(self._devTensorName(var),
+                       f'sizeof({self._tensorName(var)})' + (f' + {offset} * sizeof({ctype})' if offset else ''),
+                       f'{ctype}*', self.STREAM)
+           data_malloc(self._devPtrTensorName(var),
+                       f'sizeof({ctype}*)' if slots == 1 else f'{slots} * sizeof({ctype}*)',
+                       f'{ctype}**', self.STREAM)
+         if indexed:
+           # One element, the first cell of every indexed operand.
+           cpp(f'unsigned {self.INDICES_MEM}[1] = {{0}};')
+           data_malloc(self.DEV_INDICES_MEM, f'sizeof({self.INDICES_MEM})', 'unsigned*', self.STREAM)
          for var in variables:
-           data_memcpy(self._devTensorName(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
-           data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({var.datatype.ctype()}*)', self.STREAM)
+           ctype = var.datatype.ctype()
+           data_memcpy(self._devData(var), self._tensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+           slots = self._slotsOf(var)
+           if slots == 1:
+             data_memcpy(self._devPtrTensorName(var), f'&{self._devTensorName(var)}', f'sizeof({ctype}*)', self.STREAM)
+           else:
+             table = f'_ptrs_{self._tensorName(var)}'
+             cpp('{}* {}[{}] = {{{}}};'.format(ctype, table, slots, ', '.join([self._devTensorName(var)] * slots)))
+             data_memcpy(self._devPtrTensorName(var), table, f'sizeof({table})', self.STREAM)
+         if indexed:
+           data_memcpy(self.DEV_INDICES_MEM, self.INDICES_MEM, f'sizeof({self.INDICES_MEM})', self.STREAM)
          if use_flags:
            data_memcpy(self.DEV_FLAGS_MEM, self.FLAGS_MEM, f'sizeof({self.FLAGS_MEM})', self.STREAM)
          if bindPool:
@@ -1277,6 +1455,20 @@ class UnitTestGenerator(KernelGenerator):
          cpp( f'{self.KERNEL_VAR}.numElements = 1;' )
          cpp( f'{self.KERNEL_VAR}.linearAllocator.initialize({self.TMP_MEM}, {self.TMP_SIZE});' )
          cpp( f'{self.KERNEL_VAR}.streamPtr = reinterpret_cast<void*>({self.STREAM});' )
+         if indexed:
+           cpp( f'{self.KERNEL_VAR}.{BatchedOperationsAux.ELEMENT_INDICES_NAME} = {self.DEV_INDICES_MEM};' )
+         # A stride the caller sets: one element is all there is, so any that
+         # is not zero reads it; the size of one is as good as any. A slot the
+         # caller sets: the first, which like every other holds the element.
+         for var in variables:
+           element = self._element(var)
+           if element is None:
+             continue
+           for parameter, value in (('stride', var.memoryLayout().requiredReals()), ('slot', 0)):
+             if element.isRuntime(parameter):
+               cpp('{}.{}{} = {};'.format(self.KERNEL_VAR,
+                                          BatchedOperationsAux.parameterName(parameter, var.tensor.baseNameWithNamespace()),
+                                          self._groupIndex(var.tensor), value))
          if use_flags:
            cpp( f'{self.KERNEL_VAR}.{BatchedOperationsAux.FLAGS_NAME} = {self.DEV_FLAGS_MEM};' )
 
@@ -1287,13 +1479,15 @@ class UnitTestGenerator(KernelGenerator):
          stream_wait(self.STREAM)
          for var in variables:
            if var.writable:
-             data_memcpy(self._tensorName(var), self._devTensorName(var), f'sizeof({self._tensorName(var)})', self.STREAM)
+             data_memcpy(self._tensorName(var), self._devData(var), f'sizeof({self._tensorName(var)})', self.STREAM)
          stream_wait(self.STREAM)
          data_free(self.TMP_MEM, self.STREAM)
          if use_flags:
            data_free(self.DEV_FLAGS_MEM, self.STREAM)
          if bindPool:
            data_free(self.DEV_POOL_MEM, self.STREAM)
+         if indexed:
+           data_free(self.DEV_INDICES_MEM, self.STREAM)
          for var in variables:
            data_free(self._devPtrTensorName(var), self.STREAM)
            data_free(self._devTensorName(var), self.STREAM)

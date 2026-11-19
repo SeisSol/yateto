@@ -9,7 +9,7 @@ from .. import aspp
 from .common import forLoops, zeroFill, INDEX_PREFIX, TensorDescription, IndexedTensorDescription, BatchedOperationsAux, KernelAttributes, reduceSpp
 from . import copyscaleadd, log, fused_gemms, elementwise, reduction, gemm
 from .gemm.generic import Generic as GenericGemm
-from ..type import Datatype, AddressingMode, Scalar, Tensor
+from ..type import Datatype, AddressingMode, RUNTIME, Scalar, Tensor, elementAddressing
 from ..controlflow.graph import Guard
 from ..ops import Add, Mul
 
@@ -176,16 +176,35 @@ class KernelFactory(object):
     the reads itself may know better than the tensor does -- an order that
     lets the loads be vectorised, say -- and says so here, by tensor name.
 
-    An offering is data: ``{'order': [axis, ...]}`` names the axes fastest
-    first, and nothing else is defined yet. Data rather than a layout,
-    because the one offering need not be in this process, and because what
-    it asks for has to be checked against what the tensor is before it is
-    granted.
+    An offering is data, with one key per kind of request:
+
+    - ``order``: the axes, fastest first;
+    - ``data``: the numbers themselves, arranged as the reads want them, with
+      ``parts`` -- the scalars one element is stored as -- and ``planar`` --
+      whether those parts lie apart rather than side by side -- saying how.
+
+    Data rather than a layout, because the one offering need not be in this
+    process, and because what it asks for has to be checked against what the
+    tensor is before it is granted. It is granted whole or refused by name
+    (`OptimizedKernelGenerator._grantOffering`): an arrangement granted in
+    part is one nobody asked for.
 
     Asked once the kernel is generated, because that is when the answer
     exists. What comes back holds for this kernel alone: another kernel
     reading the same matrix may read it another way, and the pool then holds
     it both ways.
+
+    A further kind gets a key of its own, never a new meaning of one of
+    these, so that a side that does not know it refuses it. The ones in view
+    -- elements held in blocks of several, values scaled by powers of two, a
+    narrower storage type -- are about buffers the caller fills rather than
+    constants yateto fills, which changes who has to agree. Such a kind may
+    only be offered for a tensor whose caller has said it takes it, as an
+    attribute of the tensor (one that permits, see `TensorAttributes`), and a
+    factory must not generate reads of it otherwise: a caller that never says
+    so keeps the format the tensor gives itself. And the caller fills one
+    buffer for every kernel that names it, so unlike the pool it cannot hold
+    two arrangements: the offerings of all those kernels have to agree.
     """
     return {}
 
@@ -376,7 +395,8 @@ class OptimizedKernelFactory(KernelFactory):
 
     def describe(term, layout, spp):
       return TensorDescription(term.name, layout, spp, term.is_compute_constant,
-                               term.is_temporary, datatype=term.datatype)
+                               term.is_temporary, datatype=term.datatype,
+                               addressing=term.addressing)
 
     def one(term):
       return describe(term, DenseMemoryLayout((1, 1)), aspp.dense((1, 1)))
@@ -771,8 +791,48 @@ class UnitTestFactory(KernelFactory):
     return value
 
 class ExportGenerator:
+  """A code generator outside yateto, which gets each kernel as data.
+
+  `INTERFACE_VERSION` counts what an exporter has to understand. Some things
+  travel outside it, because an exporter that ignores them gets nothing
+  wrong:
+
+  - what an exporter answers -- `layout_offerings`, `flop_report` -- which it
+    may leave unanswered, and yateto then does without (see
+    `ExportFactory.layoutOfferings`);
+  - a tensor's `attrs`: what the caller states about its data
+    (`TensorAttributes`), present only where it states something. Every
+    attribute in there permits an optimization and asks for none -- `temporal:
+    'invariant'` permits computing what depends on such data alone once,
+    ahead of the time loop -- so an exporter that does not read one builds the
+    kernel it built before, which is correct. Being among `attrs` is what
+    lists a key as safe to ignore: a reader skips the ones it does not know.
+
+  An attribute that changes what the stored numbers *mean* -- a scale, a
+  storage precision, an inner layout -- cannot travel that way, since an
+  exporter ignoring it computes with the wrong numbers. It gets a field of its
+  own and raises `INTERFACE_VERSION`, as every such field has: an exporter
+  that does not speak the new version is refused before it sees a kernel, and
+  one that speaks it but cannot honor the field for some tensor refuses that
+  tensor by name rather than builds around it.
+  """
+
   #: What this yateto sends, raised whenever a field is added that an
   #: exporter ignoring it would get *wrong* rather than merely miss.
+  #:
+  #: 8: a tensor states its `binding`: where an element's data is, in numbers
+  #:    the formula leaves at its default. `null` for a tensor whose formula
+  #:    names no element (`'&'`, `''`, `null`); otherwise `stride` (null: the
+  #:    stored size of one element, a number, or `'runtime'`), `offset` (a
+  #:    number, added to the run-time `extraOffset`), `slots` and `slot` (a
+  #:    number, or `'runtime'` for the slot). `'runtime'` is a kernel
+  #:    argument, which the kernel struct has a member for (`stride_<name>`,
+  #:    `slot_<name>`). Two formulas are new, `'i*N+o&'` (indexed) and
+  #:    `'i*K+k&+o&'` (indexed pointer), over one index list per launch,
+  #:    `elementIndices`, as long as the launch has elements. An exporter
+  #:    ignoring the field reads a strided operand with a stride of its own
+  #:    at the element size -- another element's data -- and has no reading
+  #:    at all for an indexed one.
   #:
   #: 7: a tensor states its `residence`: `memory`, `argument` or `code`.
   #:    `code` means its data is nowhere at run time -- the exporter writes
@@ -811,7 +871,7 @@ class ExportGenerator:
   #:    runs every operation over the whole storage; for an assignment that
   #:    writes over entries the operation was never meant to touch. Sparse
   #:    layouts are also described now, by their entries, rather than refused.
-  INTERFACE_VERSION = 7
+  INTERFACE_VERSION = 8
 
   def __init__(self, arch, attrs=None):
     self.arch = arch
@@ -918,6 +978,12 @@ class ExportFactory(KernelFactory):
     tensor gives itself, which is what every exporter got before there was
     anywhere to say otherwise. A missing answer is therefore not a dropped
     field but no request, and that degrades to the right thing.
+
+    The kinds of request are those `KernelFactory.layoutOfferings` lists. The
+    direction is the reverse of a tensor's `attrs`, and so is the rule: an
+    attribute only permits, so a reader may skip one it does not know, while
+    an offering asks for something, so a kind this yateto does not know is
+    refused by name rather than skipped.
     """
     offer = getattr(self.generator, 'layout_offerings', None)
     if offer is None:
@@ -963,32 +1029,59 @@ class ExportFactory(KernelFactory):
     return self._handleTensorDesc(IndexedTensorDescription.fromVar(var, indices))
 
   def _handleAddressing(self, desc):
-    if desc.addressing is None:
-      addressing = BatchedOperationsAux.deduce_addresing(desc)
-    else:
-      addressing = desc.addressing
+    # Asked of the mode, not compared against it: a mode with parameters is
+    # never equal to the bare one, and the parameters go out in `binding`.
+    mode = BatchedOperationsAux.deduce_addresing(desc).mode
 
     # & == deref
     # n == current element
-    # N == element size
-    # o == extraOffset
+    # N == element size: the stride (binding.stride; the stored size of one
+    #      element where that is null)
+    # o == extraOffset (plus binding.offset, known when generating)
+    # i == the current element's entry in the launch's index list
+    # K == pointers per entry (binding.slots)
+    # k == which of them (binding.slot)
     # *,+ == default add and mul
     # read left to right
-    if addressing == AddressingMode.DIRECT:
+    if mode == AddressingMode.DIRECT:
       return '&'
-    elif addressing == AddressingMode.STRIDED:
+    elif mode == AddressingMode.STRIDED:
       return 'n*N+o&'
-    elif addressing == AddressingMode.INDIRECT:
+    elif mode == AddressingMode.INDIRECT:
       return 'n&+o&'
-    elif addressing == AddressingMode.SCALAR:
+    elif mode == AddressingMode.INDEXED:
+      return 'i*N+o&'
+    elif mode == AddressingMode.INDEXED_POINTER:
+      return 'i*K+k&+o&'
+    elif mode == AddressingMode.SCALAR:
       return ''
-    elif not addressing.isPassedAsArgument():
+    elif not mode.isPassedAsArgument():
       # There is no parameter to start from, so there is no formula. `null`
       # rather than the empty string: the empty string is a formula, the one
       # that says the parameter is the value.
       return None
 
-    raise NotImplementedError(addressing)
+    raise NotImplementedError(mode)
+
+  @staticmethod
+  def _binding(desc):
+    """Where an element's data is, in the numbers the formula leaves at its
+    default; `None` for a tensor whose formula names no element.
+
+    Every key, with its default where it does not apply, so that the far side
+    reads one shape for every mode rather than a different one per formula.
+    `'runtime'` is a kernel argument: the struct has a member for it.
+    """
+    element = elementAddressing(BatchedOperationsAux.deduce_addresing(desc))
+    if element is None:
+      return None
+    spelled = lambda value: str(RUNTIME) if value is RUNTIME else value
+    return {
+      'stride': spelled(element.stride),
+      'offset': element.offset,
+      'slots': element.slots,
+      'slot': spelled(element.slot),
+    }
 
   @staticmethod
   def _residence(desc):
@@ -1060,6 +1153,7 @@ class ExportFactory(KernelFactory):
     tensor = {
       'name': tensorIndexed.name,
       'addressing': self._handleAddressing(tensorIndexed),
+      'binding': self._binding(tensorIndexed),
       'residence': self._residence(tensorIndexed),
       #'eqspp': spp,
       'datatype': str(tensorIndexed.datatype),
@@ -1077,9 +1171,22 @@ class ExportFactory(KernelFactory):
         'constant': tensorIndexed.is_compute_constant
       }
     }
+    tensor.update(self._attributes(tensorIndexed.attrs))
 
     return self._handleTensor(tensor, tensorIndexed.indices,
                               self._logicalBox(tensorIndexed), offset, sliced)
+
+  @staticmethod
+  def _attributes(attrs):
+    """The `attrs` field of a tensor: what the caller states about its data.
+
+    Present only where the tensor states something. No attribute is no
+    claim, and a description that carries none is the one an exporter got
+    before there was the field -- so recording one before and after compares
+    equal, and nothing reads a key it did not ask for.
+    """
+    stated = attrs.as_dict() if attrs is not None else {}
+    return {'attrs': stated} if stated else {}
 
   @classmethod
   def _values(cls, values):
@@ -1156,6 +1263,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': name,
         'addressing': '',
+        'binding': None,
         'residence': 'argument',
         'datatype': str(self._arch.datatype),
         'storage': {
@@ -1174,6 +1282,7 @@ class ExportFactory(KernelFactory):
       tensor = {
         'name': scalar.name(),
         'addressing': '',
+        'binding': None,
         'residence': 'argument',
         'datatype': str(scalar.getDatatype(self._arch)),
         'storage': {
@@ -1188,6 +1297,7 @@ class ExportFactory(KernelFactory):
           'constant': True
         }
       }
+      tensor.update(self._attributes(scalar.attributes()))
     else:
       assert False
 

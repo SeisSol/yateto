@@ -83,7 +83,7 @@ class IndexedTensorDescription(TensorDescription):
       # to be deduced here, a result stating its mode was described twice,
       # differently, and the export refused it.
       addressing = var.tensor.addressing
-    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing
+    return cls(str(var), node.indices, var.memoryLayout(), node.eqspp(), is_const, var.is_temporary, values, datatype, addressing,
                attrs=cls.attributesOf(var))
 
   @classmethod
